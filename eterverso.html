@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Éterverso Wiki</title>
+    <style>
+        /* Estilo retrô: cores básicas, fontes de sistema e bordas simples */
+        body {
+            font-family: Verdana, Arial, sans-serif;
+            background-color: #e0e0e0;
+            color: #000000;
+            margin: 0;
+            padding: 20px 0;
+        }
+        #container {
+            width: 800px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            border: 1px solid #000000;
+        }
+        #header {
+            background-color: #003366;
+            color: #ffffff;
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #000000;
+        }
+        #header h1 {
+            margin: 0;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 28px;
+        }
+        #header p {
+            margin: 5px 0 0 0;
+            font-size: 12px;
+        }
+        #layout {
+            display: table;
+            width: 100%;
+        }
+        #sidebar {
+            display: table-cell;
+            width: 180px;
+            background-color: #f4f4f4;
+            border-right: 1px solid #000000;
+            padding: 15px;
+            vertical-align: top;
+            font-size: 12px;
+        }
+        #content {
+            display: table-cell;
+            padding: 20px;
+            vertical-align: top;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        #footer {
+            background-color: #f4f4f4;
+            border-top: 1px solid #000000;
+            text-align: center;
+            padding: 10px;
+            font-size: 10px;
+            height: 20px;
+        }
+        a {
+            color: #0000ee;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        a:visited {
+            color: #551a8b;
+        }
+        a:hover {
+            color: #ff0000;
+        }
+        ul {
+            list-style-type: square;
+            padding-left: 20px;
+        }
+        table.wiki-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 15px;
+        }
+        table.wiki-table, table.wiki-table th, table.wiki-table td {
+            border: 1px solid #000000;
+        }
+        table.wiki-table th {
+            background-color: #dcdcdc;
+            padding: 5px;
+            text-align: left;
+        }
+        table.wiki-table td {
+            padding: 5px;
+        }
+        .infobox {
+            float: right;
+            width: 250px;
+            border: 1px solid #000000;
+            background-color: #f9f9f9;
+            margin-left: 15px;
+            padding: 10px;
+            font-size: 12px;
+            text-align: center;
+        }
+        .infobox h3 {
+            margin-top: 0;
+            background-color: #cccccc;
+            padding: 5px;
+            border: 1px solid #000000;
+        }
+        .infobox img {
+            max-width: 230px;
+            height: auto;
+            border: 1px solid #000000;
+            margin-bottom: 10px;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        hr {
+            border: 0;
+            border-top: 1px solid #000000;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="container">
+        <div id="header">
+            <h1>Éterverso Wiki</h1>
+            <p>O banco de dados oficial sobre o universo do Éterverso.</p>
+        </div>
+        
+        <div id="layout">
+            <div id="sidebar">
+                <b>Navegação</b>
+                <ul>
+                    <li><a onclick="carregarPagina('home')">Página Inicial</a></li>
+                    <li><a onclick="carregarPagina('lista')">Personagens</a></li>
+                    <li><a onclick="carregarPagina('sobre')">Sobre o Éterverso</a></li>
+                </ul>
+            </div>
+            
+            <div id="content">
+                </div>
+        </div>
+
+        <div id="footer"></div>
+    </div>
+
+    <script>
+        const personagens = [
+            {
+                id: 1,
+                nome: "Shin Hae",
+                titulo: "Demônio do Leste",
+                faccao: "Clã Myung-Jin",
+                raca: "Nefilim",
+                status: "Vivo",
+                imagem: "https://i.pinimg.com/736x/6a/e1/77/6ae1775e32f97f28d13dd06871845e0c.jpg",
+                descricao: "Membro do influente Clã Myung-Jin, Shin Hae foi exilado aos seis anos para um complexo militar remoto devido aos seus dons paranormais vastos e instáveis. Lá, conheceu Ayu Hagiwara, que se tornou seu porto seguro até ser assassinada diante de seus olhos pela organização 'A Máscara' durante um protesto pacífico. Marcado por esse trauma, Shin luta para proteger refugiados e rebeldes oprimidos, escondendo sua humanidade sob uma fachada fria e instintos protetores.<br><br><b>Habilidades:</b> Shin utiliza marcas poderosas chamadas 'Pecados', dominando o mimetismo vulcânico (Raiva), durabilidade e regeneração extrema (Gula) e o controle de desaceleração (Preguiça)."
+            },
+            {
+                id: 2,
+                nome: "Ayu Hagiwara",
+                titulo: "A Curandeira Compassiva",
+                faccao: "Nenhuma",
+                raca: "Nefilim",
+                status: "Deceased",
+                imagem: "https://i.pinimg.com/736x/25/17/05/2517051c25bdd3829f028121e91ab9e3.jpg",
+                descricao: "Nascida no Japão rural, Ayu via a vida como uma resistência criativa contra o fatalismo. No campus militar onde conheceu Shin Hae, ela rejeitava ser transformada em arma, utilizando seus dons exclusivamente para a cura como um ato de resistência contra a violência sistemática. Ayu acreditava na interconexão de todos os seres e via cada gesto de bondade como uma negação à normatização do sofrimento. Foi assassinada por agentes da Máscara ao proteger os vulneráveis em uma manifestação, tornando-se um símbolo imortal de esperança e compaixão radical."
+            },
+            {
+                id: 3,
+                nome: "Akane Shidou",
+                titulo: "Filha da Tempestade",
+                faccao: "Lótus Cinza",
+                raca: "Néfilim",
+                status: "Viva",
+                imagem: "https://i.pinimg.com/1200x/9f/f8/40/9ff8404a87c3d50b0f0250fcd5df944e.jpg",
+                descricao: "Nascida na casa Raiden do clã de assassinos Shidou, Akane (cujo nome verdadeiro é Raiden-ka no Shidō Akane) possui um talento formidável sobre a eletricidade. Contudo, sua aversão a mortes cruéis e sua falta de furtividade a tornaram uma 'ovelha negra' dentro de sua família. Aos 14 anos, ela fugiu do Japão para o Brasil ao lado de seu primo Zeratsu. Lá, assumiu o pseudônimo Touwa Akane e passou a atuar como exorcista e mentora.<br><br><b>Personalidade:</b> Ela é introvertida com estranhos, mas assertiva, gentil e brincalhona entre amigos. Possui uma crueldade enraizada pelos treinamentos do clã, mas aprendeu a canalizar isso de forma saudável por meio do combate. Sua ansiedade constante faz com que seus 'Olhos Carmesim' fiquem quase sempre ativos.<br><br><b>Crenças e Relações:</b> Influenciada pelo budismo Shingon, possui uma bússola moral forte e não tem respeito por figuras de autoridade puramente por seus títulos. É imensamente leal ao seu primo Zeratsu e tem amizades profundas com Isabella, Stärke, Nathaniel e Sophia. Curiosamente, Akane acha Shin Hae 'esquisito' e prefere manter distância para não virar sua muleta emocional.<br><br><b>Curiosidades:</b> Ela ama consertar dispositivos eletrônicos (fazendo modificações DIY atípicas), costuma usar vendas que não bloqueiam sua visão do éter e tem um forte instinto de proteção com animais de rua."
+            },
+            {
+                id: 4,
+                nome: "Dixie Edarth",
+                titulo: "Sobrevivente",
+                faccao: "A Máscara",
+                raca: "Humana",
+                status: "Afastada",
+                imagem: "https://i.pinimg.com/1200x/99/28/75/9928755754abc968e890f7e8df09b324.jpg",
+                descricao: "Dixie Edarth foi uma agente de elite da organização conhecida como 'A Máscara'. Sua vida mudou drasticamente durante uma missão de rotina em uma fenda, onde seu esquadrão encontrou uma criatura misteriosa. O confronto foi catastrófico; Dixie perdeu todo o seu esquadrão e sofreu ferimentos gravíssimos, sobrevivendo por pouco. Após o trauma e a longa recuperação, ela decidiu desertar da organização e abandonar a vida de combate, vivendo hoje nas sombras.<br><br><b>Filosofia e Visões:</b> Apesar de seu exílio, Dixie mantém uma crença inabalável na necessidade da Máscara. Para ela, o mundo é inerentemente caótico e perigoso, e a organização atua como o único 'mal necessário' capaz de impor ordem, realizando as 'cirurgias dolorosas' que salvam a sociedade de si mesma. Essa lógica fria de controle reflete-se em sua visão sobre os néfilis: ela não os considera vítimas ou abençoados, mas anomalias e bombas-relógio ambulantes. Para Dixie, a existência dos néfilis ameaça a estabilidade do mundo, e o potencial destrutivo de um único indivíduo instável supera qualquer noção de direitos fundamentais, justificando totalmente o monitoramento e a eliminação por parte da Máscara.<br><br><b>Poderes e Habilidades:</b> O poder de Dixie, denominado <b>Pressurizer</b>, permite-lhe manipular o conceito universal de pressão em estados gasosos, líquidos e sólidos, desde proporções macroscópicas até níveis moleculares. Ela pode criar esmagamentos atmosféricos com a força das profundezas do oceano, gerar vácuos desintegradores, e disparar lâminas de água hiper-pressurizadas que cortam aço. Internamente, pode causar falhas estruturais extremas nos inimigos, como embolias gasosas e rupturas de órgãos. Além disso, a habilidade a permite acelerar ou anular reações químicas explosivas e até distorcer campos gravitacionais localizados ao concentrar pressões absurdas."
+            }
+        ];
+
+        function renderizar(html) {
+            document.getElementById('content').innerHTML = html;
+        }
+
+        const paginas = {
+            home: () => {
+                renderizar(`
+                    <h2>Bem-vindo à Éterverso Wiki</h2>
+                    <p>Esta wiki é dedicada a catalogar todos os seres, histórias e locais do <b>Éterverso</b>.</p>
+                    <p>Utilize o menu de navegação ao lado para consultar a lista completa de nossos personagens e aprender mais sobre a criação deste universo.</p>
+                `);
+            },
+            lista: () => {
+                let html = `
+                    <h2>Personagens</h2>
+                    <p>Índice atualizado de personagens conhecidos:</p>
+                    <table class="wiki-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Nome</th>
+                                <th>Ação</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                personagens.forEach(p => {
+                    html += `
+                        <tr>
+                            <td>${p.id}</td>
+                            <td><b>${p.nome}</b></td>
+                            <td><a onclick="carregarPersonagem(${p.id})">[Ver Perfil]</a></td>
+                        </tr>
+                    `;
+                });
+                html += `</tbody></table>`;
+                renderizar(html);
+            },
+            sobre: () => {
+                renderizar(`
+                    <h2>Sobre o Éterverso</h2>
+                    <p>O Éterverso é um universo criado entre cinco amigos.</p>
+                    <p>Todos os personagens e histórias catalogados nesta wiki são de autoria do Éterverso e de seus respectivos donos. Qualquer uso não autorizado destes conceitos é proibido.</p>
+                    <p>O projeto está em constante expansão e, futuramente, irá se tornar uma série de livros.</p>
+                `);
+            }
+        };
+
+        function carregarPersonagem(id) {
+            const p = personagens.find(char => char.id === id);
+            if (!p) return;
+
+            let imagemHtml = p.imagem ? `<img src="${p.imagem}" alt="Retrato de ${p.nome}">` : '';
+
+            let html = `
+                <div class="infobox">
+                    <h3>${p.nome}</h3>
+                    ${imagemHtml}
+                    <table class="wiki-table" style="margin-top: 0; text-align: left;">
+                        <tr><td><b>Título:</b></td><td>${p.titulo}</td></tr>
+                        <tr><td><b>Raça:</b></td><td>${p.raca}</td></tr>
+                        <tr><td><b>Facção:</b></td><td>${p.faccao}</td></tr>
+                        <tr><td><b>Status:</b></td><td>${p.status}</td></tr>
+                    </table>
+                </div>
+                <h2>${p.nome}</h2>
+                <hr>
+                <p>${p.descricao}</p>
+                <br style="clear: both;">
+                <hr>
+                <a onclick="carregarPagina('lista')">&laquo; Voltar para Personagens</a>
+            `;
+            renderizar(html);
+        }
+
+        function carregarPagina(pagina) {
+            if (paginas[pagina]) paginas[pagina]();
+        }
+
+        window.onload = () => carregarPagina('home');
+    </script>
+</body>
+</html>
