@@ -2,126 +2,227 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Éterverso Wiki</title>
     <style>
         
+        :root {
+            --primary-color: #1e3a8a; 
+            --accent-color: #2563eb; 
+            --bg-color: #f3f4f6; 
+            --surface-color: #ffffff; 
+            --text-color: #1f2937; 
+            --text-light: #6b7280;
+            --border-color: #e5e7eb;
+        }
+
+        
         body {
-            font-family: Verdana, Arial, sans-serif;
-            background-color: #e0e0e0;
-            color: #000000;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
             margin: 0;
-            padding: 20px 0;
+            padding: 0;
+            line-height: 1.6;
         }
+
         #container {
-            width: 800px;
-            margin: 0 auto;
-            background-color: #ffffff;
-            border: 1px solid #000000;
+            max-width: 1000px;
+            margin: 40px auto;
+            background-color: var(--surface-color);
+            border-radius: 12px; /* Cantos arredondados */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* Sombra suave */
+            overflow: hidden;
         }
+
         #header {
-            background-color: #003366;
+            background-color: var(--primary-color);
             color: #ffffff;
-            padding: 15px;
+            padding: 24px 32px;
             text-align: left;
-            border-bottom: 1px solid #000000;
         }
+
         #header h1 {
             margin: 0;
-            font-family: "Times New Roman", Times, serif;
-            font-size: 28px;
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
         }
+
         #header p {
-            margin: 5px 0 0 0;
-            font-size: 12px;
-        }
-        #layout {
-            display: table;
-            width: 100%;
-        }
-        #sidebar {
-            display: table-cell;
-            width: 180px;
-            background-color: #f4f4f4;
-            border-right: 1px solid #000000;
-            padding: 15px;
-            vertical-align: top;
-            font-size: 12px;
-        }
-        #content {
-            display: table-cell;
-            padding: 20px;
-            vertical-align: top;
+            margin: 8px 0 0 0;
             font-size: 14px;
-            line-height: 1.5;
+            color: #d1d5db;
         }
-        #footer {
-            background-color: #f4f4f4;
-            border-top: 1px solid #000000;
-            text-align: center;
-            padding: 10px;
-            font-size: 10px;
-            height: 20px;
+
+        
+        #layout {
+            display: flex;
+            flex-direction: column; 
         }
-        a {
-            color: #0000ee;
-            text-decoration: underline;
+
+        #sidebar {
+            width: 100%;
+            background-color: #f9fafb;
+            border-right: 1px solid var(--border-color);
+            padding: 24px;
+            box-sizing: border-box;
+        }
+
+        #sidebar b {
+            display: block;
+            margin-bottom: 12px;
+            color: var(--text-light);
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+
+        
+        #sidebar ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #sidebar a {
+            display: block;
+            padding: 10px 16px;
+            color: var(--text-color);
+            text-decoration: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.2s, color 0.2s;
+            font-weight: 500;
+        }
+
+        #sidebar a:hover {
+            background-color: #e5e7eb;
+            color: var(--accent-color);
+        }
+
+        #content {
+            flex: 1; 
+            padding: 32px;
+            font-size: 16px;
+        }
+
+        #content a {
+            color: var(--accent-color);
+            text-decoration: none;
+            font-weight: 500;
             cursor: pointer;
         }
-        a:visited {
-            color: #551a8b;
+
+        #content a:hover {
+            text-decoration: underline;
         }
-        a:hover {
-            color: #ff0000;
-        }
-        ul {
-            list-style-type: square;
-            padding-left: 20px;
-        }
+
+        /* Tabelas mais limpas */
         table.wiki-table {
             border-collapse: collapse;
             width: 100%;
-            margin-top: 15px;
+            margin-top: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
-        table.wiki-table, table.wiki-table th, table.wiki-table td {
-            border: 1px solid #000000;
-        }
-        table.wiki-table th {
-            background-color: #dcdcdc;
-            padding: 5px;
+
+        table.wiki-table th, table.wiki-table td {
+            padding: 12px 16px;
             text-align: left;
+            border-bottom: 1px solid var(--border-color);
         }
-        table.wiki-table td {
-            padding: 5px;
+
+        table.wiki-table th {
+            background-color: #f3f4f6;
+            font-weight: 600;
+            color: var(--text-color);
         }
+
+        table.wiki-table tbody tr:hover {
+            background-color: #f9fafb;
+        }
+
+        /* Infobox estilo Card */
         .infobox {
             float: right;
-            width: 250px;
-            border: 1px solid #000000;
-            background-color: #f9f9f9;
-            margin-left: 15px;
-            padding: 10px;
-            font-size: 12px;
+            width: 300px;
+            background-color: var(--surface-color);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin: 0 0 20px 24px;
+            padding: 16px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
             text-align: center;
         }
+
         .infobox h3 {
-            margin-top: 0;
-            background-color: #cccccc;
-            padding: 5px;
-            border: 1px solid #000000;
+            margin: 0 0 16px 0;
+            background-color: var(--primary-color);
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 18px;
         }
+
         .infobox img {
-            max-width: 230px;
+            width: 100%;
             height: auto;
-            border: 1px solid #000000;
-            margin-bottom: 10px;
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            object-fit: cover;
         }
+
+        .infobox table {
+            width: 100%;
+            font-size: 14px;
+        }
+
+        .infobox td {
+            padding: 8px 0;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .infobox tr:last-child td {
+            border-bottom: none;
+        }
+
         hr {
             border: 0;
-            border-top: 1px solid #000000;
-            margin: 20px 0;
+            height: 1px;
+            background: var(--border-color);
+            margin: 32px 0;
+        }
+
+        
+        @media (min-width: 768px) {
+            #layout {
+                flex-direction: row;
+            }
+            #sidebar {
+                width: 250px;
+            }
+        }
+
+        
+        @media (max-width: 767px) {
+            #container {
+                margin: 0;
+                border-radius: 0;
+            }
+            .infobox {
+                float: none;
+                width: 100%;
+                margin: 0 0 20px 0;
+                box-sizing: border-box;
+            }
+            #content {
+                padding: 20px;
+            }
         }
     </style>
 </head>
@@ -146,8 +247,6 @@
             <div id="content">
                 </div>
         </div>
-
-        <div id="footer"></div>
     </div>
 
     <script>
@@ -196,19 +295,20 @@
 
         function renderizar(html) {
             document.getElementById('content').innerHTML = html;
+            window.scrollTo(0, 0); 
         }
 
         const paginas = {
             home: () => {
                 renderizar(`
-                    <h2>Bem-vindo à Éterverso Wiki</h2>
+                    <h2 style="margin-top:0;">Bem-vindo à Éterverso Wiki</h2>
                     <p>Esta wiki é dedicada a catalogar todos os seres, histórias e locais do <b>Éterverso</b>.</p>
                     <p>Utilize o menu de navegação ao lado para consultar a lista completa de nossos personagens e aprender mais sobre a criação deste universo.</p>
                 `);
             },
             lista: () => {
                 let html = `
-                    <h2>Personagens</h2>
+                    <h2 style="margin-top:0;">Personagens</h2>
                     <p>Índice atualizado de personagens conhecidos:</p>
                     <table class="wiki-table">
                         <thead>
@@ -223,9 +323,9 @@
                 personagens.forEach(p => {
                     html += `
                         <tr>
-                            <td>${p.id}</td>
+                            <td>#00${p.id}</td>
                             <td><b>${p.nome}</b></td>
-                            <td><a onclick="carregarPersonagem(${p.id})">[Ver Perfil]</a></td>
+                            <td><a onclick="carregarPersonagem(${p.id})">Ler Perfil &rarr;</a></td>
                         </tr>
                     `;
                 });
@@ -234,7 +334,7 @@
             },
             sobre: () => {
                 renderizar(`
-                    <h2>Sobre o Éterverso</h2>
+                    <h2 style="margin-top:0;">Sobre o Éterverso</h2>
                     <p>O Éterverso é um universo criado entre cinco amigos.</p>
                     <p>Todos os personagens e histórias catalogados nesta wiki são de autoria do Éterverso e de seus respectivos donos. Qualquer uso não autorizado destes conceitos é proibido.</p>
                     <p>O projeto está em constante expansão e, futuramente, irá se tornar uma série de livros.</p>
@@ -252,19 +352,21 @@
                 <div class="infobox">
                     <h3>${p.nome}</h3>
                     ${imagemHtml}
-                    <table class="wiki-table" style="margin-top: 0; text-align: left;">
+                    <table style="text-align: left;">
                         <tr><td><b>Título:</b></td><td>${p.titulo}</td></tr>
                         <tr><td><b>Raça:</b></td><td>${p.raca}</td></tr>
                         <tr><td><b>Facção:</b></td><td>${p.faccao}</td></tr>
                         <tr><td><b>Status:</b></td><td>${p.status}</td></tr>
                     </table>
                 </div>
-                <h2>${p.nome}</h2>
+                <h2 style="margin-top:0; font-size: 28px;">${p.nome}</h2>
                 <hr>
-                <p>${p.descricao}</p>
+                <div style="text-align: justify;">
+                    <p>${p.descricao}</p>
+                </div>
                 <br style="clear: both;">
                 <hr>
-                <a onclick="carregarPagina('lista')">&laquo; Voltar para Personagens</a>
+                <a onclick="carregarPagina('lista')">&laquo; Voltar para o Índice de Personagens</a>
             `;
             renderizar(html);
         }
