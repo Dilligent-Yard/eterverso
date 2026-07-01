@@ -1,0 +1,276 @@
+require('dotenv').config();
+const path = require('path');
+const express = require('express');
+const session = require('express-session');
+const queries = require('./db/queries');
+const adminValidation = require('./db/adminValidation');
+
+const app = express();
+app.use(express.json());
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'changeme',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { httpOnly: true, maxAge: 1000 * 60 * 60 * 24 * 7 }
+}));
+app.use(express.static(path.join(__dirname, 'public')));
+
+function asyncHandler(fn) {
+  return function(req, res, next) {
+    fn(req, res, next).catch(next);
+  };
+}
+
+var requireAuth = asyncHandler(async function(req, res, next) {
+  if (!req.session.userId) return res.status(401).json({ error: 'É preciso estar logado.' });
+  var user = await queries.findSessionUserById(req.session.userId);
+  if (!user) return res.status(401).json({ error: 'Sessão inválida.' });
+  req.user = user;
+  next();
+});
+
+function requireModOrAdmin(req, res, next) {
+  if (!queries.isModOrAdmin(req.user)) return res.status(403).json({ error: 'Acesso negado.' });
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!queries.isAdmin(req.user)) return res.status(403).json({ error: 'Acesso negado.' });
+  next();
+}
+
+function podeEditar(user, authorId) {
+  if (user.role === 'admin') return true;
+  return user.id === authorId;
+}
+
+app.get('/api/bootstrap', asyncHandler(async function(req, res) {
+  var sessionUser = req.session.userId ? await queries.findSessionUserById(req.session.userId) : null;
+  var categories = await queries.listCategories();
+  var threads = await queries.listThreads();
+  var posts = await queries.listPosts();
+  var personagens = await queries.listPersonagens();
+  var comments = await queries.listComments();
+  var users = await queries.listUsersPublic();
+  res.json({ session: sessionUser, categories: categories, threads: threads, posts: posts, personagens: personagens, comments: comments, users: users });
+}));
+
+app.post('/api/auth/register', asyncHandler(async function(req, res) {
+  var username = (req.body.username || '').trim();
+  var email = (req.body.email || '').trim();
+  var password = req.body.password || '';
+  var confirm = req.body.confirm || '';
+
+  if (!username || !email || !password) return res.status(400).json({ error: 'Preencha todos os campos.' });
+  if (password !== confirm) return res.status(400).json({ error: 'As senhas não conferem.' });
+
+  var existente = await queries.findUserByUsername(username);
+  if (existente) return res.status(400).json({ error: 'Esse nome de usuário já existe.' });
+
+  try {
+    var user = await queries.createUser(username, email, password);
+    req.session.userId = user.id;
+    res.json({ user: user });
+  } catch (err) {
+    res.status(400).json({ error: 'Não foi possível criar a conta. Talvez o e-mail já esteja em uso.' });
+  }
+}));
+
+app.post('/api/auth/login', asyncHandler(async function(req, res) {
+  var username = (req.body.username || '').trim();
+  var password = req.body.password || '';
+  var user = await queries.validateLogin(username, password);
+  if (!user) return res.status(401).json({ error: 'Usuário ou senha incorretos.' });
+  req.session.userId = user.id;
+  res.json({ user: user });
+}));
+
+app.post('/api/auth/logout', function(req, res) {
+  req.session.destroy(function() { res.json({ ok: true }); });
+});
+
+app.post('/api/categories', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
+  var name = (req.body.name || '').trim();
+  var desc = (req.body.desc || '').trim();
+  if (!name) return res.status(400).json({ error: 'Digite um nome para a categoria.' });
+  var cat = await queries.createCategory(name, desc);
+  res.json({ category: cat });
+}));
+
+app.delete('/api/categories/:id', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
+  await queries.deleteCategory(parseInt(req.params.id));
+  res.json({ ok: true });
+}));
+
+app.post('/api/threads', requireAuth, asyncHandler(async function(req, res) {
+  var catId = parseInt(req.body.catId);
+  var title = (req.body.title || '').trim();
+  var tag = req.body.tag || 'ooc';
+  var content = req.body.content || '';
+  if (!title || !content || content === '<br>') return res.status(400).json({ error: 'Preencha o título e o conteúdo!' });
+
+  var thread = await queries.createThread(catId, req.user.id, title, tag);
+  await queries.createPost(thread.id, req.user.id, content);
+  res.json({ thread: thread });
+}));
+
+app.put('/api/threads/:id', requireAuth, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  var thread = await queries.findThreadById(id);
+  if (!thread) return res.status(404).json({ error: 'Tópico não encontrado.' });
+  if (!podeEditar(req.user, thread.authorId)) return res.status(403).json({ error: 'Você não tem permissão para editar este tópico.' });
+
+  var title = (req.body.title || '').trim();
+  var content = req.body.content || '';
+  if (!title) return res.status(400).json({ error: 'O título não pode ficar vazio.' });
+
+  await queries.updateThreadTitle(id, title);
+  var firstPost = await queries.findFirstPostByThread(id);
+  if (firstPost) await queries.updatePost(firstPost.id, content);
+  res.json({ ok: true });
+}));
+
+app.delete('/api/threads/:id', requireAuth, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  var thread = await queries.findThreadById(id);
+  if (!thread) return res.status(404).json({ error: 'Tópico não encontrado.' });
+  if (!podeEditar(req.user, thread.authorId)) return res.status(403).json({ error: 'Você não tem permissão para deletar este tópico.' });
+  await queries.deleteThread(id);
+  res.json({ ok: true });
+}));
+
+app.post('/api/threads/:id/view', asyncHandler(async function(req, res) {
+  await queries.incrementThreadViews(parseInt(req.params.id));
+  res.json({ ok: true });
+}));
+
+app.post('/api/posts', requireAuth, asyncHandler(async function(req, res) {
+  var threadId = parseInt(req.body.threadId);
+  var content = req.body.content || '';
+  if (!content || content === '<br>') return res.status(400).json({ error: 'Escreva algo antes de enviar!' });
+  var post = await queries.createPost(threadId, req.user.id, content);
+  res.json({ post: post });
+}));
+
+app.put('/api/posts/:id', requireAuth, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  var post = await queries.findPostById(id);
+  if (!post) return res.status(404).json({ error: 'Post não encontrado.' });
+  if (!podeEditar(req.user, post.authorId)) return res.status(403).json({ error: 'Você não tem permissão para editar este post.' });
+  var content = req.body.content || '';
+  if (!content) return res.status(400).json({ error: 'Conteúdo vazio.' });
+  await queries.updatePost(id, content);
+  res.json({ ok: true });
+}));
+
+app.delete('/api/posts/:id', requireAuth, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  var post = await queries.findPostById(id);
+  if (!post) return res.status(404).json({ error: 'Post não encontrado.' });
+  if (!podeEditar(req.user, post.authorId)) return res.status(403).json({ error: 'Você não tem permissão para deletar este post.' });
+
+  var total = await queries.countPostsByThread(post.threadId);
+  if (total <= 1) {
+    await queries.deleteThread(post.threadId);
+    return res.json({ ok: true, threadDeleted: true, catId: null });
+  }
+  await queries.deletePost(id);
+  res.json({ ok: true, threadDeleted: false });
+}));
+
+app.post('/api/personagens', requireAuth, requireModOrAdmin, asyncHandler(async function(req, res) {
+  var nome = (req.body.nome || '').trim();
+  var descricao = req.body.descricao || '';
+  if (!nome || !descricao || descricao === '<br>') return res.status(400).json({ error: 'Preencha ao menos o nome e a descrição.' });
+  var personagem = await queries.createPersonagem(req.user.id, req.body);
+  res.json({ personagem: personagem });
+}));
+
+app.put('/api/personagens/:id', requireAuth, requireModOrAdmin, asyncHandler(async function(req, res) {
+  await queries.updatePersonagem(parseInt(req.params.id), req.body);
+  res.json({ ok: true });
+}));
+
+app.delete('/api/personagens/:id', requireAuth, requireModOrAdmin, asyncHandler(async function(req, res) {
+  await queries.deletePersonagem(parseInt(req.params.id));
+  res.json({ ok: true });
+}));
+
+app.post('/api/personagens/:id/comments', requireAuth, asyncHandler(async function(req, res) {
+  var content = (req.body.content || '').trim();
+  if (!content) return res.status(400).json({ error: 'Escreva algo antes de comentar.' });
+  var comment = await queries.createComment(parseInt(req.params.id), req.user.id, content);
+  res.json({ comment: comment });
+}));
+
+app.delete('/api/comments/:id', requireAuth, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  var comment = await queries.findCommentById(id);
+  if (!comment) return res.status(404).json({ error: 'Comentário não encontrado.' });
+  if (!podeEditar(req.user, comment.authorId)) return res.status(403).json({ error: 'Você não tem permissão para apagar este comentário.' });
+  await queries.deleteComment(id);
+  res.json({ ok: true });
+}));
+
+app.put('/api/users/:id/role', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  var role = req.body.role;
+  if (req.user.id === id && role !== 'admin') {
+    return res.status(400).json({ error: 'Você não pode remover seu próprio cargo de admin por aqui.' });
+  }
+  var title = role === 'admin' ? 'Administrador' : (role === 'moderador' ? 'Moderador' : 'Membro');
+  await queries.setUserRole(id, role, title);
+  res.json({ ok: true });
+}));
+
+app.delete('/api/users/:id', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
+  var id = parseInt(req.params.id);
+  if (req.user.id === id) return res.status(400).json({ error: 'Você não pode excluir sua própria conta por aqui.' });
+  await queries.deleteUser(id);
+  res.json({ ok: true });
+}));
+
+app.put('/api/profile', requireAuth, asyncHandler(async function(req, res) {
+  var avatar = (req.body.avatar || '').trim();
+  var bio = (req.body.bio || '').trim();
+  await queries.updateProfileInfo(req.user.id, avatar, bio);
+
+  var novaSenha = req.body.newPassword || '';
+  if (novaSenha) {
+    var senhaAtual = req.body.currentPassword || '';
+    if (novaSenha !== (req.body.newPasswordConfirm || '')) {
+      return res.status(400).json({ error: 'As senhas novas não conferem.' });
+    }
+    var resultado = await queries.changePassword(req.user.id, senhaAtual, novaSenha);
+    if (!resultado.ok) return res.status(400).json({ error: resultado.error });
+  }
+
+  res.json({ ok: true });
+}));
+
+app.post('/api/admin/validar', requireAuth, asyncHandler(async function(req, res) {
+  if (req.user.admTentativaUsada) return res.json({ alreadyUsed: true, granted: false });
+
+  var nome = (req.body.nome || '').trim();
+  var cargo = (req.body.cargo || '').trim().toLowerCase();
+  var nivel = req.body.nivel || '';
+  var granted = adminValidation.decidirSeEhAdmin(nome, cargo, nivel);
+
+  await queries.markAdmTentativaUsada(req.user.id);
+  if (granted) await queries.grantAdmin(req.user.id);
+
+  res.json({ alreadyUsed: false, granted: granted });
+}));
+
+app.use(function(err, req, res, next) {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Requisição inválida.' });
+  }
+  console.error(err);
+  res.status(500).json({ error: 'Erro interno no servidor.' });
+});
+
+var port = process.env.PORT || 3000;
+app.listen(port, function() {
+  console.log('Éterverso rodando em http://localhost:' + port);
+});
