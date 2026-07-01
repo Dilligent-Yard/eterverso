@@ -2,16 +2,24 @@ require('dotenv').config();
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
+const { pool } = require('./db/db');
 const queries = require('./db/queries');
 const adminValidation = require('./db/adminValidation');
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(session({
+  store: new pgSession({ pool: pool, tableName: 'session', createTableIfMissing: true }),
   secret: process.env.SESSION_SECRET || 'changeme',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, maxAge: 1000 * 60 * 60 * 24 * 7 }
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 1000 * 60 * 60 * 24 * 7
+  }
 }));
 app.use(express.static(path.join(__dirname, 'public')));
 
