@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Éterverso</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="top-bar">
+  <div id="top-user-info">Bem-vindo, visitante!</div>
+  <div><span id="top-btn-area"></span></div>
+</div>
+
+<div id="wrapper">
+  <div id="logo-bar">
+    <h1>Éterverso</h1>
+    <p>Fórum, Wiki de Personagens &amp; Roleplay</p>
+  </div>
+  <div id="nav-bar">
+    <button onclick="navigate('forum')" id="nav-forum">Fórum</button>
+    <button onclick="navigate('wiki')" id="nav-wiki">Personagens</button>
+    <span id="nav-admin-btn"></span>
+  </div>
+  <div id="main"></div>
+</div>
+
+<div id="footer">
+  Éterverso &copy; 2026<br>
+  <a onclick="navigate('sobre')">Sobre o Projeto</a>
+</div>
+
+<div id="modal-container"></div>
+
+<script src="editor.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
