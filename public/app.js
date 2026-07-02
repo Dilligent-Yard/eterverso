@@ -390,13 +390,14 @@ function renderPersonagemView() {
   if (p.stats) {
     html += '<div class="cat-header" style="margin-top:15px;"><span>Apex Scale</span></div>';
     html += '<div class="apex-panel">';
-    html += '<div>' + buildRadarChart(p.stats) + '</div>';
+    html += '<div class="radar-wrap">' + buildRadarChart(p.stats) + '</div>';
     html += '<div class="apex-readout">';
-    var apexLabels = ['剛 Gō', '技 Gi', '体 Tai', '知 Chi', '心 Shin', '気 Ki', '速 Soku', '運 Un'];
+    var apexKanji = ['剛', '技', '体', '知', '心', '気', '速', '運'];
+    var apexRomaji = ['Gō', 'Gi', 'Tai', 'Chi', 'Shin', 'Ki', 'Soku', 'Un'];
     var apexKeys = ['ifc', 'ccm', 'lrb', 'acg', 'tpc', 'ceo', 'fdv', 'icf'];
-    for (var si = 0; si < apexLabels.length; si++) {
+    for (var si = 0; si < apexKanji.length; si++) {
       var valorStat = p.stats[apexKeys[si]] !== undefined ? p.stats[apexKeys[si]] : 0;
-      html += '<div class="apex-stat-row"><span class="apex-stat-label">' + apexLabels[si] + '</span><span class="apex-stat-bar"><span class="apex-stat-bar-fill" style="width:' + valorStat + '%;"></span></span><span class="apex-stat-value">' + valorStat + '</span></div>';
+      html += '<div class="apex-stat-row"><span class="apex-stat-label"><span class="kanji">' + apexKanji[si] + '</span>' + apexRomaji[si] + '</span><span class="apex-stat-bar"><span class="apex-stat-bar-fill" style="width:' + valorStat + '%;"></span></span><span class="apex-stat-value">' + valorStat + '</span></div>';
     }
     html += '</div></div>';
   }
@@ -429,16 +430,23 @@ function renderPersonagemView() {
 }
 
 function buildRadarChart(stats) {
-  var labels = ['剛 Gō', '技 Gi', '体 Tai', '知 Chi', '心 Shin', '気 Ki', '速 Soku', '運 Un'];
+  var kanji = ['剛', '技', '体', '知', '心', '気', '速', '運'];
+  var romaji = ['Gō', 'Gi', 'Tai', 'Chi', 'Shin', 'Ki', 'Soku', 'Un'];
   var keys = ['ifc', 'ccm', 'lrb', 'acg', 'tpc', 'ceo', 'fdv', 'icf'];
-  var n = labels.length;
-  var size = 260;
+  var n = kanji.length;
+  var size = 300;
   var cx = size / 2;
   var cy = size / 2;
-  var maxR = 90;
+  var maxR = 82;
   var svg = '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">';
+  svg += '<defs>';
+  svg += '<radialGradient id="apexFillGrad" cx="50%" cy="50%" r="65%">';
+  svg += '<stop offset="0%" stop-color="#4a7acc" stop-opacity="0.55"></stop>';
+  svg += '<stop offset="100%" stop-color="#1a2860" stop-opacity="0.35"></stop>';
+  svg += '</radialGradient>';
+  svg += '</defs>';
 
-  var aneis = [0.2, 0.4, 0.6, 0.8, 1];
+  var aneis = [0.25, 0.5, 0.75, 1];
   for (var a = 0; a < aneis.length; a++) {
     var pontosAnel = '';
     for (var i = 0; i < n; i++) {
@@ -448,23 +456,26 @@ function buildRadarChart(stats) {
       var yAnel = cy + rAnel * Math.sin(angAnel);
       pontosAnel += xAnel.toFixed(1) + ',' + yAnel.toFixed(1) + ' ';
     }
-    svg += '<polygon points="' + pontosAnel.trim() + '" fill="none" stroke="#aab6cc" stroke-width="1"></polygon>';
+    var ringOpacity = a === aneis.length - 1 ? 1 : 0.6;
+    svg += '<polygon points="' + pontosAnel.trim() + '" fill="none" stroke="#b7c0dc" stroke-width="1" opacity="' + ringOpacity + '"></polygon>';
   }
 
   for (var i = 0; i < n; i++) {
     var ang = (Math.PI * 2 / n) * i - Math.PI / 2;
     var xEixo = cx + maxR * Math.cos(ang);
     var yEixo = cy + maxR * Math.sin(ang);
-    svg += '<line x1="' + cx + '" y1="' + cy + '" x2="' + xEixo.toFixed(1) + '" y2="' + yEixo.toFixed(1) + '" stroke="#aab6cc" stroke-width="1"></line>';
-    var lx = cx + (maxR + 22) * Math.cos(ang);
-    var ly = cy + (maxR + 22) * Math.sin(ang);
+    svg += '<line x1="' + cx + '" y1="' + cy + '" x2="' + xEixo.toFixed(1) + '" y2="' + yEixo.toFixed(1) + '" stroke="#b7c0dc" stroke-width="1"></line>';
+    var lx = cx + (maxR + 26) * Math.cos(ang);
+    var ly = cy + (maxR + 26) * Math.sin(ang);
     var anchor = 'middle';
     if (lx < cx - 5) anchor = 'end';
     if (lx > cx + 5) anchor = 'start';
-    svg += '<text x="' + lx.toFixed(1) + '" y="' + ly.toFixed(1) + '" font-size="9" fill="#1a2860" text-anchor="' + anchor + '" font-family="Verdana">' + h(labels[i]) + '</text>';
+    svg += '<text x="' + lx.toFixed(1) + '" y="' + (ly - 4).toFixed(1) + '" font-size="10" font-weight="bold" fill="#1a2860" text-anchor="' + anchor + '" font-family="Verdana">' + h(kanji[i]) + '</text>';
+    svg += '<text x="' + lx.toFixed(1) + '" y="' + (ly + 8).toFixed(1) + '" font-size="9" fill="#3a5080" text-anchor="' + anchor + '" font-family="Verdana">' + h(romaji[i]) + '</text>';
   }
 
   var pontosDado = '';
+  var dots = '';
   for (var i = 0; i < n; i++) {
     var valor = stats[keys[i]] || 0;
     if (valor > 100) valor = 100;
@@ -474,8 +485,10 @@ function buildRadarChart(stats) {
     var xDado = cx + rDado * Math.cos(angDado);
     var yDado = cy + rDado * Math.sin(angDado);
     pontosDado += xDado.toFixed(1) + ',' + yDado.toFixed(1) + ' ';
+    dots += '<circle cx="' + xDado.toFixed(1) + '" cy="' + yDado.toFixed(1) + '" r="3" fill="#1a2860" stroke="#fff" stroke-width="1"></circle>';
   }
-  svg += '<polygon points="' + pontosDado.trim() + '" fill="rgba(58,80,128,0.35)" stroke="#1a2860" stroke-width="2"></polygon>';
+  svg += '<polygon points="' + pontosDado.trim() + '" fill="url(#apexFillGrad)" stroke="#1a2860" stroke-width="2" stroke-linejoin="round"></polygon>';
+  svg += dots;
   svg += '</svg>';
   return svg;
 }
