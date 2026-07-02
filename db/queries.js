@@ -23,9 +23,14 @@ async function findSessionUserById(id) {
   return result.rows[0] || null;
 }
 
+const dummyHashPromise = bcrypt.hash('senha-inexistente-' + Math.random(), 10);
+
 async function validateLogin(username, password) {
   const user = await findUserByUsername(username);
-  if (!user) return null;
+  if (!user) {
+    await bcrypt.compare(password, await dummyHashPromise);
+    return null;
+  }
   const ok = await bcrypt.compare(password, user.password_hash);
   if (!ok) return null;
   return findSessionUserById(user.id);
