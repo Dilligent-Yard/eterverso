@@ -89,6 +89,18 @@ function podeEditarPost(authorId) {
   return podeEditarThread(authorId);
 }
 
+function tipoInfo(tag) {
+  if (tag === 'rp') return { art: 'Nova', artDef: 'a', prep: 'à', dem: 'esta', nome: 'Cena', nomePlural: 'Cenas' };
+  if (tag === 'wiki') return { art: 'Novo', artDef: 'o', prep: 'ao', dem: 'este', nome: 'Tópico', nomePlural: 'Tópicos' };
+  return { art: 'Novo', artDef: 'o', prep: 'ao', dem: 'este', nome: 'Post', nomePlural: 'Posts' };
+}
+
+function tipoPadraoCategoria(catId) {
+  var cat = DB.categories.find(function(c) { return c.id === catId; });
+  if (cat && /cena|roleplay/i.test(cat.name)) return 'rp';
+  return 'ooc';
+}
+
 var currentPage = 'forum';
 var currentThread = null;
 var currentCat = null;
@@ -168,8 +180,9 @@ function renderForum() {
     var lastThread = catThreads.length ? catThreads[catThreads.length - 1] : null;
     var lastInfo = lastThread ? ('<a onclick="navigate(\'thread\',\'' + lastThread.id + '\')">' + h(lastThread.title.substring(0, 35)) + '...</a><br><small style="color:#888;">' + lastThread.date + '</small>') : '<span style="color:#888;">Nenhum</span>';
 
+    var infoCat = tipoInfo(tipoPadraoCategoria(cat.id));
     html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-    if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(\'' + cat.id + '\')">+ Novo Tópico</button>';
+    if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(\'' + cat.id + '\')">+ ' + infoCat.art + ' ' + infoCat.nome + '</button>';
     html += '</div>';
     html += '<table class="forum-table"><thead><tr><th style="width:45%">Categoria</th><th>Tópicos</th><th>Posts</th><th>Último Post</th></tr></thead><tbody>';
     html += '<tr><td><a onclick="navigate(\'cat\',\'' + cat.id + '\')">' + h(cat.name) + '</a><br><small style="color:#666;">' + h(cat.desc) + '</small></td>';
@@ -193,14 +206,15 @@ function renderCat() {
   threads = threads.slice().reverse();
   threads.sort(function(a, b) { return b.pinned - a.pinned; });
 
+  var infoCat = tipoInfo(tipoPadraoCategoria(cat.id));
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; ' + h(cat.name) + '</div>';
   html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-  if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(\'' + cat.id + '\')">+ Novo Tópico</button>';
+  if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(\'' + cat.id + '\')">+ ' + infoCat.art + ' ' + infoCat.nome + '</button>';
   html += '</div>';
   html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Respostas</th><th>Views</th><th>Último Post</th></tr></thead><tbody>';
 
   if (!threads.length) {
-    html += '<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">Nenhum tópico ainda. <a onclick="startNewThread(\'' + cat.id + '\')">Criar o primeiro!</a></td></tr>';
+    html += '<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">Nenhum' + (infoCat.artDef === 'a' ? 'a' : '') + ' ' + infoCat.nome.toLowerCase() + ' ainda. <a onclick="startNewThread(\'' + cat.id + '\')">Criar ' + infoCat.artDef + ' primeir' + infoCat.artDef + '!</a></td></tr>';
   }
 
   threads.forEach(function(t) {
@@ -229,6 +243,7 @@ function renderThread() {
 
   var posts = DB.posts.filter(function(p) { return p.threadId === currentThread; });
   var tagClass = 'tag-' + (thread.tag || 'ooc');
+  var infoThread = tipoInfo(thread.tag);
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; <a onclick="navigate(\'cat\',\'' + thread.catId + '\')">' + h(cat ? cat.name : '') + '</a> &raquo; ' + h(thread.title) + '</div>';
   html += '<div class="thread-tools">';
@@ -236,7 +251,7 @@ function renderThread() {
   html += '<div style="display:flex;gap:5px;">';
   if (podeEditarThread(thread.authorId)) {
     html += '<button class="btn btn-warn btn-small" onclick="editarThread(\'' + thread.id + '\')">Editar</button>';
-    html += '<button class="btn btn-danger btn-small" onclick="deleteThread(\'' + thread.id + '\')">Deletar Tópico</button>';
+    html += '<button class="btn btn-danger btn-small" onclick="deleteThread(\'' + thread.id + '\')">Deletar ' + infoThread.nome + '</button>';
   }
   html += '</div></div>';
 
@@ -265,13 +280,13 @@ function renderThread() {
 
   if (DB.session) {
     html += '<div class="reply-box">';
-    html += '<div class="reply-title"><span>Responder ao Tópico</span><span>' + h(DB.session.username) + '</span></div>';
+    html += '<div class="reply-title"><span>Responder ' + infoThread.prep + ' ' + infoThread.nome + '</span><span>' + h(DB.session.username) + '</span></div>';
     html += '<div class="reply-inner">';
     html += buildEditor('reply-editor', '');
     html += '<div style="margin-top:8px;"><button class="btn btn-primary" onclick="submitReply()">Enviar Resposta</button></div>';
     html += '</div></div>';
   } else {
-    html += '<div class="alert alert-info" style="margin-top:10px;"><a onclick="showLoginModal()">Faça login</a> para responder neste tópico.</div>';
+    html += '<div class="alert alert-info" style="margin-top:10px;"><a onclick="showLoginModal()">Faça login</a> para responder n' + (infoThread.artDef === 'a' ? 'esta' : 'este') + ' ' + infoThread.nome.toLowerCase() + '.</div>';
   }
 
   return html;
@@ -283,21 +298,27 @@ function renderNovaThread() {
   var isEdit = editandoThread !== null;
   var thr = isEdit ? DB.threads.find(function(t) { return t.id === editandoThread; }) : null;
   var priPost = isEdit ? DB.posts.find(function(p) { return p.threadId === editandoThread; }) : null;
+  var tagPadrao = isEdit ? (thr ? thr.tag : 'ooc') : tipoPadraoCategoria(selCat);
+  var infoNova = tipoInfo(tagPadrao);
 
-  var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; ' + (isEdit ? 'Editar Tópico' : 'Novo Tópico') + '</div>';
-  html += '<div class="cat-header"><span>' + (isEdit ? 'Editar Tópico' : 'Criar Novo Tópico') + '</span></div>';
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; ' + (isEdit ? ('Editar ' + infoNova.nome) : (infoNova.art + ' ' + infoNova.nome)) + '</div>';
+  html += '<div class="cat-header"><span>' + (isEdit ? ('Editar ' + infoNova.nome) : ('Criar ' + infoNova.nome)) + '</span></div>';
   html += '<div style="background:#f8f9ff;border:1px solid #8899aa;padding:16px;">';
 
   if (!isEdit) {
-    html += '<div class="form-row"><label>Categoria</label><select id="thread-cat">';
+    html += '<div class="form-row"><label>Categoria</label><select id="thread-cat" onchange="atualizarTipoThreadPadrao(this.value)">';
     DB.categories.forEach(function(c) {
       html += '<option value="' + c.id + '"' + (c.id === selCat ? ' selected' : '') + '>' + h(c.name) + '</option>';
     });
     html += '</select></div>';
-    html += '<div class="form-row"><label>Tipo</label><select id="thread-tag"><option value="ooc">OOC (Discussão fora do personagem)</option><option value="rp">RP (Cena de Roleplay)</option><option value="wiki">Wiki / Lore</option></select></div>';
+    html += '<div class="form-row"><label>Tipo</label><select id="thread-tag">';
+    html += '<option value="ooc"' + (tagPadrao === 'ooc' ? ' selected' : '') + '>OOC / Post (Discussão fora do personagem)</option>';
+    html += '<option value="rp"' + (tagPadrao === 'rp' ? ' selected' : '') + '>RP / Cena (Cena de Roleplay)</option>';
+    html += '<option value="wiki"' + (tagPadrao === 'wiki' ? ' selected' : '') + '>Wiki / Lore</option>';
+    html += '</select></div>';
   }
 
-  html += '<div class="form-row"><label>Título</label><input type="text" id="thread-title" value="' + (thr ? ha(thr.title) : '') + '" placeholder="Título do tópico"></div>';
+  html += '<div class="form-row"><label>Título</label><input type="text" id="thread-title" value="' + (thr ? ha(thr.title) : '') + '" placeholder="Título d' + infoNova.artDef + ' ' + infoNova.nome.toLowerCase() + '"></div>';
   html += '<div class="form-row"><label>Conteúdo</label>';
   html += buildEditor('thread-editor', priPost ? priPost.content : '');
   html += '</div>';
@@ -305,7 +326,7 @@ function renderNovaThread() {
   if (isEdit) {
     html += '<button class="btn btn-primary" onclick="salvarEdicaoThread()">Salvar Alterações</button>';
   } else {
-    html += '<button class="btn btn-primary" onclick="submitThread()">Publicar Tópico</button>';
+    html += '<button class="btn btn-primary" onclick="submitThread()">Publicar ' + infoNova.nome + '</button>';
   }
   html += '<button class="btn btn-small" onclick="navigate(\'forum\')">Cancelar</button></div>';
   html += '</div>';
@@ -527,14 +548,14 @@ function renderNovoPersonagem() {
   html += '<div class="cat-header" style="margin-top:10px;"><span>Apex Scale</span></div>';
   html += '<div style="border:1px solid #8899aa;background:#fff;padding:12px;margin-bottom:10px;">';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;">';
-  html += '<div class="form-row" style="margin-bottom:0"><label>IFC</label><input type="text" id="p-stat-ifc" value="' + (st.ifc !== undefined ? st.ifc : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>CCM</label><input type="text" id="p-stat-ccm" value="' + (st.ccm !== undefined ? st.ccm : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>LRB</label><input type="text" id="p-stat-lrb" value="' + (st.lrb !== undefined ? st.lrb : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>ACG</label><input type="text" id="p-stat-acg" value="' + (st.acg !== undefined ? st.acg : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>TPC</label><input type="text" id="p-stat-tpc" value="' + (st.tpc !== undefined ? st.tpc : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>CEO</label><input type="text" id="p-stat-ceo" value="' + (st.ceo !== undefined ? st.ceo : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>FDV</label><input type="text" id="p-stat-fdv" value="' + (st.fdv !== undefined ? st.fdv : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>ICF</label><input type="text" id="p-stat-icf" value="' + (st.icf !== undefined ? st.icf : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>剛 Gō</label><input type="text" id="p-stat-ifc" value="' + (st.ifc !== undefined ? st.ifc : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>技 Gi</label><input type="text" id="p-stat-ccm" value="' + (st.ccm !== undefined ? st.ccm : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>体 Tai</label><input type="text" id="p-stat-lrb" value="' + (st.lrb !== undefined ? st.lrb : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>知 Chi</label><input type="text" id="p-stat-acg" value="' + (st.acg !== undefined ? st.acg : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>心 Shin</label><input type="text" id="p-stat-tpc" value="' + (st.tpc !== undefined ? st.tpc : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>気 Ki</label><input type="text" id="p-stat-ceo" value="' + (st.ceo !== undefined ? st.ceo : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>速 Soku</label><input type="text" id="p-stat-fdv" value="' + (st.fdv !== undefined ? st.fdv : '') + '"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>運 Un</label><input type="text" id="p-stat-icf" value="' + (st.icf !== undefined ? st.icf : '') + '"></div>';
   html += '</div>';
   html += '<div class="field-desc">Cada eixo vai de 0 a 100.</div>';
   html += '<div class="form-row" style="margin-top:8px;"><label>Classificação Apex Scale</label><input type="text" id="p-apex-tier" value="' + (existing ? ha(existing.apexTier) : '') + '" placeholder="Iniciante, Intermediário, Expert..."></div>';
@@ -805,6 +826,11 @@ function startNewThread(catId) {
   navigate('novaThread');
 }
 
+function atualizarTipoThreadPadrao(catId) {
+  currentCat = catId;
+  render();
+}
+
 async function submitThread() {
   var title = document.getElementById('thread-title').value.trim();
   var content = getEditorContent('thread-editor');
@@ -824,7 +850,7 @@ async function submitThread() {
 function editarThread(threadId) {
   var thread = DB.threads.find(function(t) { return t.id === threadId; });
   if (!thread) return;
-  if (!podeEditarThread(thread.authorId)) { showAlert('Você não tem permissão para editar este tópico.', 'error'); return; }
+  if (!podeEditarThread(thread.authorId)) { var infoEdit = tipoInfo(thread.tag); showAlert('Você não tem permissão para editar ' + infoEdit.dem + ' ' + infoEdit.nome.toLowerCase() + '.', 'error'); return; }
   editandoThread = threadId;
   navigate('novaThread');
 }
@@ -847,7 +873,8 @@ async function salvarEdicaoThread() {
 async function deleteThread(threadId) {
   var thread = DB.threads.find(function(t) { return t.id === threadId; });
   if (!thread) return;
-  if (!confirm('Deletar este tópico inteiro e todas as respostas?')) return;
+  var infoDel = tipoInfo(thread.tag);
+  if (!confirm('Deletar ' + infoDel.dem + ' ' + infoDel.nome.toLowerCase() + ' inteir' + infoDel.artDef + ' e todas as respostas?')) return;
   var catId = thread.catId;
   try {
     await api('DELETE', '/api/threads/' + threadId);
@@ -910,10 +937,11 @@ async function saveEditPost(postId) {
 async function deletePost(postId) {
   var postsInThread = DB.posts.filter(function(p) { return p.threadId === currentThread; });
   if (!confirm('Deletar este post?')) return;
-  if (postsInThread.length <= 1) {
-    if (!confirm('Esse é o único post — deletar vai apagar o tópico inteiro. Confirma?')) return;
-  }
   var thr = DB.threads.find(function(t) { return t.id === currentThread; });
+  if (postsInThread.length <= 1) {
+    var infoDelPost = tipoInfo(thr ? thr.tag : null);
+    if (!confirm('Esse é o único post — deletar vai apagar ' + infoDelPost.dem + ' ' + infoDelPost.nome.toLowerCase() + ' inteir' + infoDelPost.artDef + '. Confirma?')) return;
+  }
   var catId = thr ? thr.catId : null;
   try {
     var data = await api('DELETE', '/api/posts/' + postId);
