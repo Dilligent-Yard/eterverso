@@ -272,7 +272,8 @@ function limparDadosPersonagem(body) {
     stats: stats,
     skills: skills,
     apexTier: campoTexto(body.apexTier, 60),
-    mascaraTier: campoTexto(body.mascaraTier, 60)
+    mascaraTier: campoTexto(body.mascaraTier, 60),
+    wa: campoTexto(body.wa, 30)
   };
 }
 

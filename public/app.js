@@ -88,6 +88,23 @@ function podeEditarPost(authorId) {
   return podeEditarThread(authorId);
 }
 
+var APEX_TIER_INFO = {
+  'tier 5': 'Guerreira de elite, logo abaixo das divindades.'
+};
+
+function toggleTierInfo(ev) {
+  ev.stopPropagation();
+  var pop = ev.target.nextElementSibling;
+  if (!pop) return;
+  var estavaAberto = pop.classList.contains('aberto');
+  document.querySelectorAll('.tier-popover.aberto').forEach(function(el) { el.classList.remove('aberto'); });
+  if (!estavaAberto) pop.classList.add('aberto');
+}
+
+document.addEventListener('click', function() {
+  document.querySelectorAll('.tier-popover.aberto').forEach(function(el) { el.classList.remove('aberto'); });
+});
+
 function tipoInfo(tag) {
   if (tag === 'rp') return { art: 'Nova', artDef: 'a', prep: 'à', dem: 'esta', nome: 'Cena', nomePlural: 'Cenas' };
   if (tag === 'wiki') return { art: 'Novo', artDef: 'o', prep: 'ao', dem: 'este', nome: 'Tópico', nomePlural: 'Tópicos' };
@@ -401,7 +418,13 @@ function renderPersonagemView() {
   html += '<tr><td><b>Facção:</b></td><td>' + h(p.faccao) + '</td></tr>';
   html += '<tr><td><b>Status:</b></td><td style="color:' + statusColor + ';font-weight:bold;">' + h(p.status) + '</td></tr>';
   html += '</table>';
-  if (p.apexTier) html += '<div class="apex-tier-badge card-badge">Apex Scale: <b>' + h(p.apexTier) + '</b></div>';
+  if (p.apexTier) {
+    var tierInfo = APEX_TIER_INFO[p.apexTier.trim().toLowerCase()];
+    html += '<div class="apex-tier-badge card-badge">Apex Scale: <b>' + h(p.apexTier) + '</b>';
+    if (tierInfo) html += '<span class="tier-help" onclick="toggleTierInfo(event)" title="O que significa este tier?">?</span><span class="tier-popover">' + h(tierInfo) + '</span>';
+    html += '</div>';
+  }
+  if (p.wa) html += '<div class="apex-tier-badge wa card-badge">Wa: <b>' + h(p.wa) + '</b></div>';
   if (p.mascaraTier) html += '<div class="apex-tier-badge mascara card-badge">A Máscara: <b>' + h(p.mascaraTier) + '</b></div>';
   html += '</div>';
   html += '<div class="char-sheet-body">' + p.descricao + '</div>';
@@ -568,6 +591,7 @@ function renderNovoPersonagem() {
   html += '<div class="field-desc">Cada eixo vai de 0 a 100.</div>';
   html += '<div class="form-row" style="margin-top:8px;"><label>Classificação Apex Scale</label><input type="text" id="p-apex-tier" value="' + (existing ? ha(existing.apexTier) : '') + '" placeholder="Iniciante, Intermediário, Expert..."></div>';
   html += '<div class="form-row"><label>Classificação segundo A Máscara (opcional)</label><input type="text" id="p-mascara-tier" value="' + (existing ? ha(existing.mascaraTier) : '') + '"></div>';
+  html += '<div class="form-row"><label>Wa (opcional)</label><input type="text" id="p-wa" value="' + (existing ? ha(existing.wa) : '') + '" placeholder="Ex: 0,75 – 0,89"></div>';
   html += '</div>';
 
   var skillsExistentes = (existing && existing.skills) ? existing.skills : [];
@@ -1035,7 +1059,8 @@ function lerPersonagemDoFormulario() {
     stats: lerStatsDoFormulario(),
     skills: lerSkillsDoFormulario(),
     apexTier: document.getElementById('p-apex-tier').value.trim(),
-    mascaraTier: document.getElementById('p-mascara-tier').value.trim()
+    mascaraTier: document.getElementById('p-mascara-tier').value.trim(),
+    wa: document.getElementById('p-wa').value.trim()
   };
 }
 

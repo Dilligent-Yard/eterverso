@@ -57,6 +57,7 @@ CREATE TABLE personagens (
   skills JSONB DEFAULT '[]',
   apex_tier VARCHAR(60) DEFAULT '',
   mascara_tier VARCHAR(60) DEFAULT '',
+  wa VARCHAR(30) DEFAULT '',
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );

@@ -145,8 +145,14 @@ label { display: block; margin-bottom: 3px; font-weight: bold; color: #1a2860; f
 .apex-stat-bar { flex:1; height:11px; background:#dde2f0; border:1px solid #aab6cc; border-radius:5px; overflow:hidden; box-shadow:inset 0 1px 2px rgba(20,30,60,0.15); }
 .apex-stat-bar-fill { display:block; height:100%; background:linear-gradient(to right,#4a7acc,#1a2860); border-radius:5px 0 0 5px; box-shadow:inset 0 1px 0 rgba(255,255,255,0.25); }
 .apex-stat-value { width:26px; text-align:right; font-size:11px; font-weight:bold; color:#3a5080; }
-.apex-tier-badge { display:inline-block; background:#dde6f7; border:1px solid #aab6cc; color:#1a2860; padding:4px 9px; font-size:11px; margin:0 6px 6px 0; }
+.apex-tier-badge { display:inline-block; position:relative; background:#dde6f7; border:1px solid #aab6cc; color:#1a2860; padding:4px 9px; font-size:11px; margin:0 6px 6px 0; }
 .apex-tier-badge.mascara { background:#fbe2e2; border-color:#cc8888; color:#7a1a1a; }
+.apex-tier-badge.wa { background:#e7ffd9; border-color:#8fbb77; color:#2d5a12; }
+.tier-help { display:inline-block; width:14px; height:14px; line-height:14px; text-align:center; border-radius:50%; background:#1a2860; color:#fff; font-size:10px; font-weight:bold; cursor:pointer; margin-left:6px; user-select:none; }
+.tier-help:hover { background:#3a5080; }
+.tier-popover { display:none; position:absolute; left:50%; transform:translateX(-50%); bottom:calc(100% + 7px); width:190px; background:#1a2860; color:#fff; padding:8px 10px; font-size:11px; line-height:1.5; border-radius:3px; box-shadow:0 3px 10px rgba(0,0,0,0.35); z-index:60; text-align:center; font-weight:normal; }
+.tier-popover.aberto { display:block; }
+.tier-popover:after { content:''; position:absolute; top:100%; left:50%; margin-left:-5px; border:5px solid transparent; border-top-color:#1a2860; }
 
 @media (max-width:700px) {
   .char-sheet-grid { grid-template-columns:1fr; }
