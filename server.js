@@ -106,12 +106,12 @@ app.post('/api/categories', requireAuth, requireAdmin, asyncHandler(async functi
 }));
 
 app.delete('/api/categories/:id', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
-  await queries.deleteCategory(parseInt(req.params.id));
+  await queries.deleteCategory(req.params.id);
   res.json({ ok: true });
 }));
 
 app.post('/api/threads', requireAuth, asyncHandler(async function(req, res) {
-  var catId = parseInt(req.body.catId);
+  var catId = req.body.catId;
   var title = (req.body.title || '').trim();
   var tag = req.body.tag || 'ooc';
   var content = req.body.content || '';
@@ -123,7 +123,7 @@ app.post('/api/threads', requireAuth, asyncHandler(async function(req, res) {
 }));
 
 app.put('/api/threads/:id', requireAuth, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   var thread = await queries.findThreadById(id);
   if (!thread) return res.status(404).json({ error: 'Tópico não encontrado.' });
   if (!podeEditar(req.user, thread.authorId)) return res.status(403).json({ error: 'Você não tem permissão para editar este tópico.' });
@@ -139,7 +139,7 @@ app.put('/api/threads/:id', requireAuth, asyncHandler(async function(req, res) {
 }));
 
 app.delete('/api/threads/:id', requireAuth, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   var thread = await queries.findThreadById(id);
   if (!thread) return res.status(404).json({ error: 'Tópico não encontrado.' });
   if (!podeEditar(req.user, thread.authorId)) return res.status(403).json({ error: 'Você não tem permissão para deletar este tópico.' });
@@ -148,12 +148,12 @@ app.delete('/api/threads/:id', requireAuth, asyncHandler(async function(req, res
 }));
 
 app.post('/api/threads/:id/view', asyncHandler(async function(req, res) {
-  await queries.incrementThreadViews(parseInt(req.params.id));
+  await queries.incrementThreadViews(req.params.id);
   res.json({ ok: true });
 }));
 
 app.post('/api/posts', requireAuth, asyncHandler(async function(req, res) {
-  var threadId = parseInt(req.body.threadId);
+  var threadId = req.body.threadId;
   var content = req.body.content || '';
   if (!content || content === '<br>') return res.status(400).json({ error: 'Escreva algo antes de enviar!' });
   var post = await queries.createPost(threadId, req.user.id, content);
@@ -161,7 +161,7 @@ app.post('/api/posts', requireAuth, asyncHandler(async function(req, res) {
 }));
 
 app.put('/api/posts/:id', requireAuth, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   var post = await queries.findPostById(id);
   if (!post) return res.status(404).json({ error: 'Post não encontrado.' });
   if (!podeEditar(req.user, post.authorId)) return res.status(403).json({ error: 'Você não tem permissão para editar este post.' });
@@ -172,7 +172,7 @@ app.put('/api/posts/:id', requireAuth, asyncHandler(async function(req, res) {
 }));
 
 app.delete('/api/posts/:id', requireAuth, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   var post = await queries.findPostById(id);
   if (!post) return res.status(404).json({ error: 'Post não encontrado.' });
   if (!podeEditar(req.user, post.authorId)) return res.status(403).json({ error: 'Você não tem permissão para deletar este post.' });
@@ -195,24 +195,24 @@ app.post('/api/personagens', requireAuth, requireModOrAdmin, asyncHandler(async 
 }));
 
 app.put('/api/personagens/:id', requireAuth, requireModOrAdmin, asyncHandler(async function(req, res) {
-  await queries.updatePersonagem(parseInt(req.params.id), req.body);
+  await queries.updatePersonagem(req.params.id, req.body);
   res.json({ ok: true });
 }));
 
 app.delete('/api/personagens/:id', requireAuth, requireModOrAdmin, asyncHandler(async function(req, res) {
-  await queries.deletePersonagem(parseInt(req.params.id));
+  await queries.deletePersonagem(req.params.id);
   res.json({ ok: true });
 }));
 
 app.post('/api/personagens/:id/comments', requireAuth, asyncHandler(async function(req, res) {
   var content = (req.body.content || '').trim();
   if (!content) return res.status(400).json({ error: 'Escreva algo antes de comentar.' });
-  var comment = await queries.createComment(parseInt(req.params.id), req.user.id, content);
+  var comment = await queries.createComment(req.params.id, req.user.id, content);
   res.json({ comment: comment });
 }));
 
 app.delete('/api/comments/:id', requireAuth, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   var comment = await queries.findCommentById(id);
   if (!comment) return res.status(404).json({ error: 'Comentário não encontrado.' });
   if (!podeEditar(req.user, comment.authorId)) return res.status(403).json({ error: 'Você não tem permissão para apagar este comentário.' });
@@ -221,7 +221,7 @@ app.delete('/api/comments/:id', requireAuth, asyncHandler(async function(req, re
 }));
 
 app.put('/api/users/:id/role', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   var role = req.body.role;
   if (req.user.id === id && role !== 'admin') {
     return res.status(400).json({ error: 'Você não pode remover seu próprio cargo de admin por aqui.' });
@@ -232,7 +232,7 @@ app.put('/api/users/:id/role', requireAuth, requireAdmin, asyncHandler(async fun
 }));
 
 app.delete('/api/users/:id', requireAuth, requireAdmin, asyncHandler(async function(req, res) {
-  var id = parseInt(req.params.id);
+  var id = req.params.id;
   if (req.user.id === id) return res.status(400).json({ error: 'Você não pode excluir sua própria conta por aqui.' });
   await queries.deleteUser(id);
   res.json({ ok: true });

@@ -1,5 +1,7 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE users (
-  id SERIAL PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   username VARCHAR(50) UNIQUE NOT NULL,
   email VARCHAR(120) UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
@@ -14,15 +16,16 @@ CREATE TABLE users (
 );
 
 CREATE TABLE categories (
-  id SERIAL PRIMARY KEY,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name VARCHAR(100) NOT NULL,
-  description TEXT DEFAULT ''
+  description TEXT DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE threads (
-  id SERIAL PRIMARY KEY,
-  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-  author_id INTEGER NOT NULL REFERENCES users(id),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  category_id UUID NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id),
   title VARCHAR(200) NOT NULL,
   tag VARCHAR(20) DEFAULT '',
   pinned BOOLEAN NOT NULL DEFAULT FALSE,
@@ -31,17 +34,17 @@ CREATE TABLE threads (
 );
 
 CREATE TABLE posts (
-  id SERIAL PRIMARY KEY,
-  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  author_id INTEGER NOT NULL REFERENCES users(id),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  thread_id UUID NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id),
   content TEXT NOT NULL,
   edited BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE personagens (
-  id SERIAL PRIMARY KEY,
-  author_id INTEGER NOT NULL REFERENCES users(id),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  author_id UUID NOT NULL REFERENCES users(id),
   nome VARCHAR(100) NOT NULL,
   categoria VARCHAR(50) DEFAULT '',
   titulo VARCHAR(100) DEFAULT '',
@@ -57,9 +60,9 @@ CREATE TABLE personagens (
 );
 
 CREATE TABLE comments (
-  id SERIAL PRIMARY KEY,
-  personagem_id INTEGER NOT NULL REFERENCES personagens(id) ON DELETE CASCADE,
-  author_id INTEGER NOT NULL REFERENCES users(id),
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  personagem_id UUID NOT NULL REFERENCES personagens(id) ON DELETE CASCADE,
+  author_id UUID NOT NULL REFERENCES users(id),
   content TEXT NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );

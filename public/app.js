@@ -166,13 +166,13 @@ function renderForum() {
     var catPosts = 0;
     catThreads.forEach(function(t) { catPosts += DB.posts.filter(function(p) { return p.threadId === t.id; }).length; });
     var lastThread = catThreads.length ? catThreads[catThreads.length - 1] : null;
-    var lastInfo = lastThread ? ('<a onclick="navigate(\'thread\',' + lastThread.id + ')">' + h(lastThread.title.substring(0, 35)) + '...</a><br><small style="color:#888;">' + lastThread.date + '</small>') : '<span style="color:#888;">Nenhum</span>';
+    var lastInfo = lastThread ? ('<a onclick="navigate(\'thread\',\'' + lastThread.id + '\')">' + h(lastThread.title.substring(0, 35)) + '...</a><br><small style="color:#888;">' + lastThread.date + '</small>') : '<span style="color:#888;">Nenhum</span>';
 
     html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-    if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(' + cat.id + ')">+ Novo Tópico</button>';
+    if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(\'' + cat.id + '\')">+ Novo Tópico</button>';
     html += '</div>';
     html += '<table class="forum-table"><thead><tr><th style="width:45%">Categoria</th><th>Tópicos</th><th>Posts</th><th>Último Post</th></tr></thead><tbody>';
-    html += '<tr><td><a onclick="navigate(\'cat\',' + cat.id + ')">' + h(cat.name) + '</a><br><small style="color:#666;">' + h(cat.desc) + '</small></td>';
+    html += '<tr><td><a onclick="navigate(\'cat\',\'' + cat.id + '\')">' + h(cat.name) + '</a><br><small style="color:#666;">' + h(cat.desc) + '</small></td>';
     html += '<td>' + catThreads.length + '</td><td>' + catPosts + '</td><td style="font-size:11px;">' + lastInfo + '</td></tr>';
     html += '</tbody></table>';
   });
@@ -190,16 +190,17 @@ function renderCat() {
   var cat = DB.categories.find(function(c) { return c.id === currentCat; });
   if (!cat) return '<p>Categoria não encontrada.</p>';
   var threads = DB.threads.filter(function(t) { return t.catId === currentCat; });
-  threads.sort(function(a, b) { return b.pinned - a.pinned || b.id - a.id; });
+  threads = threads.slice().reverse();
+  threads.sort(function(a, b) { return b.pinned - a.pinned; });
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; ' + h(cat.name) + '</div>';
   html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-  if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(' + cat.id + ')">+ Novo Tópico</button>';
+  if (DB.session) html += '<button class="btn btn-small btn-success" onclick="startNewThread(\'' + cat.id + '\')">+ Novo Tópico</button>';
   html += '</div>';
   html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Respostas</th><th>Views</th><th>Último Post</th></tr></thead><tbody>';
 
   if (!threads.length) {
-    html += '<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">Nenhum tópico ainda. <a onclick="startNewThread(' + cat.id + ')">Criar o primeiro!</a></td></tr>';
+    html += '<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">Nenhum tópico ainda. <a onclick="startNewThread(\'' + cat.id + '\')">Criar o primeiro!</a></td></tr>';
   }
 
   threads.forEach(function(t) {
@@ -211,7 +212,7 @@ function renderCat() {
     html += '<tr><td>';
     if (t.pinned) html += '<span class="pin">FIXO</span>';
     html += '<span class="tag ' + tagClass + '">' + (t.tag || 'ooc').toUpperCase() + '</span> ';
-    html += '<a onclick="navigate(\'thread\',' + t.id + ')">' + h(t.title) + '</a>';
+    html += '<a onclick="navigate(\'thread\',\'' + t.id + '\')">' + h(t.title) + '</a>';
     html += '</td><td>' + (author ? h(author.username) : '?') + '</td>';
     html += '<td>' + replies + '</td><td>' + (t.views || 0) + '</td>';
     html += '<td style="font-size:11px;">' + lastPostDate + '</td></tr>';
@@ -229,13 +230,13 @@ function renderThread() {
   var posts = DB.posts.filter(function(p) { return p.threadId === currentThread; });
   var tagClass = 'tag-' + (thread.tag || 'ooc');
 
-  var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; <a onclick="navigate(\'cat\',' + thread.catId + ')">' + h(cat ? cat.name : '') + '</a> &raquo; ' + h(thread.title) + '</div>';
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> &raquo; <a onclick="navigate(\'cat\',\'' + thread.catId + '\')">' + h(cat ? cat.name : '') + '</a> &raquo; ' + h(thread.title) + '</div>';
   html += '<div class="thread-tools">';
   html += '<h2><span class="tag ' + tagClass + '">' + (thread.tag || 'ooc').toUpperCase() + '</span> ' + h(thread.title) + '</h2>';
   html += '<div style="display:flex;gap:5px;">';
   if (podeEditarThread(thread.authorId)) {
-    html += '<button class="btn btn-warn btn-small" onclick="editarThread(' + thread.id + ')">Editar</button>';
-    html += '<button class="btn btn-danger btn-small" onclick="deleteThread(' + thread.id + ')">Deletar Tópico</button>';
+    html += '<button class="btn btn-warn btn-small" onclick="editarThread(\'' + thread.id + '\')">Editar</button>';
+    html += '<button class="btn btn-danger btn-small" onclick="deleteThread(\'' + thread.id + '\')">Deletar Tópico</button>';
   }
   html += '</div></div>';
 
@@ -253,10 +254,10 @@ function renderThread() {
     html += '</div>';
     html += '<div class="post-footer"><div class="post-actions">';
     if (DB.session) {
-      html += '<a onclick="quotePost(' + post.id + ')">Citar</a>';
+      html += '<a onclick="quotePost(\'' + post.id + '\')">Citar</a>';
       if (podeEditarPost(post.authorId)) {
-        html += '<a onclick="editPost(' + post.id + ')">Editar</a>';
-        html += '<a class="danger-link" onclick="deletePost(' + post.id + ')">Deletar</a>';
+        html += '<a onclick="editPost(\'' + post.id + '\')">Editar</a>';
+        html += '<a class="danger-link" onclick="deletePost(\'' + post.id + '\')">Deletar</a>';
       }
     }
     html += '</div></div></div>';
@@ -313,7 +314,7 @@ function renderNovaThread() {
 
 function renderCharCard(p) {
   var statusColor = p.status === 'Vivo' || p.status === 'Viva' ? '#007700' : (p.status === 'Afastada' || p.status === 'Afastado' ? '#774400' : '#770000');
-  var html = '<div class="char-card" onclick="navigate(\'personagemView\',' + p.id + ')">';
+  var html = '<div class="char-card" onclick="navigate(\'personagemView\',\'' + p.id + '\')">';
   if (p.imagem) {
     html += '<img class="thumb" src="' + ha(p.imagem) + '" alt="' + ha(p.nome) + '">';
   } else {
@@ -366,7 +367,7 @@ function renderPersonagemView() {
   html += '<div class="char-sheet-head">';
   html += '<h2>' + h(p.nome) + (p.titulo ? ' <em>' + h(p.titulo) + '</em>' : '') + '</h2>';
   if (isModOrAdmin()) {
-    html += '<div style="display:flex;gap:5px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(' + p.id + ')">Editar</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + p.id + ')">Deletar</button></div>';
+    html += '<div style="display:flex;gap:5px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(\'' + p.id + '\')">Editar</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(\'' + p.id + '\')">Deletar</button></div>';
   }
   html += '</div>';
 
@@ -409,7 +410,7 @@ function renderPersonagemView() {
       var autor = getUserById(c.authorId);
       html += '<div class="post-box"><div class="post-header"><div class="post-meta"><strong>' + (autor ? h(autor.username) : '?') + '</strong></div><span class="post-date">' + c.date + '</span></div><div class="post-content">' + h(c.content) + '</div>';
       if (podeEditarPost(c.authorId)) {
-        html += '<div class="post-footer"><div class="post-actions"><a class="danger-link" onclick="deletarComentario(' + c.id + ')">Apagar</a></div></div>';
+        html += '<div class="post-footer"><div class="post-actions"><a class="danger-link" onclick="deletarComentario(\'' + c.id + '\')">Apagar</a></div></div>';
       }
       html += '</div>';
     });
@@ -417,7 +418,7 @@ function renderPersonagemView() {
   if (DB.session) {
     html += '<div class="reply-box"><div class="reply-inner">';
     html += '<textarea id="comentario-texto" rows="3" style="width:100%;font-family:Verdana,sans-serif;font-size:12px;padding:6px;border:1px solid #8899aa;box-sizing:border-box;" placeholder="Escreva um comentário..."></textarea>';
-    html += '<div style="margin-top:6px;"><button class="btn btn-primary btn-small" onclick="submitComentario(' + p.id + ')">Comentar</button></div>';
+    html += '<div style="margin-top:6px;"><button class="btn btn-primary btn-small" onclick="submitComentario(\'' + p.id + '\')">Comentar</button></div>';
     html += '</div></div>';
   } else {
     html += '<div class="alert alert-info"><a onclick="showLoginModal()">Faça login</a> para comentar.</div>';
@@ -483,7 +484,7 @@ function renderNovoPersonagem() {
   if (!isModOrAdmin()) return '<div class="alert alert-error">Acesso negado.</div>';
 
   var editId = sessionStorage.getItem('editPersonagemId');
-  var existing = editId ? DB.personagens.find(function(p) { return p.id === parseInt(editId); }) : null;
+  var existing = editId ? DB.personagens.find(function(p) { return p.id === editId; }) : null;
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Personagens</a> &raquo; ' + (existing ? 'Editar Personagem' : 'Novo Personagem') + '</div>';
   html += '<div class="cat-header"><span>' + (existing ? 'Editar Personagem' : 'Cadastrar Personagem') + '</span></div>';
@@ -528,7 +529,7 @@ function renderNovoPersonagem() {
   html += '</div>';
 
   var btnLabel = existing ? 'Salvar Alterações' : 'Cadastrar Personagem';
-  var onclick = existing ? 'salvarEdicaoPersonagem(' + existing.id + ')' : 'submitPersonagem()';
+  var onclick = existing ? 'salvarEdicaoPersonagem(\'' + existing.id + '\')' : 'submitPersonagem()';
   html += '<div style="display:flex;gap:8px;margin-top:8px;"><button class="btn btn-primary" onclick="' + onclick + '">' + btnLabel + '</button><button class="btn btn-small" onclick="navigate(\'wiki\')">Cancelar</button></div>';
   html += '</div>';
 
@@ -651,12 +652,12 @@ function renderAdmin() {
   html += '<table class="forum-table"><thead><tr><th>Usuário</th><th>Cargo</th><th>Posts</th><th>Ações</th></tr></thead><tbody>';
   DB.users.forEach(function(u) {
     html += '<tr><td>' + h(u.username) + '</td><td>' + badgeHtml(u) + '</td><td>' + (u.posts || 0) + '</td><td>';
-    html += '<select onchange="alterarCargoUsuario(' + u.id + ', this.value)">';
+    html += '<select onchange="alterarCargoUsuario(\'' + u.id + '\', this.value)">';
     html += '<option value="member"' + (u.role === 'member' ? ' selected' : '') + '>Membro</option>';
     html += '<option value="moderador"' + (u.role === 'moderador' ? ' selected' : '') + '>Moderador</option>';
     html += '<option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
     html += '</select>';
-    html += ' <button class="btn btn-small btn-danger" onclick="deletarUsuario(' + u.id + ')">Excluir</button>';
+    html += ' <button class="btn btn-small btn-danger" onclick="deletarUsuario(\'' + u.id + '\')">Excluir</button>';
     html += '</td></tr>';
   });
   html += '</tbody></table>';
@@ -664,7 +665,7 @@ function renderAdmin() {
   html += '<div class="cat-header"><span>Categorias</span></div>';
   html += '<table class="forum-table"><thead><tr><th>Nome</th><th>Descrição</th><th>Ações</th></tr></thead><tbody>';
   DB.categories.forEach(function(c) {
-    html += '<tr><td>' + h(c.name) + '</td><td>' + h(c.desc) + '</td><td><button class="btn btn-small btn-danger" onclick="removerCategoria(' + c.id + ')">Excluir</button></td></tr>';
+    html += '<tr><td>' + h(c.name) + '</td><td>' + h(c.desc) + '</td><td><button class="btn btn-small btn-danger" onclick="removerCategoria(\'' + c.id + '\')">Excluir</button></td></tr>';
   });
   html += '</tbody></table>';
   html += '<div style="background:#f8f9ff;border:1px solid #8899aa;padding:12px;margin-bottom:14px;">';
@@ -794,7 +795,7 @@ function startNewThread(catId) {
 async function submitThread() {
   var title = document.getElementById('thread-title').value.trim();
   var content = getEditorContent('thread-editor');
-  var catId = parseInt(document.getElementById('thread-cat').value);
+  var catId = document.getElementById('thread-cat').value;
   var tag = document.getElementById('thread-tag').value;
   try {
     var data = await api('POST', '/api/threads', { catId: catId, title: title, tag: tag, content: content });
@@ -875,7 +876,7 @@ function editPost(postId) {
   if (!podeEditarPost(post.authorId)) { showAlert('Você não tem permissão para editar este post.', 'error'); return; }
   showModal('Editar Post',
     '<div class="form-row"><label>Conteúdo:</label>' + buildEditor('edit-post-editor', post.content) + '</div>' +
-    '<div style="margin-top:8px;"><button class="btn btn-primary" onclick="saveEditPost(' + postId + ')">Salvar</button></div>'
+    '<div style="margin-top:8px;"><button class="btn btn-primary" onclick="saveEditPost(\'' + postId + '\')">Salvar</button></div>'
   );
 }
 

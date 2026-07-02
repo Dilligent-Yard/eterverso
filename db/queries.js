@@ -40,7 +40,7 @@ function isModOrAdmin(user) {
 }
 
 async function listUsersPublic() {
-  const result = await query(`SELECT ${userPublicFields} FROM users ORDER BY id ASC`);
+  const result = await query(`SELECT ${userPublicFields} FROM users ORDER BY created_at ASC`);
   return result.rows;
 }
 
@@ -84,7 +84,7 @@ async function changePassword(userId, currentPassword, newPassword) {
 }
 
 async function listCategories() {
-  const result = await query('SELECT id, name, description AS "desc" FROM categories ORDER BY id ASC');
+  const result = await query('SELECT id, name, description AS "desc" FROM categories ORDER BY created_at ASC');
   return result.rows;
 }
 
@@ -103,7 +103,7 @@ async function deleteCategory(id) {
 const threadFields = 'id, category_id AS "catId", author_id AS "authorId", title, tag, pinned, views, to_char(created_at, \'DD/MM/YYYY HH24:MI\') AS date';
 
 async function listThreads() {
-  const result = await query(`SELECT ${threadFields} FROM threads ORDER BY id ASC`);
+  const result = await query(`SELECT ${threadFields} FROM threads ORDER BY created_at ASC`);
   return result.rows;
 }
 
@@ -135,7 +135,7 @@ async function incrementThreadViews(id) {
 const postFields = 'id, thread_id AS "threadId", author_id AS "authorId", content, edited, to_char(created_at, \'DD/MM/YYYY HH24:MI\') AS date';
 
 async function listPosts() {
-  const result = await query(`SELECT ${postFields} FROM posts ORDER BY id ASC`);
+  const result = await query(`SELECT ${postFields} FROM posts ORDER BY created_at ASC`);
   return result.rows;
 }
 
@@ -150,7 +150,7 @@ async function countPostsByThread(threadId) {
 }
 
 async function findFirstPostByThread(threadId) {
-  const result = await query(`SELECT ${postFields} FROM posts WHERE thread_id = $1 ORDER BY id ASC LIMIT 1`, [threadId]);
+  const result = await query(`SELECT ${postFields} FROM posts WHERE thread_id = $1 ORDER BY created_at ASC LIMIT 1`, [threadId]);
   return result.rows[0] || null;
 }
 
@@ -174,7 +174,7 @@ async function deletePost(id) {
 const personagemFields = 'id, author_id AS "authorId", nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, apex_tier AS "apexTier", mascara_tier AS "mascaraTier"';
 
 async function listPersonagens() {
-  const result = await query(`SELECT ${personagemFields} FROM personagens ORDER BY id ASC`);
+  const result = await query(`SELECT ${personagemFields} FROM personagens ORDER BY created_at ASC`);
   return result.rows;
 }
 
@@ -237,7 +237,7 @@ async function deletePersonagem(id) {
 const commentFields = 'id, personagem_id AS "personagemId", author_id AS "authorId", content, to_char(created_at, \'DD/MM/YYYY HH24:MI\') AS date';
 
 async function listComments() {
-  const result = await query(`SELECT ${commentFields} FROM comments ORDER BY id ASC`);
+  const result = await query(`SELECT ${commentFields} FROM comments ORDER BY created_at ASC`);
   return result.rows;
 }
 
