@@ -54,9 +54,11 @@ CREATE TABLE personagens (
   imagem TEXT DEFAULT '',
   descricao TEXT DEFAULT '',
   stats JSONB DEFAULT '{}',
+  skills JSONB DEFAULT '[]',
   apex_tier VARCHAR(60) DEFAULT '',
   mascara_tier VARCHAR(60) DEFAULT '',
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE comments (

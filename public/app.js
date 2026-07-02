@@ -10,8 +10,7 @@ var DB = {
 
 var equipe = [
   { nome: 'Rick', cargo: 'Dono e Moderador', foto: 'https://i.pinimg.com/736x/02/bc/1d/02bc1ddfb478c7069ac1db5017955648.jpg' },
-  { nome: 'Mand Eden', cargo: 'Criador, Escritor e Dono da Obra', foto: '' },
-  { nome: 'Rigel', cargo: 'Fundador e Dono do Éterverso', foto: '' },
+  { nome: 'Mand Eden', cargo: 'Criador, Escritor e Dono do Éterverso', foto: '' },
   { nome: 'Ghostmaker', cargo: 'Criador, Escritor e Vice-Dono da Obra', foto: '' },
   { nome: 'Scautz', cargo: 'Criador e Escritor', foto: 'https://i.pinimg.com/736x/55/86/5a/55865a10f994f2379e4a4ac484def034.jpg' },
   { nome: 'Lucas Kabii', cargo: 'Criador e Colaborador', foto: 'https://i.pinimg.com/control1/736x/94/b1/6b/94b16b73301e10ea0b4f5a63500cc619.jpg' }
@@ -408,6 +407,15 @@ function renderPersonagemView() {
   html += '<div class="char-sheet-body">' + p.descricao + '</div>';
   html += '</div>';
 
+  if (p.skills && p.skills.length) {
+    html += '<div class="cat-header" style="margin-top:15px;"><span>Skills</span></div>';
+    html += '<div class="skill-grid">';
+    p.skills.forEach(function(sk) {
+      html += '<div class="skill-item"><h4>' + h(sk.nome) + '</h4><p>' + h(sk.descricao) + '</p></div>';
+    });
+    html += '</div>';
+  }
+
   if (p.stats) {
     html += '<div class="cat-header" style="margin-top:15px;"><span>Apex Scale</span></div>';
     html += '<div class="apex-panel">';
@@ -562,6 +570,16 @@ function renderNovoPersonagem() {
   html += '<div class="form-row"><label>Classificação segundo A Máscara (opcional)</label><input type="text" id="p-mascara-tier" value="' + (existing ? ha(existing.mascaraTier) : '') + '"></div>';
   html += '</div>';
 
+  var skillsExistentes = (existing && existing.skills) ? existing.skills : [];
+  html += '<div class="cat-header" style="margin-top:10px;"><span>Skills</span></div>';
+  html += '<div style="border:1px solid #8899aa;background:#fff;padding:12px;margin-bottom:10px;">';
+  html += '<div class="field-desc" style="margin-bottom:8px;">Cada skill vira um card na ficha do personagem, como os de exemplo abaixo.</div>';
+  html += '<div id="p-skills-list">';
+  skillsExistentes.forEach(function(sk) { html += skillFormRowHtml(sk.nome, sk.descricao); });
+  html += '</div>';
+  html += '<button type="button" class="btn btn-small btn-success" onclick="adicionarSkillFormRow()">+ Adicionar Skill</button>';
+  html += '</div>';
+
   var btnLabel = existing ? 'Salvar Alterações' : 'Cadastrar Personagem';
   var onclick = existing ? 'salvarEdicaoPersonagem(\'' + existing.id + '\')' : 'submitPersonagem()';
   html += '<div style="display:flex;gap:8px;margin-top:8px;"><button class="btn btn-primary" onclick="' + onclick + '">' + btnLabel + '</button><button class="btn btn-small" onclick="navigate(\'wiki\')">Cancelar</button></div>';
@@ -569,6 +587,29 @@ function renderNovoPersonagem() {
 
   html += '</div>';
   return html;
+}
+
+function skillFormRowHtml(nome, descricao) {
+  return '<div class="skill-form-item">' +
+    '<div class="form-row" style="margin-bottom:6px;"><label>Nome da Skill</label><input type="text" class="skill-nome" value="' + ha(nome || '') + '" placeholder="Ex: Aether Rasengan"></div>' +
+    '<div class="form-row" style="margin-bottom:6px;"><label>Descrição</label><textarea class="skill-desc" rows="3" placeholder="O que a habilidade faz...">' + h(descricao || '') + '</textarea></div>' +
+    '<button type="button" class="btn btn-small btn-danger" onclick="this.parentNode.remove()">Remover Skill</button>' +
+    '</div>';
+}
+
+function adicionarSkillFormRow() {
+  var container = document.getElementById('p-skills-list');
+  container.insertAdjacentHTML('beforeend', skillFormRowHtml('', ''));
+}
+
+function lerSkillsDoFormulario() {
+  var skills = [];
+  document.querySelectorAll('#p-skills-list .skill-form-item').forEach(function(item) {
+    var nome = item.querySelector('.skill-nome').value.trim();
+    var descricao = item.querySelector('.skill-desc').value.trim();
+    if (nome || descricao) skills.push({ nome: nome, descricao: descricao });
+  });
+  return skills;
 }
 
 function atualizarPreviewFicha() {
@@ -992,6 +1033,7 @@ function lerPersonagemDoFormulario() {
     imagem: document.getElementById('p-imagem').value.trim(),
     descricao: getEditorContent('p-editor'),
     stats: lerStatsDoFormulario(),
+    skills: lerSkillsDoFormulario(),
     apexTier: document.getElementById('p-apex-tier').value.trim(),
     mascaraTier: document.getElementById('p-mascara-tier').value.trim()
   };

@@ -171,7 +171,7 @@ async function deletePost(id) {
   await query('DELETE FROM posts WHERE id = $1', [id]);
 }
 
-const personagemFields = 'id, author_id AS "authorId", nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, apex_tier AS "apexTier", mascara_tier AS "mascaraTier"';
+const personagemFields = 'id, author_id AS "authorId", nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, skills, apex_tier AS "apexTier", mascara_tier AS "mascaraTier"';
 
 async function listPersonagens() {
   const result = await query(`SELECT ${personagemFields} FROM personagens ORDER BY created_at ASC`);
@@ -186,8 +186,8 @@ async function findPersonagemById(id) {
 async function createPersonagem(authorId, data) {
   const result = await query(
     `INSERT INTO personagens
-      (author_id, nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, apex_tier, mascara_tier)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      (author_id, nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, skills, apex_tier, mascara_tier)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING ${personagemFields}`,
     [
       authorId,
@@ -200,6 +200,7 @@ async function createPersonagem(authorId, data) {
       data.imagem,
       data.descricao,
       JSON.stringify(data.stats || {}),
+      JSON.stringify(data.skills || []),
       data.apexTier,
       data.mascaraTier
     ]
@@ -211,8 +212,8 @@ async function updatePersonagem(id, data) {
   await query(
     `UPDATE personagens SET
       nome = $1, categoria = $2, titulo = $3, raca = $4, faccao = $5,
-      status = $6, imagem = $7, descricao = $8, stats = $9, apex_tier = $10, mascara_tier = $11
-     WHERE id = $12`,
+      status = $6, imagem = $7, descricao = $8, stats = $9, skills = $10, apex_tier = $11, mascara_tier = $12
+     WHERE id = $13`,
     [
       data.nome,
       data.categoria,
@@ -223,6 +224,7 @@ async function updatePersonagem(id, data) {
       data.imagem,
       data.descricao,
       JSON.stringify(data.stats || {}),
+      JSON.stringify(data.skills || []),
       data.apexTier,
       data.mascaraTier,
       id
