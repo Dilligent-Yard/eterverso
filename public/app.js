@@ -392,7 +392,7 @@ function renderPersonagemView() {
     html += '<div class="apex-panel">';
     html += '<div>' + buildRadarChart(p.stats) + '</div>';
     html += '<div class="apex-readout">';
-    var apexLabels = ['IFC', 'CCM', 'LRB', 'ACG', 'TPC', 'CEO', 'FDV', 'ICF'];
+    var apexLabels = ['剛 Gō', '技 Gi', '体 Tai', '知 Chi', '心 Shin', '気 Ki', '速 Soku', '運 Un'];
     var apexKeys = ['ifc', 'ccm', 'lrb', 'acg', 'tpc', 'ceo', 'fdv', 'icf'];
     for (var si = 0; si < apexLabels.length; si++) {
       var valorStat = p.stats[apexKeys[si]] !== undefined ? p.stats[apexKeys[si]] : 0;
@@ -429,7 +429,7 @@ function renderPersonagemView() {
 }
 
 function buildRadarChart(stats) {
-  var labels = ['IFC', 'CCM', 'LRB', 'ACG', 'TPC', 'CEO', 'FDV', 'ICF'];
+  var labels = ['剛 Gō', '技 Gi', '体 Tai', '知 Chi', '心 Shin', '気 Ki', '速 Soku', '運 Un'];
   var keys = ['ifc', 'ccm', 'lrb', 'acg', 'tpc', 'ceo', 'fdv', 'icf'];
   var n = labels.length;
   var size = 260;
