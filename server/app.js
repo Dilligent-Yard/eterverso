@@ -11,6 +11,7 @@ const { hasMeaningfulContent, sanitizeBlocks: sanitizeSafeBlocks, sanitizeHtml, 
 const { createForumRouter } = require('./forum');
 const { createAdminRouter } = require('./admin');
 const { createWikiRouter } = require('./wiki');
+const { createWikiSectionsRouter } = require('./wiki-sections');
 const { createProposalRouter } = require('./proposals');
 const { createSourceRouter } = require('./sources');
 const { createLegacyImportRouter } = require('./legacy-import');
@@ -78,6 +79,7 @@ function createApp(options) {
     /^\/wiki(?:\/[a-z0-9][a-z0-9_-]{0,119})?$/i,
     /^\/personagens\/[0-9a-f-]{36}$/i,
     /^\/wiki\/editor\/[0-9a-f-]{36}$/i,
+    /^\/wiki\/rascunhos\/[0-9a-f-]{36}$/i,
     /^\/wiki\/propostas\/[0-9a-f-]{36}$/i,
     /^\/cenas$/i,
     /^\/cenas\/[0-9a-f-]{36}$/i,
@@ -1047,6 +1049,7 @@ function createApp(options) {
   app.use('/api/admin', createLegacyImportRouter({ sql, auth }));
   app.use('/api/admin/wiki-transfers', createWikiTransfersRouter({ sql, auth }));
   app.use('/api/admin', createAdminRouter({ sql, auth }));
+  app.use('/api', createWikiSectionsRouter({ sql }));
   app.use('/api', createWikiRouter({ sql, auth }));
   app.use('/api', createProposalRouter({ sql, auth }));
   app.use('/api', createSourceRouter({ sql, auth }));

@@ -88,6 +88,30 @@ function makeBundle() {
   return bundle;
 }
 
+test('WIKI-TRANSFER rejects blank locators with a valid digest while retaining nonblank transfer text', () => {
+  for (const locator of [' ', '\t\n', ' section 1 ']) {
+    const bundle = makeBundle();
+    bundle.pages[0].citations[0].locator = locator;
+    bundle.manifest.bundleSha256 = digest({
+      format: bundle.format,
+      manifest: {
+        version: bundle.manifest.version,
+        createdAt: bundle.manifest.createdAt,
+        pageCount: bundle.manifest.pageCount,
+        sourceCount: bundle.manifest.sourceCount,
+      },
+      origin: bundle.origin,
+      pages: bundle.pages,
+      sources: bundle.sources,
+    });
+    if (locator.trim()) {
+      assert.equal(validateBundle(bundle).bundle.pages[0].citations[0].locator, locator);
+    } else {
+      assert.throws(() => validateBundle(bundle), (error) => error.publicCode === 'INVALID_WIKI_BUNDLE');
+    }
+  }
+});
+
 test('WIKI-TRANSFER bundle validation checks its content hash and source-file hash', () => {
   const bundle = makeBundle();
   const validated = validateBundle(bundle);

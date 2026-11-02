@@ -247,6 +247,25 @@ const TRANSFER_CONSTRAINTS = [
   'wiki_transfer_source_mappings.wiki_transfer_source_mappings_identity_key:p',
   'wiki_transfer_source_mappings.wiki_transfer_source_mappings_target_source_fkey:f',
 ].sort();
+const SECTION_COLUMNS = {
+  ...TRANSFER_COLUMNS,
+  wiki_sections: ['key', 'name', 'description', 'parent_key', 'sort_order'],
+};
+const SECTION_TYPES = {
+  key: 'text',
+  name: 'text',
+  description: 'text',
+  parent_key: 'text',
+  sort_order: 'integer',
+};
+const SECTION_CONSTRAINTS = [
+  ...TRANSFER_CONSTRAINTS,
+  'wiki_sections.wiki_sections_key_check:c',
+  'wiki_sections.wiki_sections_parent_check:c',
+  'wiki_sections.wiki_sections_parent_key_fkey:f',
+  'wiki_sections.wiki_sections_pkey:p',
+  'wiki_sections.wiki_sections_sort_order_check:c',
+].sort();
 
 function readDotEnv(file) {
   if (!fs.existsSync(file)) return {};
@@ -383,6 +402,22 @@ function classifySchema(report, history) {
     return { state: 'verified-0014-wiki-portable-transfers', supported: true };
   }
 
+  const exactSectionColumns = sameList(appTables, Object.keys(SECTION_COLUMNS).sort())
+    && Object.keys(SECTION_COLUMNS).every((table) => sameList(report.columns[table] || [], SECTION_COLUMNS[table]));
+  const exactSectionTypes = Object.entries(SECTION_TYPES).every(([column, type]) => (
+    report.columnTypes?.wiki_sections?.[column] === type
+  ));
+  const exactSectionConstraints = sameList(report.constraints, SECTION_CONSTRAINTS);
+  const hasSectionIndex = (report.indexes || []).some((index) => (
+    index.table === 'wiki_sections' && index.name === 'wiki_sections_parent_order_idx'
+      && /CREATE INDEX/i.test(index.definition)
+  ));
+  if (knownLedger && ledger.length === 16 && exactSectionColumns && exactSectionTypes && exactSectionConstraints
+      && hasCaseInsensitiveUsernameIndex && forumTimestampsUseTimezone && hasSceneIndexes
+      && hasWikiNameIndex && hasWikiRevisionImmutability && hasSectionIndex) {
+    return { state: 'verified-0015-wiki-sections', supported: true };
+  }
+
   return {
     state: 'unsupported-or-divergent',
     supported: false,
@@ -406,8 +441,14 @@ function classifySchema(report, history) {
       exactWikiConstraints,
       exactImportColumns,
       exactImportConstraints,
+      exactTransferColumns,
+      exactTransferConstraints,
+      exactSectionColumns,
+      exactSectionTypes,
+      exactSectionConstraints,
       hasWikiNameIndex,
       hasWikiRevisionImmutability,
+      hasSectionIndex,
     },
   };
 }
@@ -557,7 +598,7 @@ async function preflight(targetName) {
 
 async function migrate(targetName) {
   const { report, target } = await preflight(targetName);
-  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers'].includes(report.classification.state)) {
+  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections'].includes(report.classification.state)) {
     throw new Error('Automatic migration is supported only from an empty database or an exact reviewed schema state.');
   }
   if (report.pendingMigrations.length === 0) {
@@ -686,6 +727,9 @@ module.exports = {
   IMPORT_CONSTRAINTS,
   TRANSFER_COLUMNS,
   TRANSFER_CONSTRAINTS,
+  SECTION_COLUMNS,
+  SECTION_TYPES,
+  SECTION_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,

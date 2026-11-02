@@ -1,0 +1,24 @@
+{
+  "format": "AetherverseWikiAuthoringV1",
+  "workspace": "synthetic-authoring-demo",
+  "sources": [{ "key": "example-source", "set": "example", "path": "example/source.md" }],
+  "pages": [{
+    "key": "example-article",
+    "title": "Artigo de demonstração",
+    "slug": "artigo-de-demonstracao",
+    "aliases": [],
+    "type": "concept",
+    "summary": "Exemplo sintético para verificar o fluxo de arquivos; não é lore.",
+    "categories": ["Demonstração"],
+    "audience": "reader",
+    "infobox": [{ "label": "Natureza", "value": "Material sintético" }],
+    "sections": [{
+      "key": "overview",
+      "heading": "Visão geral",
+      "html": "<p>Este artigo demonstra o fluxo de arquivos com material sintético.</p>",
+      "authority": [],
+      "knowledgeLayer": "unspecified",
+      "citations": [{ "source": "example-source", "locator": "lines 1-3" }]
+    }]
+  }]
+}

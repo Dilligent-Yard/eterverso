@@ -21,6 +21,9 @@ const {
   IMPORT_CONSTRAINTS,
   TRANSFER_COLUMNS,
   TRANSFER_CONSTRAINTS,
+  SECTION_COLUMNS,
+  SECTION_TYPES,
+  SECTION_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,
@@ -28,7 +31,7 @@ const {
 } = require('../../scripts/db-migrate');
 
 function fixture() {
-  const history = Array.from({ length: 15 }, (_entry, index) => ({ id: index + 1, hash: `hash-${index + 1}` }));
+  const history = Array.from({ length: 16 }, (_entry, index) => ({ id: index + 1, hash: `hash-${index + 1}` }));
   return {
     history,
     report: {
@@ -126,10 +129,30 @@ test('MIG-03 recognizes only empty and exact supported migration/schema states',
   transfers.publicTables = Object.keys(TRANSFER_COLUMNS).sort();
   transfers.columns = Object.fromEntries(Object.entries(TRANSFER_COLUMNS).map(([name, columns]) => [name, [...columns]]));
   transfers.constraints = [...TRANSFER_CONSTRAINTS];
-  transfers.ledger = history.map((entry) => ({ ...entry }));
+  transfers.ledger = history.slice(0, 15).map((entry) => ({ ...entry }));
   assert.deepEqual(classifySchema(transfers, history), { state: 'verified-0014-wiki-portable-transfers', supported: true });
   transfers.constraints.pop();
   assert.equal(classifySchema(transfers, history).supported, false, 'transfer schema requires its full constraint set');
+
+  const sections = structuredClone(transfers);
+  sections.publicTables = Object.keys(SECTION_COLUMNS).sort();
+  sections.columns = Object.fromEntries(Object.entries(SECTION_COLUMNS).map(([name, columns]) => [name, [...columns]]));
+  sections.columnTypes.wiki_sections = { ...SECTION_TYPES };
+  sections.constraints = [...SECTION_CONSTRAINTS];
+  sections.ledger = history.map((entry) => ({ ...entry }));
+  sections.indexes = [...scene.indexes, ...wiki.indexes.slice(scene.indexes.length), {
+    table: 'wiki_sections', name: 'wiki_sections_parent_order_idx',
+    definition: 'CREATE INDEX wiki_sections_parent_order_idx ON public.wiki_sections USING btree (parent_key, sort_order, key)',
+  }];
+  assert.deepEqual(classifySchema(sections, history), { state: 'verified-0015-wiki-sections', supported: true });
+  sections.indexes = sections.indexes.filter((index) => index.name !== 'wiki_sections_parent_order_idx');
+  assert.equal(classifySchema(sections, history).supported, false, 'section schema requires its parent-order index');
+  sections.indexes.push({
+    table: 'wiki_sections', name: 'wiki_sections_parent_order_idx',
+    definition: 'CREATE INDEX wiki_sections_parent_order_idx ON public.wiki_sections USING btree (parent_key, sort_order, key)',
+  });
+  sections.columnTypes.wiki_sections.sort_order = 'smallint';
+  assert.equal(classifySchema(sections, history).supported, false, 'section schema requires its exact column types');
 
   const inconsistentLedger = structuredClone(report);
   inconsistentLedger.ledger = history.slice(0, 8).map((entry) => ({ ...entry }));

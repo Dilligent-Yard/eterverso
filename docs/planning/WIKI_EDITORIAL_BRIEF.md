@@ -4,6 +4,12 @@ Prepared 21 October 2026 for a new Codex chat in this project. This is the
 brief for the next editorial planning task; `EXECUTION_STATE.md` remains the
 technical execution checkpoint. No previous chat transcript is required.
 
+Arthur's preferred workflow as of 24 October is to plan and author in ChatGPT
+Work using `WORK_WIKI_BRIEF.md` and `WORK_WIKI_START_PROMPT.md`, then bring the
+agreed authoring JSON back here. This earlier brief remains a local Codex
+planning alternative; use `docs/wiki-authoring/` for the current file contract
+and receipt protocol.
+
 ## Objective and scope
 
 Plan how to turn the Aetherverse documentation into a substantial, coherent

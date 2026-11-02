@@ -292,3 +292,58 @@ test('staff editor applies recovered sections only when every preview succeeds',
   assert.equal(context.wikiEditorDraftRestoreCompleteKey, null);
   assert.equal(context.readWikiDraft('editor', PAGE_ID).snapshot.body.sections[0].html, rawOne);
 });
+
+test('editorial list discards late responses after account changes and staff demotion', async () => {
+  let resolve;
+  const context = makeFrontend({ apiRequest: () => new Promise(done => { resolve = done; }) });
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+  context.loadWikiStaff(null);
+  context.applyServerSession({ id: USER_B, role: 'member' });
+  resolve({ data: [{ id: PAGE_ID, head: { snapshot: article() } }], page: { hasMore: false } });
+  await new Promise(done => setImmediate(done));
+  assert.equal(context.wikiStaffState.items, null);
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'moderador' };
+  context.wikiStaffState.article = { id: PAGE_ID, head: { snapshot: article() } };
+  context.applyServerSession({ id: USER_A, role: 'member' });
+  assert.equal(context.wikiStaffState.article, null);
+  assert.match(context.renderWikiStaffArticle(), /restrita à staff/);
+});
+
+
+test('history navigation invalidates cached staff heads instead of displaying pre-save data', () => {
+  const context = makeFrontend();
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+  context.wikiStaffState.article = { id: PAGE_ID, head: { snapshot: article() } };
+  context.window.location.pathname = '/wiki/rascunhos/' + PAGE_ID;
+  context.updateTopBar = () => {};
+  context.render = () => {};
+  context.__listeners.popstate();
+  assert.equal(context.currentPage, 'wikiStaffArticle');
+  assert.equal(context.wikiStaffState.article, null);
+});
+
+
+test('delayed public publication invalidates the reader before rendering and ignores another account', async () => {
+  for (const switchAccount of [false, true]) {
+    let resolve;
+    const context = makeFrontend({ apiRequest: () => new Promise(done => { resolve = done; }) });
+    context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+    context.wikiEditorPage = { id: PAGE_ID, headRevisionId: REVISION_ID, workVersion: 2, publishedRevisionId: null };
+    context.currentWikiArticle = article();
+    context.window.confirm = () => true;
+    context.beginResourceFormSubmission = () => () => {};
+    context.loadWikiEditorHistory = () => {};
+    context.showAlert = () => {};
+    const rendered = [];
+    context.render = () => rendered.push(context.currentWikiArticle);
+    context.publishWikiArticle();
+    if (switchAccount) context.applyServerSession({ id: USER_B, role: 'member' });
+    context.currentPage = 'wikiArticle';
+    resolve({ data: { id: PAGE_ID } });
+    await new Promise(done => setImmediate(done));
+    if (switchAccount) {
+      assert.equal(context.wikiEditorPage, null);
+      assert.equal(rendered.length, 0);
+    } else assert.deepEqual(rendered, [null]);
+  }
+});

@@ -176,6 +176,29 @@ npm run wiki:sources:import -- \
 Imported sources are private research material. They do not create or publish
 wiki articles; real lore publication still requires an editorial review.
 
+### Reading and publishing wiki drafts
+
+The public Wiki landing page groups its sections into forum-style areas and
+subsections, including empty ones. Migration `0015_wiki_sections` stores the
+initial four areas and twelve subsections independently of article revisions.
+`GET /api/wiki/sections` returns the structural labels and distinct public
+article counts; drafts, restricted publications and archived pages are excluded.
+Clicking an area includes its descendants; `/wiki?categoria=KEY` restores the
+selection on reload. Other published category names remain discoverable below
+the main structure. No placeholder articles are created for empty sections.
+
+Staff can open **Rascunhos da equipe** from Wiki, or visit `/wiki/equipe`.
+The shared draft reader `/wiki/rascunhos/:id` shows the current work revision
+with a clickable section/subheading index and a link to the editor. Members
+and visitors cannot read these endpoints. Existing historical staff-only
+publication records appear as drafts in this view; their history is retained.
+
+Saving a draft stays separate from publication. **Publicar para todos** asks
+for explicit confirmation. When a restricted draft becomes public, the server
+creates a new public revision carrying its citations and publishes it atomically;
+it does not rewrite the historical private snapshot. New staff-only publication
+requests are refused. Public listings continue to use only public publications.
+
 ### Portable wiki transfers
 
 Administrators can export selected wiki pages from the Admin area as an
@@ -201,6 +224,33 @@ its bundle are available only through admin-authenticated transfer routes.
 Treat downloaded bundles and database backups as private source material. No
 transfer to Render has been performed as part of local development.
 
+### Wiki articles authored in ChatGPT Work
+
+Work can plan and write pt-BR articles from the sources available in its task,
+then return `AetherverseWikiAuthoringV1` files. The format uses stable human
+keys and exact source paths; Work does not invent UUIDs, hashes or local
+account information. The offline command `npm run wiki:authoring:compile`
+verifies staged source files and produces the existing portable transfer
+bundle. It does not load `.env`, send requests, write to a database or publish.
+
+Return new articles and edits to existing articles in separate JSON batches.
+New pages use the admin transfer preview/commit. For edits, the offline
+`npm run wiki:authoring:revision-plan` command resolves explicitly selected
+local targets and exact source metadata into version-checked staff revision
+requests, including citations. It prepares those requests without sending them.
+Staff revision saves preserve retained-section citations when no replacement
+is supplied; an explicit citation array replaces that revision's references.
+
+See [`docs/wiki-authoring/README.md`](docs/wiki-authoring/README.md) for exact
+commands, source-set mapping, the JSON contract/schema, and the complete
+receipt/revision protocol. Start Work with the self-contained
+[`brief`](docs/planning/WORK_WIKI_BRIEF.md) and
+[`prompt`](docs/planning/WORK_WIKI_START_PROMPT.md). Keep returned files,
+sources, plans and compiled bundles under ignored `.local/`. Technical
+validation does not replace source checking, editorial approval or review of
+the local rendered articles. The eventual PR/changelog process is recorded in
+[`PULL_REQUEST_HANDOFF.md`](docs/planning/PULL_REQUEST_HANDOFF.md).
+
 ## Code map
 
 | Path | Responsibility |
@@ -212,6 +262,7 @@ transfer to Render has been performed as part of local development.
 | `server/forum.js`, `server/admin.js` | Shared forum and administrator routes |
 | `server/wiki.js`, `server/proposals.js`, `server/sources.js` | Reference wiki, member proposals, and restricted source routes |
 | `server/wiki-transfers.js` | Admin-only, versioned wiki bundle export, preview, refresh, and commit |
+| `scripts/wiki-authoring-compile.js`, `scripts/wiki-authoring-revision-plan.js` | Offline conversion of Work authoring JSON and preparation of citation-aware staff revision requests |
 | `server/legacy-import.js`, `server/scene-turn-normalizer.js` | Controlled legacy content import and scene-turn migration logic |
 | `db/schema.ts`, `db/relations.ts`, `drizzle/` | Drizzle schema definitions and versioned PostgreSQL migrations |
 | `scripts/`, `tests/`, `compose.test.yaml` | Migration preflight, bootstrap and recovery tools, source staging, test runners, and isolated test database |

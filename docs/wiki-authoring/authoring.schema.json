@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AetherverseWikiAuthoringV1",
+  "description": "Offline authoring input. Compiler additionally verifies sources, sanitization, names, citations and bundle size; this schema grants no import or publication authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "workspace",
+    "sources",
+    "pages"
+  ],
+  "properties": {
+    "format": {
+      "const": "AetherverseWikiAuthoringV1"
+    },
+    "workspace": {
+      "$ref": "#/$defs/key"
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/page"
+      }
+    }
+  },
+  "$defs": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,79}$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "set",
+        "path"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "set": {
+          "$ref": "#/$defs/key"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "locator"
+      ],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/key"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      }
+    },
+    "infoboxEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "value"
+      ],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "value": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300
+        }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "heading",
+        "html",
+        "authority",
+        "knowledgeLayer",
+        "citations"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "heading": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "html": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 500000
+        },
+        "authority": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 4,
+          "items": {
+            "enum": [
+              "C",
+              "S",
+              "E",
+              "O"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "knowledgeLayer": {
+          "enum": [
+            "unspecified",
+            "mundane",
+            "paranormal",
+            "authorial",
+            "mixed"
+          ]
+        },
+        "citations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/citation"
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "title",
+        "slug",
+        "aliases",
+        "type",
+        "summary",
+        "categories",
+        "audience",
+        "infobox",
+        "sections"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "aliases": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 30,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "uniqueItems": true
+        },
+        "type": {
+          "enum": [
+            "concept",
+            "organization",
+            "place",
+            "entity",
+            "technique",
+            "artifact",
+            "event",
+            "character-reference"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 30,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "uniqueItems": true
+        },
+        "audience": {
+          "enum": [
+            "unspecified",
+            "reader",
+            "player",
+            "author"
+          ]
+        },
+        "infobox": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 30,
+          "items": {
+            "$ref": "#/$defs/infoboxEntry"
+          }
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/section"
+          }
+        }
+      }
+    }
+  }
+}

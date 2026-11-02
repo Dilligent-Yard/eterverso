@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0014_wiki_portable_transfers';
+const REQUIRED_MIGRATION = '0015_wiki_sections';
 const PASSWORD = 'Synthetic-html-safety-browser-password-42';
 const TURN_PRESENTATION_PAYLOAD = `');window.__htmlSafetyRuns.push("turn-presentation");//`;
 let sql;
@@ -40,7 +40,7 @@ test.beforeAll(async () => {
   const current = await sql`SELECT current_database() AS database, current_user AS username`;
   assert.equal(current[0].database, 'eterverso_test');
   assert.equal(current[0].username, 'eterverso_test');
-  await assertSchema0014();
+  await assertRequiredSchema();
 
   server = http.createServer();
   server.listen(0, '127.0.0.1');
@@ -153,7 +153,7 @@ test('HTML-01/02 hostile legacy content stays inert across rendered pages, block
   }
 });
 
-async function assertSchema0014() {
+async function assertRequiredSchema() {
   const journal = JSON.parse(fs.readFileSync(path.join(ROOT, 'drizzle/meta/_journal.json'), 'utf8')).entries;
   const required = journal.findIndex((entry) => entry.tag === REQUIRED_MIGRATION);
   assert.ok(required >= 0, 'The reviewed portable wiki transfer migration must be registered.');

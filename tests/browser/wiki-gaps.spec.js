@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0014_wiki_portable_transfers';
+const REQUIRED_MIGRATION = '0015_wiki_sections';
 const PASSWORD = 'Synthetic-wiki-gaps-browser-password-42';
 let sql;
 let server;
@@ -39,7 +39,7 @@ test.beforeAll(async () => {
   const current = await sql`SELECT current_database() AS database, current_user AS username`;
   assert.equal(current[0].database, 'eterverso_test');
   assert.equal(current[0].username, 'eterverso_test');
-  await assertSchema0014();
+  await assertRequiredSchema();
 
   server = http.createServer();
   server.listen(0, '127.0.0.1');
@@ -76,9 +76,9 @@ test('WIKI-M5/M6 public category, backlinks, revision comparison, and discussion
     const errors = observePageErrors(reader, staff);
 
     await reader.goto(`${origin}/wiki`);
-    await expect(reader.locator('#wiki-category-select')).toHaveValue('all');
-    await expect(reader.locator(`#wiki-category-select option[value="${fixture.categoryKey}"]`)).toHaveCount(1);
-    await reader.locator('#wiki-category-select').selectOption(fixture.categoryKey);
+    await expect(reader.locator('#wiki-category-select')).toHaveCount(0);
+    const sections = reader.getByRole('navigation', { name: 'Seções da Wiki' });
+    await sections.locator('a[href="/wiki?categoria=' + fixture.categoryKey + '"]').click();
     await expect(reader.locator('#main .char-card')).toHaveCount(1);
     await expect(reader.locator('#main .char-card')).toContainText(fixture.targetTitle);
     await expect(reader.locator('#main .char-card')).not.toContainText(fixture.sourceTitle);
@@ -195,7 +195,7 @@ test('WIKI-M5/M6 public category, backlinks, revision comparison, and discussion
   }
 });
 
-async function assertSchema0014() {
+async function assertRequiredSchema() {
   const journal = JSON.parse(fs.readFileSync(path.join(ROOT, 'drizzle/meta/_journal.json'), 'utf8')).entries;
   const required = journal.findIndex((entry) => entry.tag === REQUIRED_MIGRATION);
   assert.ok(required >= 0, 'The reviewed portable wiki transfer migration must be registered.');

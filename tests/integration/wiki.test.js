@@ -3,8 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
+const { createHash, randomUUID } = require('node:crypto');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
 const express = require('express');
 const cookieSession = require('cookie-session');
 const postgres = require('postgres');
@@ -185,7 +185,8 @@ test('WIK-02 staff-only and unpublished sentinels stay out of public resolution,
     accessLevel: 'staff',
     html: `<p>WIK02-Staff-body-${suffix}</p><a href="/wiki/${target.head.snapshot.slug}">Public target</a>`,
   });
-  const privatePage = await createPublishedPage(fixture, staff, staffOnly);
+  const privatePage = await createDraftPage(fixture, staff, staffOnly);
+  await createHistoricalStaffPublication(privatePage, staffOnly);
 
   const unpublished = snapshot({
     title: `WIK02-Unpublished-title-${suffix}`,
@@ -319,6 +320,190 @@ test('WIK-03 normalized aliases and retained rename redirects resolve; name coll
   assert.equal((await request(null, `/wiki/resolve/${racingAlias}`)).body.data.id, winnerId);
 });
 
+test('WIK-06 staff drafts require explicit public publication and create a cited public revision atomically', async (t) => {
+  const fixture = await makeFixture(t);
+  const moderator = await sessionFor(fixture.users.moderador.id);
+  const admin = await sessionFor(fixture.users.admin.id);
+  const member = await sessionFor(fixture.users.member.id);
+  const suffix = token();
+  for (const reservedSlug of ['equipe', 'rascunhos']) {
+    const rejectedSlug = await request(moderator, '/staff/wiki/pages', {
+      method: 'POST',
+      key: randomUUID(),
+      body: {
+        snapshot: snapshot({ title: `WIK06-Reserved-${suffix}`, slug: reservedSlug }),
+        summary: 'Synthetic reserved route slug',
+      },
+    });
+    assert.equal(rejectedSlug.status, 400);
+    assert.equal(rejectedSlug.body.code, 'INVALID_WIKI_SNAPSHOT');
+  }
+  const target = await createPublishedPage(fixture, moderator, snapshot({
+    title: `WIK06-Public-target-${suffix}`,
+    slug: `wik06-target-${suffix}`,
+  }));
+
+  const publicEdit = await saveRevision(fixture, moderator, target, snapshot({
+    ...target.head.snapshot,
+    title: `WIK06-Public-revision-${suffix}`,
+  }), target.workVersion);
+  const publicRevisionCountBeforePublish = await revisionCount(target.id);
+  const publicRepublished = await publishRevision(
+    fixture, moderator, publicEdit, publicEdit.headRevisionId, publicEdit.workVersion, target.publishedRevisionId,
+  );
+  assert.equal(publicRepublished.publishedRevisionId, publicEdit.headRevisionId);
+  assert.equal(publicRepublished.workVersion, publicEdit.workVersion + 1);
+  assert.equal(publicRepublished.publicVersion, target.publicVersion + 1);
+  assert.equal(await revisionCount(target.id), publicRevisionCountBeforePublish);
+
+  const sourceContent = `WIK06-Private-source-${suffix}`;
+  const source = await makeWikiSource(fixture, fixture.users.moderador.id, sourceContent);
+  const targetSectionId = target.head.snapshot.body.sections[0].id;
+  const staffSnapshot = snapshot({
+    title: `WIK06-Staff-draft-${suffix}`,
+    slug: `wik06-staff-${suffix}`,
+    aliases: [`wik06-private-alias-${suffix}`],
+    categories: [`WIK06 Staff Category ${suffix}`],
+    accessLevel: 'staff',
+    html: `<p>WIK06 staff text.</p><a href="/wiki/${target.head.snapshot.slug}#${targetSectionId}">Public target</a>`,
+  });
+  const sectionId = staffSnapshot.body.sections[0].id;
+  const citations = [
+    { sectionId, sourceId: source.id, locator: 'synthetic line 1' },
+    { sectionId, sourceId: source.id, locator: 'synthetic line 2' },
+  ];
+  const draft = await createDraftPage(fixture, moderator, staffSnapshot, citations);
+  const initialRevisionCount = await revisionCount(draft.id);
+
+  const sharedDraft = await request(admin, `/staff/wiki/pages/${draft.id}`);
+  assert.equal(sharedDraft.status, 200, JSON.stringify(sharedDraft.body));
+  assert.equal(sharedDraft.body.data.headRevisionId, draft.headRevisionId);
+  assert.deepEqual(sharedDraft.body.data.head.citations, citations);
+
+  const publishBody = {
+    revisionId: draft.headRevisionId,
+    expectedVersion: draft.workVersion,
+    expectedPublishedRevisionId: null,
+    summary: 'Synthetic public release',
+  };
+  const memberDenied = await request(member, `/staff/wiki/pages/${draft.id}/publish`, {
+    method: 'POST', body: { ...publishBody, makePublic: true },
+  });
+  assert.equal(memberDenied.status, 403);
+
+  const implicitPublish = await request(admin, `/staff/wiki/pages/${draft.id}/publish`, {
+    method: 'POST', body: publishBody,
+  });
+  assert.equal(implicitPublish.status, 409);
+  assert.equal(implicitPublish.body.code, 'DRAFT_NOT_PUBLIC');
+  const rejectedState = await request(admin, `/staff/wiki/pages/${draft.id}`);
+  assert.equal(rejectedState.body.data.headRevisionId, draft.headRevisionId);
+  assert.equal(rejectedState.body.data.publishedRevisionId, null);
+  assert.equal(rejectedState.body.data.workVersion, draft.workVersion);
+  assert.equal(await revisionCount(draft.id), initialRevisionCount);
+  assert.equal((await request(null, `/wiki/pages/${draft.id}`)).status, 404);
+
+  const staffEditSnapshot = snapshot({
+    ...staffSnapshot,
+    title: `WIK06-Staff-revision-${suffix}`,
+    slug: `wik06-staff-revision-${suffix}`,
+  });
+  const savedStaff = await saveRevision(fixture, moderator, draft, staffEditSnapshot, draft.workVersion);
+  assert.deepEqual(savedStaff.head.citations, citations);
+  const countBeforeStalePublish = await revisionCount(draft.id);
+  const stalePublish = await request(admin, `/staff/wiki/pages/${draft.id}/publish`, {
+    method: 'POST',
+    body: {
+      ...publishBody,
+      revisionId: savedStaff.headRevisionId,
+      makePublic: true,
+    },
+  });
+  assert.equal(stalePublish.status, 409);
+  assert.equal(stalePublish.body.code, 'STALE_VERSION');
+  assert.equal(await revisionCount(draft.id), countBeforeStalePublish);
+
+  const publicSummary = 'Synthetic explicit public conversion';
+  const published = await publishRevision(
+    fixture, admin, savedStaff, savedStaff.headRevisionId, savedStaff.workVersion, null,
+    { makePublic: true, summary: publicSummary },
+  );
+  assert.notEqual(published.headRevisionId, savedStaff.headRevisionId);
+  assert.equal(published.publishedRevisionId, published.headRevisionId);
+  assert.equal(published.workVersion, savedStaff.workVersion + 1);
+  assert.equal(published.publicVersion, savedStaff.publicVersion + 1);
+  assert.equal(published.head.sequence, savedStaff.head.sequence + 1);
+  assert.deepEqual(published.head.snapshot, { ...savedStaff.head.snapshot, accessLevel: 'public' });
+  assert.deepEqual(published.head.citations, citations);
+  assert.equal(await revisionCount(draft.id), countBeforeStalePublish + 1);
+  const publishAudit = await sql`
+    SELECT reason, after_state FROM audit_events
+    WHERE target_id = ${draft.id} AND action = 'wiki.page.publish'
+    ORDER BY created_at DESC LIMIT 1`;
+  assert.equal(publishAudit.length, 1);
+  assert.equal(publishAudit[0].reason, publicSummary);
+  assert.equal(publishAudit[0].after_state.publishedRevisionId, published.publishedRevisionId);
+  assert.equal(publishAudit[0].after_state.accessLevel, 'public');
+  assert.equal(publishAudit[0].after_state.publicVersion, published.publicVersion);
+
+  const oldRevision = await sql`SELECT snapshot FROM wiki_revisions WHERE id = ${savedStaff.headRevisionId}`;
+  assert.equal(oldRevision.length, 1);
+  assert.deepEqual(oldRevision[0].snapshot, savedStaff.head.snapshot);
+  assert.equal(oldRevision[0].snapshot.accessLevel, 'staff');
+  assert.deepEqual(await readCitationRows(published.headRevisionId), await readCitationRows(savedStaff.headRevisionId));
+  assert.deepEqual(
+    await categoryRows(published.headRevisionId),
+    await categoryRows(savedStaff.headRevisionId),
+  );
+  assert.deepEqual(
+    await linkRows(published.headRevisionId),
+    [{ target_name_key: target.head.snapshot.slug, target_anchor: targetSectionId }],
+  );
+
+  const publicRead = await request(null, `/wiki/pages/${draft.id}`);
+  assert.equal(publicRead.status, 200, JSON.stringify(publicRead.body));
+  assert.equal(publicRead.body.data.title, staffEditSnapshot.title);
+  assert.equal(publicRead.body.data.accessLevel, 'public');
+  assertAbsent(publicRead.body, [sourceContent, source.id, 'synthetic line 1', 'synthetic line 2']);
+
+  const collisionSnapshot = snapshot({
+    title: `WIK06-Collision-draft-${suffix}`,
+    slug: `wik06-collision-${suffix}`,
+    aliases: [target.head.snapshot.slug],
+    categories: [`WIK06 Collision Category ${suffix}`],
+    accessLevel: 'staff',
+    html: `<p>WIK06 collision draft.</p><a href="/wiki/${target.head.snapshot.slug}#${targetSectionId}">Public target</a>`,
+  });
+  const collisionSectionId = collisionSnapshot.body.sections[0].id;
+  const collisionDraft = await createDraftPage(fixture, moderator, collisionSnapshot, [
+    { sectionId: collisionSectionId, sourceId: source.id, locator: 'synthetic collision source' },
+  ]);
+  const collisionRevisionCount = await revisionCount(collisionDraft.id);
+  const collision = await request(admin, `/staff/wiki/pages/${collisionDraft.id}/publish`, {
+    method: 'POST',
+    body: {
+      revisionId: collisionDraft.headRevisionId,
+      expectedVersion: collisionDraft.workVersion,
+      expectedPublishedRevisionId: null,
+      summary: 'Synthetic public name collision',
+      makePublic: true,
+    },
+  });
+  assert.equal(collision.status, 409);
+  assert.equal(collision.body.code, 'WIKI_NAME_CONFLICT');
+  assert.doesNotMatch(JSON.stringify(collision.body), new RegExp(target.head.snapshot.title));
+  const unchangedCollision = await request(admin, `/staff/wiki/pages/${collisionDraft.id}`);
+  assert.equal(unchangedCollision.body.data.headRevisionId, collisionDraft.headRevisionId);
+  assert.equal(unchangedCollision.body.data.publishedRevisionId, null);
+  assert.equal(unchangedCollision.body.data.workVersion, collisionDraft.workVersion);
+  assert.equal(unchangedCollision.body.data.publicVersion, collisionDraft.publicVersion);
+  assert.equal(await revisionCount(collisionDraft.id), collisionRevisionCount);
+  assert.equal((await categoryRows(collisionDraft.headRevisionId)).length, 1);
+  assert.equal((await linkRows(collisionDraft.headRevisionId)).length, 1);
+  assert.equal((await readCitationRows(collisionDraft.headRevisionId)).length, 1);
+  assert.equal((await sql`SELECT 1 FROM wiki_names WHERE name_key = ${collisionSnapshot.slug}`).length, 0);
+});
+
 test('WIK-04 stale writes conflict, revisions stay immutable, and restore creates a private draft', async (t) => {
   const fixture = await makeFixture(t);
   const staff = await sessionFor(fixture.users.moderador.id);
@@ -428,12 +613,14 @@ test('WIK-05 backlinks and search follow visible published revisions and conceal
   });
   await saveRevision(fixture, staff, draftOnlySource, draftOnlyHead, draftOnlySource.workVersion);
 
-  const staffSource = await createPublishedPage(fixture, staff, snapshot({
+  const staffSourceSnapshot = snapshot({
     title: `WIK05-Staff-source-${suffix}`,
     slug: `wik05-staff-source-${suffix}`,
     accessLevel: 'staff',
     html: `<p>Private published source.</p><a href="/wiki/${target.head.snapshot.slug}">Public target</a>`,
-  }));
+  });
+  const staffSource = await createDraftPage(fixture, staff, staffSourceSnapshot);
+  await createHistoricalStaffPublication(staffSource, staffSourceSnapshot);
   const unpublishedSource = await createDraftPage(fixture, staff, snapshot({
     title: `WIK05-Unpublished-source-${suffix}`,
     slug: `wik05-unpublished-source-${suffix}`,
@@ -464,7 +651,8 @@ test('WIK-05 backlinks and search follow visible published revisions and conceal
     accessLevel: 'staff',
     html: `<p>WIK05-Restricted-body-${suffix}</p>`,
   });
-  const privateTarget = await createPublishedPage(fixture, staff, privateTargetSnapshot);
+  const privateTarget = await createDraftPage(fixture, staff, privateTargetSnapshot);
+  await createHistoricalStaffPublication(privateTarget, privateTargetSnapshot);
   await createPublishedPage(fixture, staff, snapshot({
     title: `WIK05-Visible-link-to-private-${suffix}`,
     slug: `wik05-visible-private-link-${suffix}`,
@@ -541,7 +729,7 @@ test('M6 staff can link a public discussion while members and quarantined discus
 });
 
 async function makeFixture(t) {
-  const fixture = { users: {}, pageIds: [], forumThreadIds: [], forumCategoryIds: [] };
+  const fixture = { users: {}, pageIds: [], sourceIds: [], forumThreadIds: [], forumCategoryIds: [] };
   t.after(async () => cleanFixture(fixture));
   const suffix = token();
   for (const role of ['admin', 'moderador', 'member']) {
@@ -575,16 +763,49 @@ async function createForumThread(fixture, authorId, title, quarantined = false) 
   return threadId;
 }
 
-async function createDraftPage(fixture, session, value) {
+async function makeWikiSource(fixture, importedBy, content) {
+  const archiveSha256 = createHash('sha256').update(`archive-${randomUUID()}`).digest('hex');
+  const fileSha256 = createHash('sha256').update(content).digest('hex');
+  const rows = await sql`
+    INSERT INTO wiki_sources
+      (archive_sha256, relative_path, file_sha256, family, language, content, imported_by)
+    VALUES (${archiveSha256}, ${`synthetic/${randomUUID()}.txt`}, ${fileSha256},
+      'Synthetic citation fixture', 'en', ${content}, ${importedBy})
+    RETURNING id`;
+  const id = String(rows[0].id).toLowerCase();
+  fixture.sourceIds.push(id);
+  return { id };
+}
+
+async function createDraftPage(fixture, session, value, citations) {
+  const body = { snapshot: value, summary: 'Synthetic integration fixture draft' };
+  if (citations !== undefined) body.citations = citations;
   const response = await request(session, '/staff/wiki/pages', {
-    method: 'POST',
-    body: { snapshot: value, summary: 'Synthetic integration fixture draft' },
+    method: 'POST', body,
     key: randomUUID(),
   });
   assert.equal(response.status, 201, JSON.stringify(response.body));
   const page = response.body.data;
   fixture.pageIds.push(page.id);
   return page;
+}
+
+async function createHistoricalStaffPublication(page, value) {
+  await sql.begin(async (tx) => {
+    await tx`
+      UPDATE wiki_pages SET published_revision_id = head_revision_id, access_level = 'staff',
+        published_at = now(), public_version = 1
+      WHERE id = ${page.id}`;
+    const names = [
+      { name_key: value.slug, kind: 'canonical' },
+      ...value.aliases.map((name_key) => ({ name_key, kind: 'alias' })),
+    ];
+    if (names.length) {
+      await tx`
+        INSERT INTO wiki_names (name_key, page_id, kind)
+        VALUES ${tx(names.map((name) => [name.name_key, page.id, name.kind]))}`;
+    }
+  });
 }
 
 async function createPublishedPage(fixture, session, value) {
@@ -601,7 +822,7 @@ async function saveRevision(fixture, session, page, value, expectedVersion) {
   return response.body.data;
 }
 
-async function publishRevision(_fixture, session, page, revisionId, expectedVersion, expectedPublishedRevisionId) {
+async function publishRevision(_fixture, session, page, revisionId, expectedVersion, expectedPublishedRevisionId, options = {}) {
   const response = await request(session, `/staff/wiki/pages/${page.id}/publish`, {
     method: 'POST',
     body: {
@@ -609,6 +830,7 @@ async function publishRevision(_fixture, session, page, revisionId, expectedVers
       expectedVersion,
       expectedPublishedRevisionId,
       summary: 'Synthetic integration fixture publication',
+      ...options,
     },
   });
   assert.equal(response.status, 200, JSON.stringify(response.body));
@@ -660,6 +882,34 @@ function assertAbsent(value, sentinels) {
   for (const sentinel of sentinels) assert.ok(!text.includes(sentinel), `Unexpected public sentinel: ${sentinel}`);
 }
 
+async function revisionCount(pageId) {
+  return Number((await sql`SELECT count(*)::integer AS count FROM wiki_revisions WHERE page_id = ${pageId}`)[0].count);
+}
+
+async function readCitationRows(revisionId) {
+  const rows = await sql`
+    SELECT section_id, source_id, locator FROM wiki_revision_citations
+    WHERE revision_id = ${revisionId}
+    ORDER BY section_id ASC, source_id ASC, locator ASC`;
+  return rows.map((row) => ({
+    section_id: String(row.section_id).toLowerCase(),
+    source_id: String(row.source_id).toLowerCase(),
+    locator: row.locator,
+  }));
+}
+
+async function categoryRows(revisionId) {
+  return Array.from(await sql`
+    SELECT category, category_key FROM wiki_revision_categories
+    WHERE revision_id = ${revisionId} ORDER BY category_key`);
+}
+
+async function linkRows(revisionId) {
+  return Array.from(await sql`
+    SELECT target_name_key, target_anchor FROM wiki_revision_links
+    WHERE revision_id = ${revisionId} ORDER BY target_name_key, target_anchor`);
+}
+
 function createRequestBarrier(parties) {
   const key = randomUUID();
   requestBarriers.set(key, { parties, arrived: 0, waiters: [] });
@@ -684,6 +934,7 @@ async function cleanFixture(fixture) {
       await tx`DELETE FROM wiki_names WHERE page_id = ${pageId}`;
       await tx`DELETE FROM wiki_pages WHERE id = ${pageId}`;
     }
+    if (fixture.sourceIds.length) await tx`DELETE FROM wiki_sources WHERE id = ANY(${tx.array(fixture.sourceIds, 2950)})`;
     await tx`ALTER TABLE wiki_revisions ENABLE TRIGGER wiki_revisions_immutable`;
     if (fixture.forumThreadIds.length) {
       await tx`UPDATE wiki_pages SET discussion_thread_id = NULL WHERE discussion_thread_id = ANY(${fixture.forumThreadIds}::uuid[])`;
@@ -726,3 +977,20 @@ async function request(session, route, { method = 'GET', body, key, barrier, ifN
   });
   return { status: response.status, body: response.status === 304 ? null : await response.json(), etag: response.headers.get('etag') };
 }
+
+
+test('WIK-07 an existing legacy staff publication can become public without mutating its snapshot', async (t) => {
+  const fixture = await makeFixture(t);
+  const staff = await sessionFor(fixture.users.admin.id);
+  const value = snapshot({ title: 'Legacy staff ' + token(), slug: 'legacy-staff-' + token(), accessLevel: 'staff' });
+  const draft = await createDraftPage(fixture, staff, value);
+  await createHistoricalStaffPublication(draft, value);
+  const current = (await request(staff, `/staff/wiki/pages/${draft.id}`)).body.data;
+  assert.equal(current.publishedRevisionId, current.headRevisionId);
+  const result = await publishRevision(fixture, staff, current, current.headRevisionId, current.workVersion, current.publishedRevisionId, { makePublic: true });
+  assert.equal(result.accessLevel, 'public');
+  assert.notEqual(result.publishedRevisionId, current.publishedRevisionId);
+  const [old] = await sql`SELECT snapshot FROM wiki_revisions WHERE id = ${current.headRevisionId}`;
+  assert.equal(old.snapshot.accessLevel, 'staff');
+  assert.equal((await request(null, `/wiki/pages/${draft.id}`)).status, 200);
+});

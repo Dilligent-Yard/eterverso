@@ -106,6 +106,13 @@
       "when": 1792600000000,
       "tag": "0014_wiki_portable_transfers",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793644071000,
+      "tag": "0015_wiki_sections",
+      "breakpoints": true
     }
   ]
 }

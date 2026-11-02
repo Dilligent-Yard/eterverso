@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0014_wiki_portable_transfers';
+const REQUIRED_MIGRATION = '0015_wiki_sections';
 const PASSWORD = 'Synthetic-ui-drafts-browser-password-42';
 let sql;
 let server;
@@ -39,7 +39,7 @@ test.beforeAll(async () => {
   const current = await sql`SELECT current_database() AS database, current_user AS username`;
   assert.equal(current[0].database, 'eterverso_test');
   assert.equal(current[0].username, 'eterverso_test');
-  await assertSchema0014();
+  await assertRequiredSchema();
 
   server = http.createServer();
   server.listen(0, '127.0.0.1');
@@ -638,7 +638,8 @@ test('UI-02 failed wiki create, revision, publish, and member proposal flows pre
     await clearToasts(page);
     const publishResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
       && new URL(response.url()).pathname === publishPath);
-    await page.getByRole('button', { name: 'Publicar revisão atual', exact: true }).click();
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Publicar para todos', exact: true }).click();
     expect((await publishResponsePromise).status()).toBe(500);
     await expectFailureAndNoSuccess(page);
     expect(publishFailure.count).toBe(1);
@@ -686,7 +687,7 @@ test('UI-02 failed wiki create, revision, publish, and member proposal flows pre
   }
 });
 
-async function assertSchema0014() {
+async function assertRequiredSchema() {
   const journal = JSON.parse(fs.readFileSync(path.join(ROOT, 'drizzle/meta/_journal.json'), 'utf8')).entries;
   const required = journal.findIndex((entry) => entry.tag === REQUIRED_MIGRATION);
   assert.ok(required >= 0, 'The reviewed portable wiki transfer migration must be registered.');

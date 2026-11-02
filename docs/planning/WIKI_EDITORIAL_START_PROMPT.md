@@ -1,5 +1,9 @@
 # Opening prompt for the next chat
 
+For Arthur's preferred Work-based authoring workflow as of 24 October 2026,
+use `WORK_WIKI_START_PROMPT.md` instead. This prompt remains the alternative for
+planning directly in Codex.
+
 Open a new chat in the same Eterverso project and select Sol 6.1 / High in the
 model selector before sending the following prompt. Model names in a prompt
 do not select the runtime model.

@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0014_wiki_portable_transfers';
+const REQUIRED_MIGRATION = '0015_wiki_sections';
 const PASSWORD = 'Synthetic-wiki-browser-password-42';
 let sql;
 let server;
@@ -39,7 +39,7 @@ test.beforeAll(async () => {
   const current = await sql`SELECT current_database() AS database, current_user AS username`;
   assert.equal(current[0].database, 'eterverso_test');
   assert.equal(current[0].username, 'eterverso_test');
-  await assertSchema0014();
+  await assertRequiredSchema();
 
   server = http.createServer();
   server.listen(0, '127.0.0.1');
@@ -130,7 +130,8 @@ test('WIKI-UI member proposals stay private while staff drafts publish as a new 
 
     const publishResponsePromise = staff.waitForResponse((response) => response.request().method() === 'POST'
       && new URL(response.url()).pathname === `/api/staff/wiki/pages/${fixture.pageId}/publish`);
-    await staff.getByRole('button', { name: 'Publicar revisão atual', exact: true }).click();
+    staff.once('dialog', dialog => dialog.accept());
+    await staff.getByRole('button', { name: 'Publicar para todos', exact: true }).click();
     expect((await publishResponsePromise).status()).toBe(200);
     await member.reload();
     await expect(member.locator('.wiki-content-area')).toContainText(fixture.staffDraftText);
@@ -158,12 +159,12 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
     await reader.goto(`${origin}/wiki`);
     await expect(articleLink).toHaveCount(1);
     await expect(reader.locator('#wiki-page-search')).toBeVisible();
-    await expect(reader.locator('#wiki-category-select')).toBeVisible();
+    await expect(reader.getByRole('navigation', { name: 'Seções da Wiki' })).toBeVisible();
     await expect(reader.getByRole('button', { name: '+ Novo artigo', exact: true })).toHaveCount(0);
     await expect(reader.getByRole('button', { name: 'Propostas', exact: true })).toHaveCount(0);
     await assertMobilePage(reader, 'leitor anônimo na lista da wiki');
     await assertMobileControl(reader, reader.locator('#wiki-page-search'), 'busca da wiki');
-    await assertMobileControl(reader, reader.locator('#wiki-category-select'), 'filtro de categoria');
+    await assertMobileControl(reader, reader.getByRole('navigation', { name: 'Seções da Wiki' }).getByRole('link', { name: 'Percepção', exact: true }), 'seção da Wiki');
     await assertMobileControl(reader, articleLink, 'link do artigo');
 
     await reader.goto(articleUrl);
@@ -197,7 +198,7 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
     await staff.goto(`${origin}/wiki/editor/${fixture.pageId}`);
     await expect(staff.locator('#wiki-editor-title')).toHaveValue(fixture.title);
     const saveDraft = staff.getByRole('button', { name: 'Salvar rascunho', exact: true });
-    const publish = staff.getByRole('button', { name: 'Publicar revisão atual', exact: true });
+    const publish = staff.getByRole('button', { name: 'Publicar para todos', exact: true });
     await expect(saveDraft).toBeVisible();
     await expect(publish).toBeVisible();
     await assertMobilePage(staff, 'editor da equipe');
@@ -226,7 +227,7 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
   }
 });
 
-async function assertSchema0014() {
+async function assertRequiredSchema() {
   const journal = JSON.parse(fs.readFileSync(path.join(ROOT, 'drizzle/meta/_journal.json'), 'utf8')).entries;
   const required = journal.findIndex((entry) => entry.tag === REQUIRED_MIGRATION);
   assert.ok(required >= 0, 'The reviewed portable wiki transfer migration must be registered.');
@@ -398,3 +399,109 @@ function observePageErrors(...pages) {
   }
   return errors;
 }
+
+test('staff discovers shared drafts, reads indexed content and explicitly publishes for everyone', async ({ browser }) => {
+  const staffContext = await isolatedContext(browser);
+  const guestContext = await isolatedContext(browser);
+  const memberContext = await isolatedContext(browser);
+  const staff = await staffContext.newPage();
+  const guest = await guestContext.newPage();
+  const member = await memberContext.newPage();
+  try {
+    await login(staff, fixture.users.staff);
+    const [old] = await sql`SELECT snapshot FROM wiki_revisions WHERE id = ${fixture.revisionIds[0]}`;
+    const candidate = structuredClone(old.snapshot);
+    candidate.title = `Private work ${fixture.title}`;
+    candidate.accessLevel = 'staff';
+    candidate.body.sections[0].html = '<p>Private indexed synthetic content</p><h3>Detalhes</h3><p>Nested synthetic text</p><h3>Detalhes</h3><p>Second heading</p>';
+    const result = await staff.evaluate(async ({ id, snapshot }) => {
+      return window.Aetherverse.apiRequest('POST', `/api/staff/wiki/pages/${id}/revisions`, {
+        snapshot, summary: 'Synthetic shared private draft', expectedVersion: 1,
+      });
+    }, { id: fixture.pageId, snapshot: candidate });
+    expect(result.data.head.snapshot.accessLevel).toBe('staff');
+    await staff.goto(`${origin}/wiki`);
+    await staff.getByRole('button', { name: 'Rascunhos da equipe', exact: true }).click();
+    await staff.getByRole('link', { name: candidate.title, exact: true }).click();
+    await expect(staff.locator('#main')).toContainText('Private indexed synthetic content');
+    const toc = staff.getByRole('navigation', { name: 'Índice do artigo' });
+    await expect(toc.getByRole('link', { name: 'Detalhes', exact: true })).toHaveCount(2);
+    await staff.screenshot({ path: path.join(ROOT, '.local/test/wiki-editorial-desktop.png') });
+    await toc.getByRole('link', { name: 'Detalhes', exact: true }).nth(1).click();
+    const hash = new URL(staff.url()).hash;
+    expect(hash).toContain('-heading-1');
+    await staff.reload();
+    await expect(staff.locator(hash)).toBeVisible();
+    await staff.setViewportSize({ width: 390, height: 844 });
+    expect(await staff.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await staff.screenshot({ path: path.join(ROOT, '.local/test/wiki-editorial-mobile.png') });
+    await guest.goto(`${origin}/wiki/${fixture.slug}`);
+    await expect(guest.locator('#main')).not.toContainText('Private indexed synthetic content');
+    expect((await guestContext.request.get(`${origin}/api/staff/wiki/pages/${fixture.pageId}`)).status()).toBe(401);
+    await login(member, fixture.users.member);
+    await member.goto(`${origin}/wiki/rascunhos/${fixture.pageId}`);
+    await expect(member.locator('#main')).toContainText('restrita à staff');
+    await expect(member.locator('#main')).not.toContainText('Private indexed synthetic content');
+    expect((await memberContext.request.get(`${origin}/api/staff/wiki/pages/${fixture.pageId}`)).status()).toBe(403);
+    await staff.getByRole('button', { name: 'Editar artigo', exact: true }).click();
+    await expect(staff.locator('#wiki-editor-title')).toHaveValue(candidate.title);
+    await staff.locator('#wiki-editor-summary').fill('Latest synthetic saved head');
+    const savedResponse = staff.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/api/staff/wiki/pages/${fixture.pageId}/revisions`);
+    await staff.getByRole('button', { name: 'Salvar rascunho', exact: true }).click();
+    const savedHead = await savedResponse;
+    expect(savedHead.status()).toBe(200);
+    expect((await savedHead.json()).data.head.snapshot.summary).toBe('Latest synthetic saved head');
+    await expect(staff.locator('#wiki-editor-summary')).toHaveValue('Latest synthetic saved head');
+    await expect(staff.getByRole('button', { name: 'Publicar para todos', exact: true })).toBeEnabled();
+    await staff.goBack();
+    await expect(staff.locator('#main')).toContainText('Latest synthetic saved head');
+    await staff.getByRole('button', { name: 'Editar artigo', exact: true }).click();
+    staff.once('dialog', dialog => dialog.dismiss());
+    await staff.getByRole('button', { name: 'Publicar para todos', exact: true }).click();
+    const [beforePublic] = await sql`SELECT r.snapshot FROM wiki_pages p JOIN wiki_revisions r ON r.id=p.published_revision_id WHERE p.id=${fixture.pageId}`;
+    expect(beforePublic.snapshot.title).toBe(fixture.title);
+    staff.once('dialog', dialog => dialog.accept());
+    const published = staff.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/api/staff/wiki/pages/${fixture.pageId}/publish`);
+    await staff.getByRole('button', { name: 'Publicar para todos', exact: true }).click();
+    expect((await published).status()).toBe(200);
+    await guest.reload();
+    await expect(guest.locator('#main')).toContainText('Private indexed synthetic content');
+    await staff.goto(`${origin}/wiki/rascunhos/${fixture.pageId}`);
+    await expect(staff.locator('#main')).toContainText('Private indexed synthetic content');
+    await staff.locator('#top-btn-area').getByText('Sair', { exact: true }).click();
+    await expect(staff.locator('#main')).not.toContainText('Private indexed synthetic content');
+  } finally { await Promise.all([staffContext.close(), guestContext.close(), memberContext.close()]); }
+});
+
+
+test('wiki sections remain visible without articles and navigate as forum-style rows', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  const page = await context.newPage();
+  try {
+    await page.goto(`${origin}/wiki`);
+    const sections = page.getByRole('navigation', { name: 'Seções da Wiki' });
+    await expect(sections.locator('.wiki-section-group')).toHaveCount(4);
+    await expect(sections.locator('.wiki-section-row')).toHaveCount(12);
+    await expect(page.locator('#wiki-category-select')).toHaveCount(0);
+    await expect(sections.getByText('Ainda não há artigos nesta seção.', { exact: true })).toHaveCount(12);
+    await page.screenshot({ path: path.join(ROOT, '.local/test/wiki-sections-desktop.png'), fullPage: true });
+    await sections.getByRole('link', { name: 'Percepção', exact: true }).click();
+    await expect(page).toHaveURL(`${origin}/wiki?categoria=percepcao`);
+    await expect(page.locator('#main')).toContainText('Ainda não há artigos nesta seção com os filtros atuais.');
+    await page.reload();
+    await expect(sections.getByRole('link', { name: 'Percepção', exact: true })).toHaveAttribute('aria-current', 'page');
+    await page.getByRole('button', { name: 'Todas as seções', exact: true }).click();
+    await expect(page).toHaveURL(`${origin}/wiki`);
+    await page.goBack();
+    await expect(sections.getByRole('link', { name: 'Percepção', exact: true })).toHaveAttribute('aria-current', 'page');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => scrollTo(0, 0));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: path.join(ROOT, '.local/test/wiki-sections-mobile.png'), fullPage: true });
+    await page.locator('#nav-wiki').click();
+    await expect(page).toHaveURL(`${origin}/wiki`);
+    await expect(sections.locator('.wiki-section-group')).toHaveCount(4);
+    const forbidden = await context.request.get(`${origin}/api/staff/wiki/pages`);
+    expect(forbidden.status()).toBe(401);
+  } finally { await context.close(); }
+});

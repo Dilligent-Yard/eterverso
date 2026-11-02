@@ -99,7 +99,8 @@ test('public wiki category filters and backlinks use published navigation data',
   ];
   context.wikiFilterCategory = 'cosmologia';
   const listing = context.renderWiki();
-  assert.match(listing, /id="wiki-category-select"/);
+  assert.doesNotMatch(listing, /id="wiki-category-select"/);
+  assert.match(listing, /Cosmologia/);
   assert.match(listing, /Artigo incluído/);
   assert.doesNotMatch(listing, /Artigo fora da categoria/);
   context.selectWikiCategory('all');
@@ -203,4 +204,52 @@ test('staff can link and remove a selected public forum discussion', async () =>
   assert.equal(patches.length, 2);
   assert.equal(patches[1].payload.threadId, null);
   assert.equal(context.wikiEditorPage.discussionThreadId, null);
+});
+
+test('empty wiki sections survive publication loading errors and parent filters include descendants', () => {
+  const context = makeFrontend();
+  context.serverWikiSections = [
+    { key: 'paranormalidade', name: 'Paranormalidade', parentKey: null, pagesCount: 1 },
+    { key: 'percepcao', name: 'Percepção', parentKey: 'paranormalidade', pagesCount: 1 },
+    { key: 'classes', name: 'Classes', parentKey: 'paranormalidade', pagesCount: 0 },
+  ];
+  context.serverWikiCategories = [];
+  context.serverWikiPages = null;
+  context.wikiPagesLoadError = 'Synthetic publication read failed';
+  let html = context.renderWiki();
+  assert.match(html, /Classes/);
+  assert.match(html, /Ainda não há artigos nesta seção/);
+  assert.match(html, /Synthetic publication read failed/);
+  context.wikiPagesLoadError = null;
+  context.serverWikiPages = [
+    { title: 'Descendant article', slug: 'descendant', categories: ['Percepção'] },
+    { title: 'Other article', slug: 'other', categories: ['Cosmologia'] },
+  ];
+  context.wikiFilterCategory = 'paranormalidade';
+  html = context.renderWiki();
+  assert.match(html, /Descendant article/);
+  assert.doesNotMatch(html, /Other article/);
+  context.window.location.href = 'http://localhost/wiki?categoria=classes';
+  context.parseRouteFromLocation();
+  assert.equal(context.wikiFilterCategory, 'classes');
+});
+
+
+test('Wiki navigation resets the category while article category links preserve their explicit URL', () => {
+  const context = makeFrontend();
+  context.updateTopBar = () => {};
+  context.wikiFilterCategory = 'percepcao';
+  context.currentPage = 'wikiArticle';
+  context.navigate('wiki');
+  assert.equal(context.wikiFilterCategory, 'all');
+  assert.equal(context.window.location.href, 'http://localhost/wiki');
+  context.currentPage = 'wikiArticle';
+  context.selectWikiCategory('percepcao');
+  assert.equal(context.wikiFilterCategory, 'percepcao');
+  assert.equal(context.window.location.href, 'http://localhost/wiki?categoria=percepcao');
+  context.window.location.pathname = '/wiki';
+  context.window.location.search = '?categoria=percepcao';
+  context.navigate('wiki');
+  assert.equal(context.wikiFilterCategory, 'all');
+  assert.equal(context.window.location.href, 'http://localhost/wiki');
 });

@@ -379,6 +379,22 @@ export const wikiPages = pgTable("wiki_pages", {
 	check("wiki_pages_access_level_check", sql`access_level IN ('public', 'staff')`),
 ]);
 
+export const wikiSections = pgTable("wiki_sections", {
+	key: text().primaryKey().notNull(),
+	name: text().notNull(),
+	description: text().default('').notNull(),
+	parentKey: text("parent_key"),
+	sortOrder: integer("sort_order").notNull(),
+}, (table) => [
+	foreignKey({ columns: [table.parentKey], foreignColumns: [table.key], name: "wiki_sections_parent_key_fkey" })
+		.onDelete("restrict")
+		.onUpdate("restrict"),
+	index("wiki_sections_parent_order_idx").on(table.parentKey, table.sortOrder, table.key),
+	check("wiki_sections_key_check", sql`"key" ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
+	check("wiki_sections_parent_check", sql`parent_key IS NULL OR parent_key <> "key"`),
+	check("wiki_sections_sort_order_check", sql`sort_order >= 0`),
+]);
+
 export const wikiNames = pgTable("wiki_names", {
 	nameKey: varchar("name_key", { length: 100 }).primaryKey().notNull(),
 	pageId: uuid("page_id").notNull(),

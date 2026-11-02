@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, threads, categories, posts, personagens, comments, wikiPosts, wikiPages, wikiRevisions, wikiProposals } from "./schema";
+import { users, threads, categories, posts, personagens, comments, wikiPosts, wikiPages, wikiRevisions, wikiProposals, wikiSections } from "./schema";
 
 // Relações entre as tabelas
 
@@ -80,4 +80,13 @@ export const wikiRevisionsRelations = relations(wikiRevisions, ({ one }) => ({
 export const wikiProposalsRelations = relations(wikiProposals, ({ one }) => ({
 	page: one(wikiPages, { fields: [wikiProposals.pageId], references: [wikiPages.id] }),
 	proposer: one(users, { fields: [wikiProposals.proposerId], references: [users.id] }),
+}));
+
+export const wikiSectionsRelations = relations(wikiSections, ({ one, many }) => ({
+	parent: one(wikiSections, {
+		fields: [wikiSections.parentKey],
+		references: [wikiSections.key],
+		relationName: "wiki_section_tree",
+	}),
+	children: many(wikiSections, { relationName: "wiki_section_tree" }),
 }));

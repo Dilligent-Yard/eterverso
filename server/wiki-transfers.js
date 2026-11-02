@@ -148,7 +148,9 @@ function validateBundle(value) {
         const sectionId = validateUuid(citation.sectionId, 'sectionId');
         const sourceId = validateUuid(citation.sourceId, 'sourceId');
         const locator = boundedText(citation.locator, 500);
-        if (!sectionIds.has(sectionId) || !sourceIds.has(sourceId) || locator.length < 1) throw new Error('citation_ref');
+        // Retain exact nonblank transfer text for hash/replay compatibility,
+        // but never persist a locator that staff detail cannot read safely.
+        if (!sectionIds.has(sectionId) || !sourceIds.has(sourceId) || locator.trim().length < 1) throw new Error('citation_ref');
         return { sectionId, sourceId, locator };
       });
       if (new Set(citations.map((citation) => `${citation.sectionId}\0${citation.sourceId}\0${citation.locator}`)).size !== citations.length) {

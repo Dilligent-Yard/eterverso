@@ -7,7 +7,7 @@ const postgres = require('postgres');
 const { createApp } = require('./server/app');
 
 const ROOT = __dirname;
-const REQUIRED_MIGRATION = '0014_wiki_portable_transfers';
+const REQUIRED_MIGRATION = '0015_wiki_sections';
 const REQUIRED_FORUM_TIMESTAMP_COLUMNS = [
   'categories.created_at', 'categories.updated_at',
   'posts.created_at', 'posts.updated_at',
@@ -47,6 +47,7 @@ const REQUIRED_COLUMNS = {
   legacy_import_source_mappings: ['source_id', 'resource_type', 'legacy_id', 'import_id', 'target_id', 'created_at'],
   legacy_import_targets: ['import_id', 'resource_type', 'legacy_id', 'target_id', 'author_id', 'author_label', 'legacy_created_at_text', 'legacy_updated_at_text', 'created_at'],
   legacy_imports: ['id', 'content_digest', 'first_source_id', 'first_export_id', 'first_raw_snapshot_sha256', 'first_origin_label', 'imported_by', 'created_at'],
+  wiki_sections: ['key', 'name', 'description', 'parent_key', 'sort_order'],
 };
 
 function expectedMigrationPrefix(rootDirectory) {

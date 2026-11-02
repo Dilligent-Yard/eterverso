@@ -223,7 +223,12 @@ var pendingReplyKey = null;
 var pendingReplyPayload = null;
 var forumDraftRestoreSequence = 0;
 var FORUM_DRAFT_VERSION = 1;
+var wikiStaffState = { items: null, article: null, loading: false, error: null };
 var serverWikiPages = null;
+var serverWikiSections = null;
+var wikiSectionsLoading = false;
+var wikiSectionsError = null;
+var wikiSectionsGeneration = 0;
 var serverWikiCategories = null;
 var wikiCategoriesLoading = false;
 var wikiCategoriesError = null;
@@ -306,6 +311,8 @@ function routePath(page, extra) {
   if (page === 'cat' && typeof extra === 'string') return '/forum/categorias/' + encodeURIComponent(extra);
   if (page === 'thread' && typeof extra === 'string') return '/forum/topicos/' + encodeURIComponent(extra);
   if (page === 'wiki') return '/wiki';
+  if (page === 'wikiStaff') return '/wiki/equipe';
+  if (page === 'wikiStaffArticle' && typeof extra === 'string') return '/wiki/rascunhos/' + encodeURIComponent(extra);
   if (page === 'wikiArticle' && typeof extra === 'string') return '/wiki/' + encodeURIComponent(extra);
   if (page === 'wikiCreate') return '/wiki/novo';
   if (page === 'wikiEditor' && typeof extra === 'string') return '/wiki/editor/' + encodeURIComponent(extra);
@@ -334,7 +341,15 @@ function parseRouteFromLocation() {
   if (match) { currentPage = 'cat'; currentCat = decodeURIComponent(match[1]); return; }
   match = path.match(/^\/forum\/topicos\/([0-9a-f-]{36})$/i);
   if (match) { currentPage = 'thread'; currentThread = decodeURIComponent(match[1]); return; }
-  if (path === '/wiki') { currentPage = 'wiki'; return; }
+  if (path === '/wiki') {
+    currentPage = 'wiki';
+    var category = new URL(window.location.href).searchParams.get('categoria');
+    wikiFilterCategory = category && /^[a-z0-9][a-z0-9-]{0,99}$/.test(category) ? category : 'all';
+    return;
+  }
+  if (path === '/wiki/equipe') { currentPage = 'wikiStaff'; return; }
+  match = path.match(/^\/wiki\/rascunhos\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'wikiStaffArticle'; currentWikiPageId = match[1].toLowerCase(); return; }
   if (path === '/wiki/novo') { currentPage = 'wikiCreate'; currentWikiPageId = null; return; }
   if (path === '/wiki/editor') { currentPage = 'wikiEditor'; currentWikiPageId = null; return; }
   match = path.match(/^\/wiki\/editor\/([0-9a-f-]{36})$/i);
@@ -355,6 +370,8 @@ function parseRouteFromLocation() {
 }
 
 function navigate(page, extra, options) {
+  if (page === 'wiki') wikiFilterCategory = 'all';
+  if (page === 'wikiStaff' || page === 'wikiStaffArticle') wikiStaffState = { items: null, article: null, loading: false, error: null };
   currentPage = page;
   if (extra !== undefined) {
     if (page === 'thread') currentThread = extra;
@@ -362,18 +379,18 @@ function navigate(page, extra, options) {
     if (page === 'personagemView') currentPersonagem = extra;
     if (page === 'cenaView') currentCena = extra;
     if (page === 'wikiArticle') currentWikiSlug = extra;
-    if (page === 'wikiEditor') currentWikiPageId = extra;
+    if (page === 'wikiEditor' || page === 'wikiStaffArticle') currentWikiPageId = extra;
     if (page === 'wikiProposal') currentWikiPageId = extra;
   }
   var destination = routePath(page, extra);
-  if (destination && !(options && options.fromHistory) && window.location.pathname !== destination) {
+  if (destination && !(options && options.fromHistory) && window.location.pathname + (window.location.search || '') + (window.location.hash || '') !== destination) {
     if (options && options.replace) window.history.replaceState({ page: page, id: extra }, '', destination);
     else window.history.pushState({ page: page, id: extra }, '', destination);
   }
   document.querySelectorAll('#nav-bar button').forEach(function(b) { b.classList.remove('active'); });
   var navMap = {
     forum: 'nav-forum', cat: 'nav-forum', thread: 'nav-forum', novaThread: 'nav-forum',
-    wiki: 'nav-wiki', wikiArticle: 'nav-wiki', wikiEditor: 'nav-wiki', wikiCreate: 'nav-wiki', wikiProposals: 'nav-wiki', wikiProposal: 'nav-wiki',
+    wiki: 'nav-wiki', wikiStaff: 'nav-wiki', wikiStaffArticle: 'nav-wiki', wikiArticle: 'nav-wiki', wikiEditor: 'nav-wiki', wikiCreate: 'nav-wiki', wikiProposals: 'nav-wiki', wikiProposal: 'nav-wiki',
     personagens: 'nav-personagens', personagemView: 'nav-personagens', novoPersonagem: 'nav-personagens',
     cenas: 'nav-cenas', cenaView: 'nav-cenas', novaCena: 'nav-cenas',
     sobre: 'nav-sobre',
@@ -389,6 +406,7 @@ function navigate(page, extra, options) {
 
 window.addEventListener('popstate', function() {
   parseRouteFromLocation();
+  if (currentPage === 'wikiStaff' || currentPage === 'wikiStaffArticle') wikiStaffState = { items: null, article: null, loading: false, error: null };
   updateTopBar();
   render();
 });
@@ -445,6 +463,8 @@ function render() {
     thread: renderThread,
     novaThread: renderNovaThread,
     wiki: renderWiki,
+    wikiStaff: renderWikiStaff,
+    wikiStaffArticle: renderWikiStaffArticle,
     wikiArticle: renderWikiArticle,
     wikiCreate: renderWikiEditor,
     wikiEditor: renderWikiEditor,
@@ -471,6 +491,13 @@ function render() {
   restoreForumDraftForCurrentRoute();
   if (currentPage === 'wikiEditor' || currentPage === 'wikiCreate') restoreWikiEditorDraftContent();
   if (currentPage === 'wikiArticle') restoreWikiProposalDraftContent();
+  if ((currentPage === 'wikiArticle' || currentPage === 'wikiStaffArticle') && window.location.hash) {
+    setTimeout(function() {
+      try { var target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView();
+      } catch (_error) {}
+    }, 0);
+  }
 }
 
 // ==================== FÓRUM ====================
@@ -1640,17 +1667,13 @@ function renderPersonagens() {
 }
 
 function renderWiki() {
+  if (serverWikiSections === null && !wikiSectionsLoading && !wikiSectionsError) loadWikiSections(false);
   if (serverWikiCategories === null && !wikiCategoriesLoading && !wikiCategoriesError) loadWikiCategories(false);
-  if (serverWikiPages === null) {
-    if (!wikiPagesLoading && !wikiPagesLoadError) loadWikiPages(false);
-    if (wikiPagesLoadError) return '<div class="alert alert-error">' + h(wikiPagesLoadError)
-      + ' <button class="btn btn-small" onclick="loadWikiPages(true)">Tentar novamente</button></div>';
-    return '<div class="alert alert-info">Carregando artigos da wiki…</div>';
-  }
+  if (serverWikiPages === null && !wikiPagesLoading && !wikiPagesLoadError) loadWikiPages(false);
 
-  var pages = serverWikiPages.filter(function(page) {
+  var pages = (serverWikiPages || []).filter(function(page) {
     if (wikiFilterCategory !== 'all' && !(page.categories || []).some(function(category) {
-      return wikiCategoryKey(category) === wikiFilterCategory;
+      return wikiSectionCategoryKeys(wikiFilterCategory).has(wikiCategoryKey(category));
     })) return false;
     if (!wikiFilterSearch.trim()) return true;
     var query = wikiFilterSearch.trim().toLocaleLowerCase('pt-BR');
@@ -1660,19 +1683,19 @@ function renderWiki() {
   var html = '<div class="breadcrumb">Início / Wiki</div>'
     + '<div class="cat-header"><span>Wiki de Referência</span>'
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
-  if (isModOrAdmin()) html += '<button class="btn btn-small btn-primary" onclick="navigate(\'wikiCreate\')">+ Novo artigo</button>';
+  if (isModOrAdmin()) html += '<button class="btn btn-small" onclick="navigate(\'wikiStaff\')">Rascunhos da equipe</button><button class="btn btn-small btn-primary" onclick="navigate(\'wikiCreate\')">+ Novo artigo</button>';
   if (DB.session) html += '<button class="btn btn-small" onclick="navigate(\'wikiProposals\')">Propostas</button>';
   html += '</div></div>';
   html += '<div class="filter-bar"><input type="search" id="wiki-page-search" value="' + ha(wikiFilterSearch)
     + '" placeholder="Buscar artigos, resumos e categorias" oninput="filterWikiPages(this.value)">'
-    + '<select id="wiki-category-select" aria-label="Filtrar artigos por categoria" onchange="selectWikiCategory(this.value)">'
-    + '<option value="all"' + (wikiFilterCategory === 'all' ? ' selected' : '') + '>Todas as categorias</option>';
-  if (Array.isArray(serverWikiCategories)) serverWikiCategories.forEach(function(category) {
-    var selected = wikiFilterCategory === category.key ? ' selected' : '';
-    html += '<option value="' + ha(category.key) + '"' + selected + '>' + h(category.name)
-      + ' (' + Number(category.pagesCount || 0) + ')</option>';
-  });
-  html += '</select></div>';
+    + '</div>';
+  html += renderWikiSections();
+  if (wikiFilterCategory !== 'all') {
+    var selected = (serverWikiSections || []).concat(serverWikiCategories || []).find(function(item) { return item.key === wikiFilterCategory; });
+    html += '<div class="cat-header"><span>' + h(selected ? selected.name : wikiFilterCategory) + '</span><button class="btn btn-small" onclick="selectWikiCategory(\'all\')">Todas as seções</button></div>';
+  } else html += '<h2 class="wiki-articles-heading">Artigos publicados</h2>';
+  if (wikiPagesLoadError) return html + '<div class="alert alert-error">' + h(wikiPagesLoadError) + ' <button class="btn" onclick="loadWikiPages(true)">Tentar carregar artigos novamente</button></div>';
+  if (serverWikiPages === null) return html + '<p>Carregando artigos…</p>';
   if (wikiCategoriesError) html += '<p class="field-desc">' + h(wikiCategoriesError)
     + ' <button class="btn btn-small" onclick="loadWikiCategories(true)">Tentar carregar categorias novamente</button></p>';
   else if (wikiCategoriesLoading && !serverWikiCategories) html += '<p class="field-desc">Carregando categorias…</p>';
@@ -1681,7 +1704,7 @@ function renderWiki() {
     if (isModOrAdmin()) html += '<p style="margin-top:12px;"><button class="btn btn-small btn-primary" onclick="navigate(\'wikiCreate\')">Criar o primeiro artigo</button></p>';
     html += '</div>';
   } else if (!pages.length) {
-    html += '<div class="builder-panel">Nenhum artigo corresponde aos filtros atuais.'
+    html += '<div class="builder-panel">Ainda não há artigos nesta seção com os filtros atuais.'
       + (wikiFilterCategory !== 'all' ? ' <button class="btn btn-small" onclick="selectWikiCategory(\'all\')">Limpar categoria</button>' : '')
       + '</div>';
   } else {
@@ -1704,6 +1727,60 @@ function renderWiki() {
   return html;
 }
 
+function wikiSectionCategoryKeys(key) {
+  var keys = new Set([key]);
+  var changed = true;
+  while (changed) {
+    changed = false;
+    (serverWikiSections || []).forEach(function(section) {
+      if (keys.has(section.parentKey) && !keys.has(section.key)) { keys.add(section.key); changed = true; }
+    });
+  }
+  return keys;
+}
+
+function loadWikiSections(force) {
+  if (wikiSectionsLoading || (serverWikiSections !== null && !force)) return;
+  wikiSectionsLoading = true;
+  wikiSectionsError = null;
+  var generation = ++wikiSectionsGeneration;
+  wikiApi()('GET', '/api/wiki/sections').then(function(response) {
+    if (generation !== wikiSectionsGeneration) return;
+    if (!response || !Array.isArray(response.data)) throw new Error('Estrutura da Wiki inválida.');
+    serverWikiSections = response.data;
+  }).catch(function(error) {
+    if (generation !== wikiSectionsGeneration) return;
+    wikiSectionsError = error && error.message || 'Não foi possível carregar as seções da Wiki.';
+  }).finally(function() {
+    if (generation !== wikiSectionsGeneration) return;
+    wikiSectionsLoading = false;
+    if (currentPage === 'wiki') render();
+  });
+}
+
+function renderWikiSections() {
+  if (wikiSectionsError) return '<div class="alert alert-error">' + h(wikiSectionsError) + ' <button class="btn" onclick="loadWikiSections(true)">Tentar carregar seções novamente</button></div>';
+  if (serverWikiSections === null) return '<p>Carregando seções da Wiki…</p>';
+  function row(section) {
+    var selected = wikiFilterCategory === section.key;
+    var count = Number(section.pagesCount || 0);
+    return '<li class="wiki-section-row' + (selected ? ' selected' : '') + '"><div><h3><a href="/wiki?categoria=' + ha(section.key) + '"' + (selected ? ' aria-current="page"' : '') + ' onclick="selectWikiCategory(' + jsArg(section.key) + ');return false;">' + h(section.name) + '</a></h3><p>' + h(section.description || '') + '</p></div><div class="wiki-section-count">' + count + (count === 1 ? ' artigo publicado' : ' artigos publicados') + (count === 0 ? '<span>Ainda não há artigos nesta seção.</span>' : '') + '</div></li>';
+  }
+  var html = '<nav class="wiki-sections" aria-label="Seções da Wiki">';
+  serverWikiSections.filter(function(section) {
+    return !section.parentKey && (wikiFilterCategory === 'all' || wikiSectionCategoryKeys(section.key).has(wikiFilterCategory));
+  }).forEach(function(root) {
+    var children = serverWikiSections.filter(function(section) {
+      return section.parentKey === root.key && (wikiFilterCategory === 'all' || wikiFilterCategory === root.key || wikiFilterCategory === section.key);
+    });
+    html += '<section class="wiki-section-group"><header><h2><a href="/wiki?categoria=' + ha(root.key) + '" onclick="selectWikiCategory(' + jsArg(root.key) + ');return false;">' + h(root.name) + '</a></h2><p>' + Number(root.pagesCount || 0) + (Number(root.pagesCount || 0) === 1 ? ' artigo publicado nesta área' : ' artigos publicados nesta área') + '</p>' + (root.description ? '<p>' + h(root.description) + '</p>' : '') + '</header><ul>' + (children.length ? children.map(row).join('') : row(root)) + '</ul></section>';
+  });
+  var known = new Set(serverWikiSections.map(function(section) { return section.key; }));
+  var extra = (serverWikiCategories || []).filter(function(category) { return !known.has(category.key) && (wikiFilterCategory === 'all' || wikiFilterCategory === category.key); });
+  if (extra.length) html += '<section class="wiki-section-group"><header><h2>Outras categorias</h2></header><ul>' + extra.map(row).join('') + '</ul></section>';
+  return html + '</nav>';
+}
+
 function wikiApi() {
   return window.Aetherverse && typeof window.Aetherverse.apiRequest === 'function'
     ? window.Aetherverse.apiRequest.bind(window.Aetherverse)
@@ -1723,9 +1800,19 @@ function loadWikiCategories(force) {
   if (wikiCategoriesLoading || (serverWikiCategories !== null && !force)) return;
   wikiCategoriesLoading = true;
   wikiCategoriesError = null;
-  wikiApi()('GET', '/api/wiki/categories?limit=100&offset=0').then(function(response) {
-    if (!response || !Array.isArray(response.data)) throw new Error('A resposta das categorias da wiki é inválida.');
-    serverWikiCategories = response.data;
+  function nextPage(offset, items) {
+    return wikiApi()('GET', '/api/wiki/categories?limit=100&offset=' + offset).then(function(response) {
+      if (!response || !Array.isArray(response.data)) throw new Error('A resposta das categorias da wiki é inválida.');
+      var all = items.concat(response.data);
+      if (response.page && response.page.hasMore) {
+        if (!response.data.length) throw new Error('Paginação das categorias inválida.');
+        return nextPage(offset + response.data.length, all);
+      }
+      return all;
+    });
+  }
+  nextPage(0, []).then(function(data) {
+    serverWikiCategories = data;
   }).catch(function(error) {
     wikiCategoriesError = error && error.message ? error.message : 'Não foi possível carregar as categorias da wiki.';
   }).finally(function() {
@@ -1737,20 +1824,29 @@ function loadWikiCategories(force) {
 function selectWikiCategory(key) {
   var next = String(key || 'all');
   if (next !== 'all' && !/^[a-z0-9][a-z0-9-]{0,99}$/.test(next)) return;
-  if (next !== 'all' && Array.isArray(serverWikiCategories)
-      && !serverWikiCategories.some(function(category) { return category.key === next; })) return;
-  wikiFilterCategory = next;
   if (currentPage !== 'wiki') navigate('wiki');
-  else render();
+  wikiFilterCategory = next;
+  var destination = next === 'all' ? '/wiki' : '/wiki?categoria=' + encodeURIComponent(next);
+  window.history.pushState({ page: 'wiki' }, '', destination);
+  render();
 }
 
 function loadWikiPages(force) {
   if (wikiPagesLoading || (serverWikiPages !== null && !force)) return;
   wikiPagesLoading = true;
   wikiPagesLoadError = null;
-  wikiApi()('GET', '/api/wiki/pages?limit=100&offset=0').then(function(response) {
-    var data = response && Array.isArray(response.data) ? response.data : null;
-    if (!data) throw new Error('A resposta da wiki é inválida.');
+  function nextPage(offset, items) {
+    return wikiApi()('GET', '/api/wiki/pages?limit=100&offset=' + offset).then(function(response) {
+      if (!response || !Array.isArray(response.data)) throw new Error('A resposta da wiki é inválida.');
+      var all = items.concat(response.data);
+      if (response.page && response.page.hasMore) {
+        if (!response.data.length) throw new Error('Paginação da wiki inválida.');
+        return nextPage(offset + response.data.length, all);
+      }
+      return all;
+    });
+  }
+  nextPage(0, []).then(function(data) {
     serverWikiPages = data;
   }).catch(function(error) {
     wikiPagesLoadError = error && error.message ? error.message : 'Não foi possível carregar os artigos da wiki.';
@@ -1816,13 +1912,94 @@ function loadWikiArticle(slug, force) {
 
 function renderWikiSnapshot(snapshot, options) {
   if (!snapshot || !snapshot.body || !Array.isArray(snapshot.body.sections)) return '<p>O artigo não contém seções disponíveis.</p>';
-  var html = '';
+  var html = '', entries = [];
   snapshot.body.sections.forEach(function(section) {
-    html += '<section class="builder-panel"><h3>' + h(section.heading || '') + '</h3>'
-      + '<div class="wiki-content-area">' + (typeof section.html === 'string' ? section.html : '') + '</div></section>';
+    var id = 'wiki-section-' + section.id;
+    var content = typeof section.html === 'string' ? section.html : '';
+    var subentries = [];
+    if (options && options.toc && typeof document.createElement === 'function') {
+      var container = document.createElement('div');
+      container.innerHTML = content;
+      container.querySelectorAll('h3').forEach(function(heading, index) {
+        var anchor = id + '-heading-' + index;
+        heading.id = anchor;
+        heading.tabIndex = -1;
+        subentries.push('<li><a href="#' + ha(anchor) + '">' + h(heading.textContent) + '</a></li>');
+      });
+      content = container.innerHTML;
+    }
+    entries.push('<li><a href="#' + ha(id) + '">' + h(section.heading || '') + '</a>'
+      + (subentries.length ? '<ul>' + subentries.join('') + '</ul>' : '') + '</li>');
+    html += '<section class="builder-panel"><h2' + (options && options.toc ? ' id="' + ha(id) + '" tabindex="-1"' : '') + '>' + h(section.heading || '') + '</h2>'
+      + '<div class="wiki-content-area">' + content + '</div></section>';
   });
-  if (!snapshot.body.sections.length) html = '<div class="builder-panel"><p>Este artigo ainda não tem seções.</p></div>';
+  if (!snapshot.body.sections.length) return '<div class="builder-panel"><p>Este artigo ainda não tem seções.</p></div>';
+  return (options && options.toc ? '<nav class="wiki-toc" aria-label="Índice do artigo"><details open><summary>Índice</summary><ul>' + entries.join('') + '</ul></details></nav>' : '') + html;
+}
+
+function loadWikiStaff(articleId) {
+  var state = wikiStaffState;
+  if (state.loading || !isModOrAdmin()) return;
+  state.loading = true;
+  state.error = null;
+  var accountId = DB.session && (DB.session.serverId || DB.session.id);
+  function valid() { return wikiStaffState === state && isModOrAdmin() && String(DB.session.serverId || DB.session.id) === String(accountId); }
+  function list(offset, items) {
+    return wikiApi()('GET', '/api/staff/wiki/pages?limit=100&offset=' + offset).then(function(response) {
+      if (!valid()) return null;
+      if (!response || !Array.isArray(response.data)) throw new Error('Lista editorial inválida.');
+      var all = items.concat(response.data);
+      if (response.page && response.page.hasMore) {
+        if (!response.data.length) throw new Error('Paginação editorial inválida.');
+        return list(offset + response.data.length, all);
+      }
+      return all;
+    });
+  }
+  var promise = articleId ? wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(articleId)) : list(0, []);
+  promise.then(function(response) {
+    if (!valid()) return;
+    if (articleId) {
+      var page = wikiUnwrap(response);
+      if (!page || page.id !== articleId || !page.head || !page.head.snapshot) throw new Error('Artigo editorial inválido.');
+      state.article = page;
+    } else state.items = response;
+  }).catch(function(error) {
+    if (!valid()) return;
+    state.items = null; state.article = null;
+    state.error = error && error.message || 'Não foi possível carregar a Wiki da equipe.';
+  }).finally(function() {
+    if (!valid()) return;
+    state.loading = false;
+    if (currentPage === 'wikiStaff' || currentPage === 'wikiStaffArticle') render();
+  });
+}
+
+function renderWikiStaff() {
+  if (!isModOrAdmin()) return '<div class="alert alert-error">A Wiki da equipe é restrita à staff.</div>';
+  var state = wikiStaffState;
+  if (state.items === null && !state.loading && !state.error) loadWikiStaff(null);
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki pública</a> / Equipe</div><div class="cat-header"><span>Wiki da equipe</span><button class="btn" onclick="navigate(\'wikiCreate\')">+ Novo artigo</button></div><p>Rascunhos compartilhados: toda a equipe pode ler e editar. Publicar para todos é uma ação separada.</p>';
+  if (state.error) return html + '<div class="alert alert-error">' + h(state.error) + ' <button class="btn" onclick="navigate(\'wikiStaff\')">Tentar novamente</button></div>';
+  if (state.items === null) return html + '<p>Carregando rascunhos…</p>';
+  if (!state.items.length) return html + '<p>Ainda não há artigos de trabalho.</p>';
+  state.items.forEach(function(page) {
+    if (!page.head) return;
+    var snapshot = page.head.snapshot;
+    var published = page.accessLevel === 'public' && !!page.publishedRevisionId;
+    html += '<article class="builder-panel"><h2><a href="/wiki/rascunhos/' + ha(page.id) + '" onclick="navigate(\'wikiStaffArticle\',' + jsArg(page.id) + ');return false;">' + h(snapshot.title) + '</a></h2><p>' + h(snapshot.summary || '') + '</p><p class="field-desc">' + (published ? 'Publicado para todos' + (page.headRevisionId !== page.publishedRevisionId ? ' · Com alterações de trabalho' : '') : 'Rascunho · Somente equipe') + '</p></article>';
+  });
   return html;
+}
+
+function renderWikiStaffArticle() {
+  if (!isModOrAdmin()) return '<div class="alert alert-error">A leitura deste rascunho é restrita à staff.</div>';
+  var state = wikiStaffState;
+  if ((!state.article || state.article.id !== currentWikiPageId) && !state.loading && !state.error) loadWikiStaff(currentWikiPageId);
+  if (state.error) return '<div class="alert alert-error">' + h(state.error) + ' <button class="btn" onclick="navigate(\'wikiStaffArticle\',' + jsArg(currentWikiPageId) + ')">Tentar novamente</button></div>';
+  if (!state.article || state.article.id !== currentWikiPageId) return '<p>Carregando artigo da equipe…</p>';
+  var page = state.article, snapshot = page.head.snapshot;
+  return '<div class="breadcrumb"><a onclick="navigate(\'wikiStaff\')">Wiki da equipe</a> / ' + h(snapshot.title) + '</div><div class="cat-header"><span>' + h(snapshot.title) + '</span><button class="btn" onclick="navigate(\'wikiEditor\',' + jsArg(page.id) + ')">Editar artigo</button></div><p class="alert alert-info">Versão de trabalho compartilhada com a equipe. Esta tela não altera a publicação pública.</p><p>' + h(snapshot.summary || '') + '</p>' + renderWikiSnapshot(snapshot, { toc: true });
 }
 
 function renderWikiArticle() {
@@ -1853,7 +2030,7 @@ function renderWikiArticle() {
     html += '<p class="field-desc" style="margin-top:8px;">Também conhecido como: ' + article.aliases.map(h).join(', ') + '</p>';
   }
   html += '</div>';
-  html += renderWikiSnapshot(article, { public: true });
+  html += renderWikiSnapshot(article, { public: true, toc: true });
   if (article.discussionThreadId) {
     html += '<div class="builder-panel"><h3>Discussão pública</h3>'
       + '<p>Converse sobre este artigo no fórum.</p>'
@@ -1995,7 +2172,9 @@ function clearWikiDraft(kind, resourceId, accountId) {
 
 function clearWikiTransientState() {
   adminWikiTransferState = createAdminWikiTransferState();
+  wikiStaffState = { items: null, article: null, loading: false, error: null };
   serverWikiPages = null;
+  serverWikiSections = null; wikiSectionsError = null; wikiSectionsLoading = false; wikiSectionsGeneration += 1;
   serverWikiCategories = null;
   wikiCategoriesLoading = false;
   wikiCategoriesError = null;
@@ -2333,7 +2512,8 @@ function renderWikiEditor() {
     && localDraft.baseWorkVersion !== wikiEditorPage.workVersion);
   var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / ' + (id ? 'Editar artigo' : 'Novo artigo') + '</div>'
     + '<div class="cat-header"><span>' + (id ? 'Rascunho do artigo' : 'Novo artigo da wiki') + '</span>'
-    + '<button class="btn btn-small" onclick="navigate(\'wiki\')">Voltar à wiki</button></div>';
+    + '<button class="btn btn-small" onclick="navigate(\'wikiStaff\')">Wiki da equipe</button>'
+    + (id ? '<button class="btn btn-small" onclick="navigate(\'wikiStaffArticle\',' + jsArg(id) + ')">Ler artigo</button>' : '') + '</div>';
   if (staleDraft) html += '<div class="alert alert-error">Este rascunho local foi iniciado na versão '
     + localDraft.baseWorkVersion + ', mas o artigo agora está na versão ' + wikiEditorPage.workVersion
     + '. Atualize a página ou descarte o rascunho local antes de salvar.</div>';
@@ -2357,9 +2537,7 @@ function renderWikiEditor() {
   [['unspecified', 'Não especificado'], ['reader', 'Leitor'], ['player', 'Jogador'], ['author', 'Autor']].forEach(function(item) {
     html += '<option value="' + item[0] + '"' + (snapshot.audience === item[0] ? ' selected' : '') + '>' + item[1] + '</option>';
   });
-  html += '</select></div><div class="form-row"><label for="wiki-editor-access">Visibilidade após publicar</label><select id="wiki-editor-access" onchange="persistWikiEditorDraft()">'
-    + '<option value="public"' + (snapshot.accessLevel === 'public' ? ' selected' : '') + '>Público</option>'
-    + '<option value="staff"' + (snapshot.accessLevel === 'staff' ? ' selected' : '') + '>Somente equipe</option></select></div></div>'
+  html += '</select></div></div>'
     + '<div class="form-row"><label for="wiki-editor-categories">Categorias (separadas por vírgula)</label><input id="wiki-editor-categories" value="' + ha((snapshot.categories || []).join(', ')) + '" oninput="persistWikiEditorDraft()"></div>'
     + '<div class="form-row"><label for="wiki-editor-aliases">Nomes alternativos (separados por vírgula)</label><input id="wiki-editor-aliases" value="' + ha((snapshot.aliases || []).join(', ')) + '" oninput="persistWikiEditorDraft()"></div>'
     + '</div>';
@@ -2379,7 +2557,7 @@ function renderWikiEditor() {
     + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">'
     + '<button class="btn btn-primary" onclick="saveWikiArticleDraft()">Salvar rascunho</button>';
   if (id && wikiEditorPage && wikiEditorPage.headRevisionId && !wikiEditorPage.archivedAt) {
-    html += '<button class="btn" onclick="publishWikiArticle()"' + (localDraft || staleDraft || restoreDisabled ? ' disabled' : '') + '>Publicar revisão atual</button>';
+    html += '<button class="btn" onclick="publishWikiArticle()"' + (localDraft || staleDraft || restoreDisabled ? ' disabled' : '') + '>Publicar para todos</button>';
   }
   html += '</div><p class="field-desc">Salvar cria uma nova revisão privada de trabalho. A publicação é uma ação separada.</p></div>';
   html += '</fieldset>';
@@ -2800,6 +2978,7 @@ function saveWikiArticleDraft() {
     wikiEditorLoadedId = page.id;
     wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
     wikiEditorSectionsKey = null;
+    wikiStaffState = { items: null, article: null, loading: false, error: null };
     if (currentPage === 'wikiCreate' || (currentPage === 'wikiEditor' && !currentWikiPageId)) navigate('wikiEditor', page.id, { replace: true });
     else render();
     loadWikiEditorHistory(page.id, true);
@@ -2816,7 +2995,9 @@ function publishWikiArticle() {
     showAlert('Salve ou descarte o rascunho local antes de publicar.', 'error');
     return;
   }
+  if (!window.confirm('Publicar esta revisão para todos, inclusive visitantes? O conteúdo deixará de ser restrito à equipe.')) return;
   var payload = {
+    makePublic: true,
     revisionId: wikiEditorPage.headRevisionId,
     expectedVersion: wikiEditorPage.workVersion,
     expectedPublishedRevisionId: wikiEditorPage.publishedRevisionId,
@@ -2824,17 +3005,27 @@ function publishWikiArticle() {
   };
   var finish = beginResourceFormSubmission('wiki-publish:' + String(wikiEditorPage.id));
   if (!finish) return;
+  var publishingAccount = DB.session && (DB.session.serverId || DB.session.id);
+  function samePublisher() { return isModOrAdmin() && String(DB.session.serverId || DB.session.id) === String(publishingAccount); }
   wikiApi()('POST', '/api/staff/wiki/pages/' + encodeURIComponent(wikiEditorPage.id) + '/publish', payload).then(function(response) {
     finish();
+    if (!samePublisher()) return;
     var page = wikiUnwrap(response);
     if (!page || !page.id) throw new Error('A resposta ao publicar o artigo é inválida.');
     wikiEditorPage = page;
     wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+    serverWikiPages = null; serverWikiCategories = null;
+    serverWikiSections = null; wikiSectionsError = null; wikiSectionsLoading = false; wikiSectionsGeneration += 1;
+    currentWikiArticle = null; wikiArticleRequestSequence += 1;
+    wikiArticleLoading = false; wikiArticleLoadingSlug = null;
+    wikiArticleLoadError = null; wikiArticleLoadErrorSlug = null;
+    wikiStaffState = { items: null, article: null, loading: false, error: null };
     render();
     loadWikiEditorHistory(page.id, true);
-    showAlert('Revisão publicada.', 'success');
+    showAlert('Revisão publicada para todos.', 'success');
   }).catch(function(error) {
     finish();
+    if (!samePublisher()) return;
     showAlert(error && error.message ? error.message : 'Não foi possível publicar esta revisão.', 'error');
   });
 }
@@ -5629,6 +5820,8 @@ function applyServerSession(serverUser) {
   }
   if (previousId && String(previousId) !== safeUser.id) {
     clearForumDraftEditors();
+    clearWikiTransientState();
+  } else if (['admin', 'moderador'].includes(previousRole) && !['admin', 'moderador'].includes(safeUser.role)) {
     clearWikiTransientState();
   } else if (previousRole === 'admin' && safeUser.role !== 'admin') {
     adminWikiTransferState = createAdminWikiTransferState();

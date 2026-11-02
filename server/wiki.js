@@ -21,6 +21,7 @@ const {
 } = require('./validation');
 
 const STAFF_ROLES = ['moderador', 'admin'];
+const MAX_WIKI_CITATIONS = 10_000;
 const WIKI_TYPES = new Set([
   'concept', 'organization', 'place', 'entity', 'technique', 'artifact', 'event', 'character-reference',
 ]);
@@ -31,7 +32,7 @@ const SNAPSHOT_KEYS = [
   'schemaVersion', 'title', 'slug', 'aliases', 'type', 'summary', 'categories',
   'accessLevel', 'audience', 'body',
 ];
-const RESERVED_WIKI_ROUTES = new Set(['novo', 'editor', 'propostas']);
+const RESERVED_WIKI_ROUTES = new Set(['novo', 'editor', 'propostas', 'equipe', 'rascunhos']);
 const PAGE_COLUMNS = `p.id, p.head_revision_id, p.published_revision_id, p.work_version,
   p.public_version, p.access_level, p.archived_at, p.discussion_thread_id,
   p.created_by, p.published_at, p.created_at, p.updated_at`;
@@ -208,13 +209,18 @@ function createWikiRouter({ sql, auth } = {}) {
   }));
 
   staff.post('/pages', route(async (req, res) => {
-    const body = assertObjectShape(req.body, { allowedKeys: ['snapshot', 'summary'], requiredKeys: ['snapshot', 'summary'] });
+    const body = assertObjectShape(req.body, { allowedKeys: ['snapshot', 'summary', 'citations'], requiredKeys: ['snapshot', 'summary'] });
     const snapshot = validateWikiSnapshot(body.snapshot);
     const summary = normalizeSummary(body.summary);
+    const citationsProvided = Object.hasOwn(body, 'citations');
+    const citations = citationsProvided ? validateWikiCitations(body.citations, snapshot) : [];
     const key = idempotencyKey(req);
-    const requestHash = hashPayload({ snapshot, summary });
+    // Keep the historical citation-free hash stable for retries already stored
+    // in request_keys. Explicit citation submissions bind their full payload.
+    const requestHash = hashPayload(citationsProvided ? { snapshot, summary, citations } : { snapshot, summary });
     const created = await withStaffTransaction(auth, req, async (tx, actor) => {
       const replay = await findReplay(tx, actor.id, 'wiki.page.create', key, requestHash);
+      await assertCitationSourcesExist(tx, citations);
       if (replay) return loadReplayPage(tx, replay.resourceIds);
 
       const pageRows = await tx`
@@ -227,6 +233,7 @@ function createWikiRouter({ sql, auth } = {}) {
       });
       await tx`UPDATE wiki_pages SET head_revision_id = ${revision.id}, updated_at = now() WHERE id = ${pageId}`;
       await saveRevisionIndexes(tx, revision.id, snapshot);
+      await insertRevisionCitations(tx, revision.id, citations);
       await insertRequestKey(tx, actor.id, 'wiki.page.create', key, requestHash, [pageId]);
       const rows = await loadStaffPage(tx, pageId);
       return staffPageDto(rows[0]);
@@ -237,16 +244,22 @@ function createWikiRouter({ sql, auth } = {}) {
   staff.post('/pages/:id/revisions', route(async (req, res) => {
     const id = validateUuid(req.params.id);
     const body = assertObjectShape(req.body, {
-      allowedKeys: ['snapshot', 'summary', 'expectedVersion'],
+      allowedKeys: ['snapshot', 'summary', 'expectedVersion', 'citations'],
       requiredKeys: ['snapshot', 'summary'],
     });
     const snapshot = validateWikiSnapshot(body.snapshot);
     const summary = normalizeSummary(body.summary);
+    const citationsProvided = Object.hasOwn(body, 'citations');
+    const requestedCitations = citationsProvided ? validateWikiCitations(body.citations, snapshot) : null;
     const version = expectedVersion(body.expectedVersion);
     const page = await withStaffTransaction(auth, req, async (tx, actor) => {
       const current = await lockPage(tx, id);
       checkVersion(current.work_version, version);
       if (!current.head_revision_id) throw conflict('PAGE_NEEDS_REPAIR', 'Este artigo precisa de revisão antes de receber alterações.');
+      const citations = citationsProvided
+        ? requestedCitations
+        : await retainedRevisionCitations(tx, current.head_revision_id, snapshot);
+      await assertCitationSourcesExist(tx, citations);
       const nextWork = nextVersion(current.work_version, 'WORK_VERSION_EXHAUSTED');
       const sequenceRows = await tx`SELECT COALESCE(max(sequence), 0)::integer AS sequence FROM wiki_revisions WHERE page_id = ${id}`;
       const sequence = intValue(sequenceRows[0].sequence, 'sequence');
@@ -259,6 +272,7 @@ function createWikiRouter({ sql, auth } = {}) {
       });
       await tx`UPDATE wiki_pages SET head_revision_id = ${revision.id}, work_version = ${nextWork}, updated_at = now() WHERE id = ${id}`;
       await saveRevisionIndexes(tx, revision.id, snapshot);
+      await insertRevisionCitations(tx, revision.id, citations);
       return loadStaffPageDto(tx, id);
     });
     return res.json({ data: page });
@@ -267,11 +281,15 @@ function createWikiRouter({ sql, auth } = {}) {
   staff.post('/pages/:id/publish', route(async (req, res) => {
     const id = validateUuid(req.params.id);
     const body = assertObjectShape(req.body, {
-      allowedKeys: ['revisionId', 'expectedVersion', 'expectedPublishedRevisionId', 'summary'],
+      allowedKeys: ['revisionId', 'expectedVersion', 'expectedPublishedRevisionId', 'summary', 'makePublic'],
       requiredKeys: ['revisionId', 'expectedPublishedRevisionId', 'summary'],
     });
     const revisionId = validateUuid(body.revisionId, 'revisionId');
     const version = expectedVersion(body.expectedVersion);
+    const makePublic = body.makePublic === undefined ? false : body.makePublic;
+    if (typeof makePublic !== 'boolean') {
+      throw apiError(400, 'INVALID_VALUE', 'A opção de publicação pública deve ser verdadeira ou falsa.', { field: 'makePublic' });
+    }
     const expectedPublishedId = body.expectedPublishedRevisionId === null
       ? null : validateUuid(body.expectedPublishedRevisionId, 'expectedPublishedRevisionId');
     const summary = normalizeSummary(body.summary);
@@ -291,21 +309,53 @@ function createWikiRouter({ sql, auth } = {}) {
           FROM wiki_revisions WHERE id = ${revisionId} AND page_id = ${id} LIMIT 1`;
         if (!revisions.length) throw notFound();
         const revision = revisions[0];
-        if (!sameNullableId(revision.base_published_revision_id, current.published_revision_id)) {
+        const snapshot = validateWikiSnapshot(revision.snapshot);
+        if (snapshot.accessLevel === 'staff' && !makePublic) {
+          throw conflict('DRAFT_NOT_PUBLIC', 'Esta revisão é um rascunho reservado à equipe. Marque a opção “Publicar publicamente” para torná-la visível ao público.');
+        }
+        const isCurrentStaffPublication = makePublic
+          && snapshot.accessLevel === 'staff'
+          && sameNullableId(revision.id, current.published_revision_id);
+        if (!sameNullableId(revision.base_published_revision_id, current.published_revision_id)
+            && !isCurrentStaffPublication) {
           throw conflict('STALE_REVISION_BASE', 'A revisão se baseia em outra publicação. Salve uma nova revisão antes de publicar.');
         }
-        const snapshot = validateWikiSnapshot(revision.snapshot);
-        await reservePublishedNames(tx, id, snapshot);
+
+        let publishedRevisionId = revisionId;
+        let publishedSnapshot = snapshot;
+        if (snapshot.accessLevel === 'staff') {
+          publishedSnapshot = validateWikiSnapshot({ ...snapshot, accessLevel: 'public' });
+          const sequenceRows = await tx`SELECT COALESCE(max(sequence), 0)::integer AS sequence FROM wiki_revisions WHERE page_id = ${id}`;
+          const sequence = intValue(sequenceRows[0].sequence, 'sequence');
+          if (sequence >= MAX_POSTGRES_INTEGER) throw conflict('REVISION_SEQUENCE_EXHAUSTED', 'Este artigo atingiu o limite de revisões.');
+          const citations = await revisionCitations(tx, revisionId);
+          await assertCitationSourcesExist(tx, citations);
+          const publicRevision = await insertRevision(tx, {
+            pageId: id,
+            actorId: actor.id,
+            sequence: sequence + 1,
+            parentId: revisionId,
+            basePublishedId: current.published_revision_id,
+            summary,
+            snapshot: publishedSnapshot,
+            restoresId: null,
+          });
+          publishedRevisionId = publicRevision.id;
+          await saveRevisionIndexes(tx, publishedRevisionId, publishedSnapshot);
+          await insertRevisionCitations(tx, publishedRevisionId, citations);
+        }
+
+        await reservePublishedNames(tx, id, publishedSnapshot);
         const nextPublic = nextPublicVersion(current.public_version);
         const nextWork = nextVersion(current.work_version, 'WORK_VERSION_EXHAUSTED');
         await tx`
-          UPDATE wiki_pages SET published_revision_id = ${revisionId}, access_level = ${snapshot.accessLevel},
+          UPDATE wiki_pages SET head_revision_id = ${publishedRevisionId}, published_revision_id = ${publishedRevisionId}, access_level = ${publishedSnapshot.accessLevel},
             published_at = now(), public_version = ${nextPublic}, work_version = ${nextWork},
             updated_at = now()
           WHERE id = ${id}`;
         await writeAudit(tx, actor.id, 'wiki.page.publish', id, summary,
           { publishedRevisionId: current.published_revision_id, publicVersion: Number(current.public_version) },
-          { publishedRevisionId: revisionId, publicVersion: nextPublic, accessLevel: snapshot.accessLevel });
+          { publishedRevisionId, publicVersion: nextPublic, accessLevel: publishedSnapshot.accessLevel });
         return loadStaffPageDto(tx, id);
       });
       return res.json({ data: page });
@@ -397,6 +447,8 @@ function createWikiRouter({ sql, auth } = {}) {
       checkVersion(current.work_version, version);
       const old = await getRevision(tx, id, oldRevisionId);
       const snapshot = validateWikiSnapshot(old.snapshot);
+      const citations = await retainedRevisionCitations(tx, oldRevisionId, snapshot);
+      await assertCitationSourcesExist(tx, citations);
       const nextWork = nextVersion(current.work_version, 'WORK_VERSION_EXHAUSTED');
       const sequenceRows = await tx`SELECT COALESCE(max(sequence), 0)::integer AS sequence FROM wiki_revisions WHERE page_id = ${id}`;
       const sequence = intValue(sequenceRows[0].sequence, 'sequence');
@@ -409,6 +461,7 @@ function createWikiRouter({ sql, auth } = {}) {
       });
       await tx`UPDATE wiki_pages SET head_revision_id = ${revision.id}, work_version = ${nextWork}, updated_at = now() WHERE id = ${id}`;
       await saveRevisionIndexes(tx, revision.id, snapshot);
+      await insertRevisionCitations(tx, revision.id, citations);
       await writeAudit(tx, actor.id, 'wiki.page.restore_revision', id, summary,
         { headRevisionId: current.head_revision_id, workVersion: Number(current.work_version) },
         { headRevisionId: revision.id, workVersion: nextWork, restoresId: oldRevisionId });
@@ -537,6 +590,80 @@ function validateWikiSnapshot(value) {
     if (error instanceof ApiError) throw error;
     throw apiError(400, 'INVALID_WIKI_SNAPSHOT', 'O conteúdo do artigo possui campos ou valores inválidos.');
   }
+}
+
+function validateWikiCitations(value, snapshot) {
+  try {
+    if (!Array.isArray(value) || value.length > MAX_WIKI_CITATIONS) throw new Error('citations');
+    const sectionIds = new Set(snapshot.body.sections.map((section) => section.id));
+    const seen = new Set();
+    return value.map((citation) => {
+      assertObjectShape(citation, {
+        allowedKeys: ['sectionId', 'sourceId', 'locator'],
+        requiredKeys: ['sectionId', 'sourceId', 'locator'],
+      });
+      const sectionId = validateUuid(citation.sectionId, 'sectionId');
+      const sourceId = validateUuid(citation.sourceId, 'sourceId');
+      const locator = normalizeString(citation.locator, { field: 'locator', min: 1, max: 500 });
+      if (locator.includes('\0') || !sectionIds.has(sectionId)) throw new Error('citationReference');
+      const identity = JSON.stringify([sectionId, sourceId, locator]);
+      if (seen.has(identity)) throw new Error('duplicateCitation');
+      seen.add(identity);
+      return { sectionId, sourceId, locator };
+    });
+  } catch {
+    throw invalidWikiCitations();
+  }
+}
+
+function invalidWikiCitations() {
+  return apiError(400, 'INVALID_WIKI_CITATIONS', 'As referências do artigo possuem campos ou valores inválidos.');
+}
+
+function storedCitation(row) {
+  if (typeof row.locator !== 'string' || !row.locator.trim() || Array.from(row.locator).length > 500 || row.locator.includes('\0')) {
+    throw apiError(409, 'INVALID_STORED_STATE', 'As referências deste artigo precisam de revisão.');
+  }
+  return {
+    sectionId: validateUuid(row.section_id, 'sectionId'),
+    sourceId: validateUuid(row.source_id, 'sourceId'),
+    locator: row.locator,
+  };
+}
+
+async function retainedRevisionCitations(tx, revisionId, snapshot) {
+  const sectionIds = new Set(snapshot.body.sections.map((section) => section.id));
+  const citations = await revisionCitations(tx, revisionId);
+  return citations.filter((citation) => sectionIds.has(citation.sectionId));
+}
+
+async function revisionCitations(tx, revisionId) {
+  const rows = await tx`
+    SELECT section_id, source_id, locator
+    FROM wiki_revision_citations
+    WHERE revision_id = ${revisionId}
+    ORDER BY section_id ASC, source_id ASC, locator ASC`;
+  return rows.map(storedCitation);
+}
+
+async function assertCitationSourcesExist(tx, citations) {
+  const sourceIds = [...new Set(citations.map((citation) => citation.sourceId))].sort();
+  if (!sourceIds.length) return;
+  const rows = await tx`
+    SELECT id FROM wiki_sources
+    WHERE id = ANY(${tx.array(sourceIds, 2950)})
+    ORDER BY id ASC FOR KEY SHARE`;
+  if (rows.length !== sourceIds.length) {
+    throw apiError(400, 'INVALID_WIKI_CITATIONS', 'Uma ou mais fontes citadas não foram encontradas.');
+  }
+}
+
+async function insertRevisionCitations(tx, revisionId, citations) {
+  if (!citations.length) return;
+  const values = citations.map(({ sectionId, sourceId, locator }) => [revisionId, sectionId, sourceId, locator]);
+  await tx`
+    INSERT INTO wiki_revision_citations (revision_id, section_id, source_id, locator)
+    VALUES ${tx(values)}`;
 }
 
 function stringList(value, maximum, maxLength, field) {
@@ -706,7 +833,16 @@ async function loadStaffPage(executor, id) {
            head.edit_summary, head.restores_id, head.accepted_proposal_id,
            head.snapshot, head.created_at AS revision_created_at,
            u.username AS actor_username, u.avatar AS actor_avatar,
-           u.title AS actor_title, u.role AS actor_role
+           u.title AS actor_title, u.role AS actor_role,
+           COALESCE((
+             SELECT json_agg(json_build_object(
+               'sectionId', citation.section_id,
+               'sourceId', citation.source_id,
+               'locator', citation.locator
+             ) ORDER BY citation.section_id ASC, citation.source_id ASC, citation.locator ASC)
+             FROM wiki_revision_citations citation
+             WHERE citation.revision_id = head.id
+           ), '[]'::json) AS head_citations
     FROM wiki_pages p
     LEFT JOIN wiki_revisions head ON head.id = p.head_revision_id AND head.page_id = p.id
     LEFT JOIN users u ON u.id = head.actor_id
@@ -731,9 +867,41 @@ function staffPageDto(row) {
     publishedAt: isoTimestamp(row.published_at),
     createdAt: isoTimestamp(row.created_at),
     updatedAt: isoTimestamp(row.updated_at),
-    head: row.revision_id ? revisionDto(row) : null,
+    head: row.revision_id ? staffHeadDto(row) : null,
   };
   return page;
+}
+
+function staffHeadDto(row) {
+  const head = revisionDto(row);
+  if (Object.hasOwn(row, 'head_citations')) {
+    let citations = row.head_citations;
+    if (typeof citations === 'string') {
+      try { citations = JSON.parse(citations); } catch { citations = null; }
+    }
+    if (!Array.isArray(citations)) throw apiError(409, 'INVALID_STORED_STATE', 'As referências deste artigo precisam de revisão.');
+    head.citations = citations.map((citation) => {
+      try {
+        assertObjectShape(citation, {
+          allowedKeys: ['sectionId', 'sourceId', 'locator'],
+          requiredKeys: ['sectionId', 'sourceId', 'locator'],
+        });
+        const normalized = {
+          sectionId: validateUuid(citation.sectionId, 'sectionId'),
+          sourceId: validateUuid(citation.sourceId, 'sourceId'),
+          locator: citation.locator,
+        };
+        if (typeof normalized.locator !== 'string' || !normalized.locator.trim()
+            || Array.from(normalized.locator).length > 500 || normalized.locator.includes('\0')) {
+          throw new Error('locator');
+        }
+        return normalized;
+      } catch {
+        throw apiError(409, 'INVALID_STORED_STATE', 'As referências deste artigo precisam de revisão.');
+      }
+    });
+  }
+  return head;
 }
 
 function revisionDto(row) {
