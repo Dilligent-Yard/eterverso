@@ -197,10 +197,12 @@ navegador, migração de base populada e ferramentas de recuperação.
 
 ## 8. Evidência e limites para decidir a PR
 
-Na última rodada técnica, em 2 de novembro de 2026, passaram a suíte unitária,
-53 testes de integração e 18 testes de navegador. O teste de migração populada
-subiu um baseline sintético 0006 até 0015 preservando os dados selecionados.
-Os runners confirmaram que os testes não alteraram o desenvolvimento.
+Na última rodada técnica, em 2 de novembro de 2026, passaram 149 testes
+unitários, 61 de integração e 19 de navegador, incluindo o fluxo de arquivos
+de artigo. O teste de migração populada realizado para a cadeia de schema
+vigente subiu um baseline sintético 0006 até 0015 preservando os dados
+selecionados. Os runners confirmaram que os testes não alteraram o
+desenvolvimento.
 
 A migração local 0014→0015 foi aplicada após backup e revisão; contagens e
 hashes de todos os registros anteriores permaneceram iguais. Revisões
