@@ -151,14 +151,58 @@ function closeEditorDrawer(editorId) {
   }
 }
 
+function editorSafeContentUrl(value, options) {
+  options = options || {};
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048 || value !== value.trim()) return null;
+  if (/[\u0000-\u0020\u007f\\<>"'`]/.test(value) || /%(?:0[0-9a-f]|1[0-9a-f]|7f|2f|5c)/i.test(value)) return null;
+  if (/&(?:[a-z][a-z0-9]+|#\d+|#x[\da-f]+);/i.test(value)) return null;
+
+  var decoded = value;
+  for (var i = 0; i < 3 && decoded.indexOf('%') !== -1; i += 1) {
+    var next;
+    try { next = decodeURIComponent(decoded); } catch (_) { return null; }
+    if (/%(?:2f|5c)/i.test(next)) return null;
+    if (next === decoded) break;
+    decoded = next;
+  }
+  if (/[\u0000-\u0020\u007f\\<>"'`]/.test(decoded) || /^\/\//.test(decoded) || /^\\\\/.test(decoded)) return null;
+  var rawScheme = /^([a-z][a-z\d+.-]*):/i.exec(value);
+  var decodedScheme = /^([a-z][a-z\d+.-]*):/i.exec(decoded);
+  if (decodedScheme && (!rawScheme || rawScheme[1].toLowerCase() !== decodedScheme[1].toLowerCase())) return null;
+
+  var parsed;
+  try { parsed = new URL(value, window.location.href); } catch (_) { return null; }
+  var page;
+  try { page = new URL(window.location.href); } catch (_) { return null; }
+  if (rawScheme) {
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (!parsed.hostname || parsed.username || parsed.password) return null;
+    if (options.image && parsed.protocol !== 'https:') return null;
+    return parsed.href;
+  }
+  if (parsed.origin !== page.origin) return null;
+  if (options.image) {
+    var allowed = window.Aetherverse && Array.isArray(window.Aetherverse.allowedImagePaths)
+      ? window.Aetherverse.allowedImagePaths
+      : [];
+    if (parsed.hash || allowed.indexOf(parsed.pathname) === -1) return null;
+  }
+  return value;
+}
+
 function confirmEditorDrawer(editorId, type) {
   if (type === 'link') {
     var lurl = (document.getElementById('ed-' + editorId + '-lurl') || {}).value || '';
     var ltext = (document.getElementById('ed-' + editorId + '-ltext') || {}).value || '';
     lurl = lurl.trim();
     if (!lurl) return;
+    lurl = editorSafeContentUrl(lurl);
+    if (!lurl) {
+      if (typeof showAlert === 'function') showAlert('Informe um endereço HTTP, HTTPS ou caminho local permitido.', 'error');
+      return;
+    }
     if (ltext.trim()) {
-      insertHtml(editorId, '<a href="' + lurl.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener">' + h(ltext.trim()) + '</a> ');
+      insertHtml(editorId, '<a href="' + h(lurl) + '" target="_blank" rel="noopener noreferrer">' + h(ltext.trim()) + '</a> ');
     } else {
       var el = document.getElementById(editorId);
       if (el) el.focus();
@@ -169,7 +213,12 @@ function confirmEditorDrawer(editorId, type) {
     var icap = (document.getElementById('ed-' + editorId + '-icap') || {}).value || '';
     iurl = iurl.trim();
     if (!iurl) return;
-    var fig = '<figure class="inline-media"><img src="' + iurl.replace(/"/g, '&quot;') + '" alt="Imagem">';
+    iurl = editorSafeContentUrl(iurl, { image: true });
+    if (!iurl) {
+      if (typeof showAlert === 'function') showAlert('A imagem deve usar HTTPS ou um caminho local de mídia permitido.', 'error');
+      return;
+    }
+    var fig = '<figure class="inline-media"><img src="' + h(iurl) + '" alt="Imagem">';
     if (icap.trim()) fig += '<figcaption>' + h(icap.trim()) + '</figcaption>';
     fig += '</figure><p><br></p>';
     insertHtml(editorId, fig);
@@ -210,6 +259,8 @@ function confirmEditorDrawer(editorId, type) {
   closeEditorDrawer(editorId);
 }
 
+var editorPreviewSequence = Object.create(null);
+
 function toggleEditorHtmlMode(editorId) {
   var body = document.getElementById(editorId);
   var src = document.getElementById('src-' + editorId);
@@ -223,22 +274,69 @@ function toggleEditorHtmlMode(editorId) {
     if (btn) btn.classList.add('active');
     if (mode) mode.textContent = 'Código HTML';
   } else {
-    body.innerHTML = src.value;
-    src.style.display = 'none';
-    body.style.display = 'block';
-    if (btn) btn.classList.remove('active');
-    if (mode) mode.textContent = 'Editor visual';
-    updateEditorCount(editorId);
+    previewEditorSource(editorId);
   }
 }
 
 function syncFromSource(editorId) {
+  var src = document.getElementById('src-' + editorId);
+  var count = document.getElementById('count-' + editorId);
+  if (!src || !count) return;
+  var text = src.value.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/gi, ' ').trim();
+  var words = text ? text.split(/\s+/).length : 0;
+  count.textContent = text.length + ' caracteres · ' + words + ' palavras';
+}
+
+function previewEditorSource(editorId) {
   var body = document.getElementById(editorId);
   var src = document.getElementById('src-' + editorId);
-  if (body && src) {
-    body.innerHTML = src.value;
-    updateEditorCount(editorId);
+  var btn = document.getElementById('htmlbtn-' + editorId);
+  var mode = document.getElementById('mode-' + editorId);
+  if (!body || !src || !window.Aetherverse) return;
+  var source = src.value;
+  var sequence = (editorPreviewSequence[editorId] || 0) + 1;
+  editorPreviewSequence[editorId] = sequence;
+  if (mode) mode.textContent = 'Validando prévia no servidor…';
+  window.Aetherverse.apiRequest('POST', '/api/content/preview', { html: source })
+    .then(function(result) {
+      result = result && result.data && typeof result.data === 'object' ? result.data : result;
+      if (editorPreviewSequence[editorId] !== sequence || src.style.display === 'none') return;
+      if (src.value !== source) {
+        previewEditorSource(editorId);
+        return;
+      }
+      if (!result || typeof result !== 'object' || Array.isArray(result) || typeof result.html !== 'string') {
+        throw new Error('A prévia validada está incompleta.');
+      }
+      setEditorContent(editorId, result.html);
+      src.style.display = 'none';
+      body.style.display = 'block';
+      if (btn) btn.classList.remove('active');
+      if (mode) mode.textContent = result.formattingLoss && result.formattingLoss.discarded
+        ? 'Prévia segura · formatação não permitida removida'
+        : 'Prévia validada pelo servidor';
+      updateEditorCount(editorId);
+    })
+    .catch(function(error) {
+      if (editorPreviewSequence[editorId] !== sequence) return;
+      if (mode) mode.textContent = 'Prévia não validada';
+      if (typeof showAlert === 'function') showAlert(error.message || 'Não foi possível validar a prévia.', 'error');
+    });
+}
+
+function setEditorContent(editorId, safeHtml) {
+  if (typeof safeHtml !== 'string') return false;
+  var body = document.getElementById(editorId);
+  if (!body) return false;
+  var source = document.getElementById('src-' + editorId);
+  body.innerHTML = safeHtml;
+  body.style.display = 'block';
+  if (source) {
+    source.value = '';
+    source.style.display = 'none';
   }
+  updateEditorCount(editorId);
+  return true;
 }
 
 function toggleEditorFullscreen(editorId) {

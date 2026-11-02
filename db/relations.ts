@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, threads, categories, posts, personagens, comments, wikiPosts } from "./schema";
+import { users, threads, categories, posts, personagens, comments, wikiPosts, wikiPages, wikiRevisions, wikiProposals, wikiSections } from "./schema";
 
 // Relações entre as tabelas
 
@@ -62,4 +62,31 @@ export const wikiPostsRelations = relations(wikiPosts, ({ one }) => ({
 		fields: [wikiPosts.authorId],
 		references: [users.id]
 	}),
+}));
+
+export const wikiPagesRelations = relations(wikiPages, ({ one, many }) => ({
+	creator: one(users, { fields: [wikiPages.createdBy], references: [users.id] }),
+	headRevision: one(wikiRevisions, { fields: [wikiPages.id, wikiPages.headRevisionId], references: [wikiRevisions.pageId, wikiRevisions.id], relationName: "wiki_page_head" }),
+	publishedRevision: one(wikiRevisions, { fields: [wikiPages.id, wikiPages.publishedRevisionId], references: [wikiRevisions.pageId, wikiRevisions.id], relationName: "wiki_page_published" }),
+	revisions: many(wikiRevisions),
+	proposals: many(wikiProposals),
+}));
+
+export const wikiRevisionsRelations = relations(wikiRevisions, ({ one }) => ({
+	page: one(wikiPages, { fields: [wikiRevisions.pageId], references: [wikiPages.id] }),
+	actor: one(users, { fields: [wikiRevisions.actorId], references: [users.id] }),
+}));
+
+export const wikiProposalsRelations = relations(wikiProposals, ({ one }) => ({
+	page: one(wikiPages, { fields: [wikiProposals.pageId], references: [wikiPages.id] }),
+	proposer: one(users, { fields: [wikiProposals.proposerId], references: [users.id] }),
+}));
+
+export const wikiSectionsRelations = relations(wikiSections, ({ one, many }) => ({
+	parent: one(wikiSections, {
+		fields: [wikiSections.parentKey],
+		references: [wikiSections.key],
+		relationName: "wiki_section_tree",
+	}),
+	children: many(wikiSections, { relationName: "wiki_section_tree" }),
 }));

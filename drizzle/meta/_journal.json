@@ -43,6 +43,76 @@
       "when": 1783270245377,
       "tag": "0005_nebulous_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792204868000,
+      "tag": "0006_wiki_posts_and_blocks",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792462165268,
+      "tag": "0007_account_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792462379958,
+      "tag": "0008_forum_shared_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792463855738,
+      "tag": "0009_forum_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792463873136,
+      "tag": "0010_forum_timestamp_tz",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792464160305,
+      "tag": "0011_scene_turn_normalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792465088367,
+      "tag": "0012_wiki_reference_core",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792465740174,
+      "tag": "0013_legacy_import_pipeline",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792600000000,
+      "tag": "0014_wiki_portable_transfers",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793644071000,
+      "tag": "0015_wiki_sections",
+      "breakpoints": true
     }
   ]
 }

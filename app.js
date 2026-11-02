@@ -112,32 +112,10 @@ var DB = {
   session: null
 };
 
-function saveDB() {
-  try { localStorage.setItem('forum-antigo-db-v22', JSON.stringify(DB)); } catch (e) {}
-}
-
 function loadDB() {
-  try {
-    var saved = localStorage.getItem('forum-antigo-db-v22');
-    if (saved) {
-      var parsed = JSON.parse(saved);
-      if (parsed && parsed.nextUserId) {
-        DB = parsed;
-      }
-    }
-  } catch (e) {}
-
-  if (!Array.isArray(DB.wikiPosts)) {
-    DB.wikiPosts = [];
-  } else {
-    DB.wikiPosts = DB.wikiPosts.filter(function(w) { return w && w.id !== 101; });
-  }
-  if (!DB.nextWikiPostId) DB.nextWikiPostId = 1;
-
-  if (DB.session) {
-    var liveUser = DB.users.find(function(u) { return u.id === DB.session.id; });
-    DB.session = liveUser || null;
-  }
+  // Do not replay old browser-local forum/account state into shared screens.
+  // The legacy key remains byte-for-byte available to legacy-recovery.html.
+  DB.session = null;
 }
 
 function h(text) {
@@ -154,12 +132,15 @@ function ha(text) {
   return h(text);
 }
 
-function formatPost(content) {
-  return content;
+function jsArg(value) {
+  var serialized = JSON.stringify(String(value)).replace(/[<>&\u2028\u2029]/g, function(character) {
+    return '\\u' + character.charCodeAt(0).toString(16).padStart(4, '0');
+  });
+  return ha(serialized);
 }
 
-function getUserById(id) {
-  return DB.users.find(function(u) { return String(u.id) === String(id) || (u.serverId && String(u.serverId) === String(id)); });
+function formatPost(content) {
+  return content;
 }
 
 function isAdmin() {
@@ -203,11 +184,6 @@ function podeEditarTurno(turno) {
   return false;
 }
 
-function bumpPosts() {
-  if (!DB.session) return;
-  DB.session.posts = (DB.session.posts || 0) + 1;
-}
-
 function countWordsFromHtml(html) {
   var plain = String(html || '').replace(/<[^>]+>/g, ' ').trim();
   if (!plain) return 0;
@@ -229,11 +205,86 @@ var currentCat = null;
 var currentPersonagem = null;
 var currentCena = null;
 var editandoThread = null;
+var serverForumCategories = null;
+var serverForumThreads = Object.create(null);
+var forumLandingLoaded = false;
+var serverForumThread = null;
+var serverForumPosts = null;
+var serverForumPostsPage = { limit: 20, offset: 0, hasMore: false };
+var forumLandingLoading = false;
+var forumCategoryLoading = Object.create(null);
+var forumThreadLoading = false;
+var forumThreadLoadingId = null;
+var forumThreadRequestSequence = 0;
+var forumLoadError = null;
+var pendingTopicKey = null;
+var pendingTopicPayload = null;
+var pendingReplyKey = null;
+var pendingReplyPayload = null;
+var forumDraftRestoreSequence = 0;
+var FORUM_DRAFT_VERSION = 1;
+var wikiArticleFileState = createWikiArticleFileState();
+var wikiStaffState = { items: null, article: null, loading: false, error: null };
+var serverWikiPages = null;
+var serverWikiSections = null;
+var wikiSectionsLoading = false;
+var wikiSectionsError = null;
+var wikiSectionsGeneration = 0;
+var serverWikiCategories = null;
+var wikiCategoriesLoading = false;
+var wikiCategoriesError = null;
+var wikiPagesLoadError = null;
+var wikiPagesLoading = false;
+var currentWikiSlug = null;
+var currentWikiPageId = null;
+var currentWikiArticle = null;
+var wikiArticleLoading = false;
+var wikiArticleLoadingSlug = null;
+var wikiArticleLoadError = null;
+var wikiArticleLoadErrorSlug = null;
+var wikiArticleRequestSequence = 0;
+var wikiBacklinksState = { pageId: null, items: [], loading: false, loaded: false, hasMore: false, error: null };
+var wikiBacklinksRequestSequence = 0;
+var wikiProposalState = { items: [], staffItems: [], loading: false, loaded: false, error: null };
+var wikiProposalRequestSequence = 0;
+var wikiEditorPage = null;
+var wikiEditorLoading = false;
+var wikiEditorLoadingId = null;
+var wikiEditorError = null;
+var wikiEditorErrorId = null;
+var wikiEditorLoadedId = null;
+var wikiEditorRequestSequence = 0;
+var wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+var wikiEditorDiffState = { pageId: null, beforeRevisionId: '', afterRevisionId: '', loading: false, error: null, result: null };
+var wikiEditorDiffRequestSequence = 0;
+var wikiEditorDiscussionState = {
+  pageId: null, categories: null, selectedCategoryId: '', threads: [], loadingCategories: false,
+  loadingThreads: false, error: null, currentThread: null, currentThreadId: null,
+  loadingCurrentThread: false, saving: false,
+};
+var wikiEditorDiscussionRequestSequence = 0;
+var wikiEditorDraftRestoreKey = null;
+var wikiEditorDraftRestorePending = false;
+var wikiEditorDraftRestoreError = null;
+var wikiEditorDraftRestoreCompleteKey = null;
+var wikiProposalDraftRestorePending = false;
+var wikiProposalDraftRestoreError = null;
+var wikiProposalDraftSafeHtml = null;
+var wikiProposalDraftSafeHtmlKey = null;
+var wikiProposalDetail = null;
+var wikiProposalDetailLoading = false;
+var wikiProposalDetailLoadingId = null;
+var wikiProposalDetailError = null;
+var wikiProposalDetailErrorId = null;
+var wikiProposalDetailRequestSequence = 0;
+var wikiProposalPage = null;
+var WIKI_DRAFT_VERSION = 1;
 
 // Filtros de UI
 var forumFilterSearch = '';
 var forumFilterTag = 'all';
 var wikiFilterSearch = '';
+var wikiFilterCategory = 'all';
 var wikiFilterCat = 'all';
 var wikiFilterRaca = 'all';
 var wikiSortBy = 'default';
@@ -241,19 +292,107 @@ var cenasFilterSearch = '';
 var cenasFilterCat = 'all';
 var cenasFilterStatus = 'all';
 var turnSortOrder = 'asc';
+var adminState = { users: [], categories: [], events: [], userPage: { limit: 50, offset: 0, hasMore: false }, loading: false, loaded: false, error: null };
+var adminLoadSequence = 0;
+var adminWikiTransferState = createAdminWikiTransferState();
 
-function navigate(page, extra) {
+function createAdminWikiTransferState() {
+  return {
+    pages: [], pagesLoading: false, pagesLoaded: false, pagesError: null,
+    exportPageIds: [], exportPending: false, exportError: null, exportMessage: null,
+    fileName: '', bundle: null, importPending: false, importError: null,
+    importId: null, importVersion: null, importPlanHash: null, importPreview: null,
+    importPageIds: [], importConfirmed: false, refreshPending: false,
+    commitPending: false, commitError: null, commitMessage: null, commitReport: null,
+  };
+}
+
+function routePath(page, extra) {
+  if (page === 'forum') return '/forum';
+  if (page === 'cat' && typeof extra === 'string') return '/forum/categorias/' + encodeURIComponent(extra);
+  if (page === 'thread' && typeof extra === 'string') return '/forum/topicos/' + encodeURIComponent(extra);
+  if (page === 'wiki') return '/wiki';
+  if (page === 'wikiStaff') return '/wiki/equipe';
+  if (page === 'wikiStaffArticle' && typeof extra === 'string') return '/wiki/rascunhos/' + encodeURIComponent(extra);
+  if (page === 'wikiArticle' && typeof extra === 'string') return '/wiki/' + encodeURIComponent(extra);
+  if (page === 'wikiCreate') return '/wiki/novo';
+  if (page === 'wikiEditor' && typeof extra === 'string') return '/wiki/editor/' + encodeURIComponent(extra);
+  if (page === 'wikiEditor') return '/wiki/editor';
+  if (page === 'wikiProposals') return '/wiki/propostas';
+  if (page === 'wikiProposal' && typeof extra === 'string') return '/wiki/propostas/' + encodeURIComponent(extra);
+  if (page === 'personagens') return '/personagens';
+  if (page === 'personagemView' && typeof extra === 'string') return '/personagens/' + encodeURIComponent(extra);
+  if (page === 'cenas') return '/cenas';
+  if (page === 'cenaView' && typeof extra === 'string') return '/cenas/' + encodeURIComponent(extra);
+  if (page === 'admin') return '/admin';
+  return null;
+}
+
+function parseRouteFromLocation() {
+  var path = window.location.pathname;
+  var match;
+  if (path === '/' || path === '/index.html' || path === '/forum') {
+    currentPage = 'forum';
+    currentCat = null;
+    currentThread = null;
+    if (path !== '/forum') window.history.replaceState({ page: 'forum' }, '', '/forum');
+    return;
+  }
+  match = path.match(/^\/forum\/categorias\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'cat'; currentCat = decodeURIComponent(match[1]); return; }
+  match = path.match(/^\/forum\/topicos\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'thread'; currentThread = decodeURIComponent(match[1]); return; }
+  if (path === '/wiki') {
+    currentPage = 'wiki';
+    var category = new URL(window.location.href).searchParams.get('categoria');
+    wikiFilterCategory = category && /^[a-z0-9][a-z0-9-]{0,99}$/.test(category) ? category : 'all';
+    return;
+  }
+  if (path === '/wiki/equipe') { currentPage = 'wikiStaff'; return; }
+  match = path.match(/^\/wiki\/rascunhos\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'wikiStaffArticle'; currentWikiPageId = match[1].toLowerCase(); return; }
+  if (path === '/wiki/novo') { currentPage = 'wikiCreate'; currentWikiPageId = null; return; }
+  if (path === '/wiki/editor') { currentPage = 'wikiEditor'; currentWikiPageId = null; return; }
+  match = path.match(/^\/wiki\/editor\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'wikiEditor'; currentWikiPageId = decodeURIComponent(match[1]).toLowerCase(); return; }
+  if (path === '/wiki/propostas') { currentPage = 'wikiProposals'; return; }
+  match = path.match(/^\/wiki\/propostas\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'wikiProposal'; currentWikiPageId = decodeURIComponent(match[1]).toLowerCase(); return; }
+  match = path.match(/^\/wiki\/([a-z0-9][a-z0-9_-]{0,119})$/i);
+  if (match) { currentPage = 'wikiArticle'; currentWikiSlug = decodeURIComponent(match[1]); return; }
+  if (path === '/personagens') { currentPage = 'personagens'; return; }
+  if (path === '/admin') { currentPage = 'admin'; return; }
+  match = path.match(/^\/personagens\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'personagemView'; currentPersonagem = decodeURIComponent(match[1]); return; }
+  if (path === '/cenas') { currentPage = 'cenas'; return; }
+  match = path.match(/^\/cenas\/([0-9a-f-]{36})$/i);
+  if (match) { currentPage = 'cenaView'; currentCena = decodeURIComponent(match[1]); return; }
+  currentPage = 'notFound';
+}
+
+function navigate(page, extra, options) {
+  if (page === 'wiki') wikiFilterCategory = 'all';
+  if (page === 'wikiStaff' || page === 'wikiStaffArticle') wikiStaffState = { items: null, article: null, loading: false, error: null };
   currentPage = page;
   if (extra !== undefined) {
     if (page === 'thread') currentThread = extra;
     if (page === 'cat') currentCat = extra;
     if (page === 'personagemView') currentPersonagem = extra;
     if (page === 'cenaView') currentCena = extra;
+    if (page === 'wikiArticle') currentWikiSlug = extra;
+    if (page === 'wikiEditor' || page === 'wikiStaffArticle') currentWikiPageId = extra;
+    if (page === 'wikiProposal') currentWikiPageId = extra;
+  }
+  var destination = routePath(page, extra);
+  if (destination && !(options && options.fromHistory) && window.location.pathname + (window.location.search || '') + (window.location.hash || '') !== destination) {
+    if (options && options.replace) window.history.replaceState({ page: page, id: extra }, '', destination);
+    else window.history.pushState({ page: page, id: extra }, '', destination);
   }
   document.querySelectorAll('#nav-bar button').forEach(function(b) { b.classList.remove('active'); });
   var navMap = {
     forum: 'nav-forum', cat: 'nav-forum', thread: 'nav-forum', novaThread: 'nav-forum',
-    wiki: 'nav-wiki', personagemView: 'nav-wiki', novoPersonagem: 'nav-wiki',
+    wiki: 'nav-wiki', wikiStaff: 'nav-wiki', wikiStaffArticle: 'nav-wiki', wikiArticle: 'nav-wiki', wikiEditor: 'nav-wiki', wikiCreate: 'nav-wiki', wikiProposals: 'nav-wiki', wikiProposal: 'nav-wiki',
+    personagens: 'nav-personagens', personagemView: 'nav-personagens', novoPersonagem: 'nav-personagens',
     cenas: 'nav-cenas', cenaView: 'nav-cenas', novaCena: 'nav-cenas',
     sobre: 'nav-sobre',
     perfil: null, registro: null, admin: null
@@ -262,8 +401,16 @@ function navigate(page, extra) {
   if (navId) { var el = document.getElementById(navId); if (el) el.classList.add('active'); }
   updateTopBar();
   render();
+  if (page === 'admin') loadAdminData(false);
   window.scrollTo(0, 0);
 }
+
+window.addEventListener('popstate', function() {
+  parseRouteFromLocation();
+  if (currentPage === 'wikiStaff' || currentPage === 'wikiStaffArticle') wikiStaffState = { items: null, article: null, loading: false, error: null };
+  updateTopBar();
+  render();
+});
 
 function updateTopBar() {
   var info = document.getElementById('top-user-info');
@@ -309,35 +456,6 @@ function switchModTab(btnEl, paneId) {
   if (target) target.classList.add('active');
 }
 
-function openUserProfileModal(userId) {
-  var u = getUserById(userId);
-  if (!u) return;
-  var initials = (u.username || '??').substring(0, 2).toUpperCase();
-  var uThreads = DB.threads.filter(function(t) { return String(t.authorId) === String(u.id); });
-  var html = '<div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;">';
-  if (u.avatar) {
-    html += '<img src="' + ha(u.avatar) + '" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:1px solid var(--border-medium);">';
-  } else {
-    html += '<div style="width:64px;height:64px;border-radius:50%;background:#111;border:1px solid var(--border-medium);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:18px;color:#fff;">' + h(initials) + '</div>';
-  }
-  html += '<div><h3 style="font-size:16px;color:#fff;margin-bottom:4px;">' + h(u.username) + ' ' + badgeHtml(u) + '</h3>';
-  html += '<div style="font-size:12px;color:var(--text-secondary);">' + h(u.title || 'Membro') + ' &middot; Desde ' + h(u.joinDate || '2026') + '</div></div></div>';
-  if (u.bio) {
-    html += '<div style="padding:12px;background:#0c0c0c;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);font-size:12.5px;color:var(--text-secondary);margin-bottom:14px;">' + h(u.bio) + '</div>';
-  }
-  html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Tópicos criados (' + uThreads.length + ')</div>';
-  if (uThreads.length) {
-    html += '<div style="display:flex;flex-direction:column;gap:6px;">';
-    uThreads.slice(0, 6).forEach(function(t) {
-      html += '<a onclick="closeModal();navigate(\'thread\',' + t.id + ')" style="padding:8px 10px;background:#0c0c0c;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);font-size:12.5px;">' + h(t.title) + '</a>';
-    });
-    html += '</div>';
-  } else {
-    html += '<div style="font-size:12px;color:var(--text-muted);">Nenhum tópico publicado.</div>';
-  }
-  showModal('Perfil de ' + u.username, html);
-}
-
 function render() {
   var el = document.getElementById('main');
   var map = {
@@ -346,6 +464,14 @@ function render() {
     thread: renderThread,
     novaThread: renderNovaThread,
     wiki: renderWiki,
+    wikiStaff: renderWikiStaff,
+    wikiStaffArticle: renderWikiStaffArticle,
+    wikiArticle: renderWikiArticle,
+    wikiCreate: renderWikiEditor,
+    wikiEditor: renderWikiEditor,
+    wikiProposals: renderWikiProposals,
+    wikiProposal: renderWikiProposal,
+    personagens: renderPersonagens,
     personagemView: renderPersonagemView,
     novoPersonagem: renderNovoPersonagem,
     cenas: renderCenas,
@@ -361,6 +487,18 @@ function render() {
   } else {
     el.innerHTML = '<p>Página não encontrada.</p>';
   }
+  restoreResourceFormDraft();
+  addResourceDraftNotice();
+  restoreForumDraftForCurrentRoute();
+  if (currentPage === 'wikiEditor' || currentPage === 'wikiCreate') restoreWikiEditorDraftContent();
+  if (currentPage === 'wikiArticle') restoreWikiProposalDraftContent();
+  if ((currentPage === 'wikiArticle' || currentPage === 'wikiStaffArticle') && window.location.hash) {
+    setTimeout(function() {
+      try { var target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        if (target && typeof target.scrollIntoView === 'function') target.scrollIntoView();
+      } catch (_error) {}
+    }, 0);
+  }
 }
 
 // ==================== FÓRUM ====================
@@ -370,6 +508,14 @@ function onForumFilterChange() {
   var tEl = document.getElementById('forum-tag-select');
   if (sEl) forumFilterSearch = sEl.value;
   if (tEl) forumFilterTag = tEl.value;
+  if (currentPage === 'forum') {
+    forumLandingLoaded = false;
+    serverForumThreads = Object.create(null);
+    loadForumLanding(true);
+  } else if (currentPage === 'cat') {
+    delete serverForumThreads[String(currentCat)];
+    loadForumCategory(currentCat, true);
+  }
   render();
   var sAfter = document.getElementById('forum-search-input');
   if (sAfter) {
@@ -378,11 +524,739 @@ function onForumFilterChange() {
   }
 }
 
+function forumApi() {
+  return window.Aetherverse;
+}
+
+function loadForumLanding(force) {
+  if (forumLandingLoading || (!force && forumLandingLoaded)) return;
+  forumLandingLoading = true;
+  forumLoadError = null;
+  forumApi().apiRequest('GET', '/api/forum/categories').then(function(categoryResponse) {
+    serverForumCategories = Array.isArray(categoryResponse.data) ? categoryResponse.data : [];
+    return Promise.all(serverForumCategories.map(function(category) {
+      var params = { limit: '100', offset: '0' };
+      if (forumFilterSearch.trim()) params.search = forumFilterSearch.trim();
+      if (forumFilterTag !== 'all') params.tag = forumFilterTag;
+      var query = new URLSearchParams(params);
+      return forumApi().apiRequest('GET', '/api/forum/categories/' + encodeURIComponent(category.id) + '/threads?' + query.toString())
+        .then(function(response) { serverForumThreads[category.id] = Array.isArray(response.data) ? response.data : []; });
+    }));
+  }).then(function() {
+    forumLandingLoaded = true;
+  }).catch(function(error) {
+    forumLoadError = error && error.message ? error.message : 'Não foi possível carregar o fórum.';
+  }).finally(function() {
+    forumLandingLoading = false;
+    if (currentPage === 'forum') render();
+  });
+}
+
+function loadForumCategory(categoryId, force) {
+  var key = String(categoryId);
+  if (forumCategoryLoading[key] || (!force && serverForumCategories && serverForumCategories.some(function(category) { return String(category.id) === key; }) && Object.hasOwn(serverForumThreads, key))) return;
+  forumCategoryLoading[key] = true;
+  forumLoadError = null;
+  if (!serverForumCategories) {
+    forumApi().apiRequest('GET', '/api/forum/categories').then(function(response) {
+      serverForumCategories = Array.isArray(response.data) ? response.data : [];
+    }).catch(function(error) {
+      forumLoadError = error && error.message ? error.message : 'Não foi possível carregar as categorias.';
+      throw error;
+    }).then(function() {
+      return forumApi().apiRequest('GET', forumCategoryThreadsUrl(key));
+    }).then(function(response) {
+      serverForumThreads[key] = Array.isArray(response.data) ? response.data : [];
+    }).catch(function(error) {
+      forumLoadError = forumLoadError || (error && error.message ? error.message : 'Não foi possível carregar esta categoria.');
+    }).finally(function() {
+      delete forumCategoryLoading[key];
+      if (currentPage === 'cat' && String(currentCat) === key) render();
+    });
+    return;
+  }
+  forumApi().apiRequest('GET', forumCategoryThreadsUrl(key))
+    .then(function(response) { serverForumThreads[key] = Array.isArray(response.data) ? response.data : []; })
+    .catch(function(error) { forumLoadError = error && error.message ? error.message : 'Não foi possível carregar esta categoria.'; })
+    .finally(function() {
+      delete forumCategoryLoading[key];
+      if (currentPage === 'cat' && String(currentCat) === key) render();
+    });
+}
+
+function forumCategoryThreadsUrl(categoryId) {
+  var params = { limit: '100', offset: '0' };
+  if (forumFilterSearch.trim()) params.search = forumFilterSearch.trim();
+  if (forumFilterTag !== 'all') params.tag = forumFilterTag;
+  return '/api/forum/categories/' + encodeURIComponent(categoryId) + '/threads?' + new URLSearchParams(params).toString();
+}
+
+function loadForumThread(threadId, options) {
+  var key = String(threadId);
+  if ((forumThreadLoading && String(forumThreadLoadingId) === key)
+      || (!(options && options.force) && serverForumThread && String(serverForumThread.id) === key && Array.isArray(serverForumPosts))) return;
+  forumThreadLoading = true;
+  forumThreadLoadingId = key;
+  var requestSequence = ++forumThreadRequestSequence;
+  forumLoadError = null;
+  var offset = options && options.offset ? options.offset : 0;
+  if (offset === 0) {
+    serverForumThread = null;
+    serverForumPosts = null;
+    serverForumPostsPage = { limit: 20, offset: 0, hasMore: false };
+  }
+  Promise.all([
+    forumApi().apiRequest('GET', '/api/forum/threads/' + encodeURIComponent(key)),
+    forumApi().apiRequest('GET', '/api/forum/threads/' + encodeURIComponent(key) + '/posts?limit=20&offset=' + offset),
+  ]).then(function(responses) {
+    if (requestSequence !== forumThreadRequestSequence) return;
+    serverForumThread = responses[0].data;
+    var postsResponse = responses[1];
+    var nextPosts = Array.isArray(postsResponse.data) ? postsResponse.data : [];
+    serverForumPosts = offset ? (serverForumPosts || []).concat(nextPosts) : nextPosts;
+    serverForumPostsPage = postsResponse.page || { limit: 20, offset: offset, hasMore: false };
+  }).catch(function(error) {
+    if (requestSequence !== forumThreadRequestSequence) return;
+    forumLoadError = error && error.message ? error.message : 'Não foi possível carregar esta conversa.';
+  }).finally(function() {
+    if (requestSequence === forumThreadRequestSequence) {
+      forumThreadLoading = false;
+      forumThreadLoadingId = null;
+      if (currentPage === 'thread' && String(currentThread) === key) render();
+    }
+  });
+}
+
+function loadMoreForumPosts() {
+  if (!serverForumThread || forumThreadLoading || !serverForumPostsPage.hasMore) return;
+  loadForumThread(serverForumThread.id, { force: true, offset: serverForumPosts.length });
+}
+
+function newForumIdempotencyKey() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(character) {
+    var random = Math.random() * 16 | 0;
+    return (character === 'x' ? random : (random & 3 | 8)).toString(16);
+  });
+}
+
+var RESOURCE_DRAFT_VERSION = 1;
+var resourceDraftRestored = Object.create(null);
+var resourceDraftRestorePending = Object.create(null);
+var resourceDraftSubmissionPending = Object.create(null);
+var localDraftWriteFailureNotices = Object.create(null);
+var editingTurnId = null;
+var editingForumPostId = null;
+
+function reportLocalDraftWrite(key, saved) {
+  if (!key) return saved;
+  if (saved) {
+    delete localDraftWriteFailureNotices[key];
+  } else if (!localDraftWriteFailureNotices[key]) {
+    localDraftWriteFailureNotices[key] = true;
+    showAlert('Não foi possível salvar o rascunho local neste navegador. Mantenha esta página aberta se a solicitação falhar.', 'error');
+  }
+  return saved;
+}
+
+function resourceFormDraftDescriptor() {
+  if (!DB.session) return null;
+  if (document.getElementById('edit-turn-editor') && editingTurnId !== null) {
+    return { kind: 'turn-edit', resourceId: String(currentCena) + ':' + String(editingTurnId), turnId: String(editingTurnId), sceneId: String(currentCena) };
+  }
+  if (document.getElementById('edit-post-editor') && editingForumPostId !== null) {
+    return { kind: 'forum-post-edit', resourceId: String(editingForumPostId), postId: String(editingForumPostId) };
+  }
+  if (currentPage === 'perfil' && document.getElementById('prof-title')) {
+    return { kind: 'profile', resourceId: 'profile' };
+  }
+  if (currentPage === 'novoPersonagem' && document.getElementById('p-nome')) {
+    return { kind: 'character', resourceId: sessionStorage.getItem('editPersonagemId') || 'new' };
+  }
+  if (currentPage === 'novaCena' && document.getElementById('c-titulo')) {
+    return { kind: 'scene', resourceId: sessionStorage.getItem('editCenaId') || 'new' };
+  }
+  if (currentPage === 'cenaView' && document.getElementById('turn-editor')) {
+    return { kind: 'turn', resourceId: String(currentCena) };
+  }
+  return null;
+}
+
+function resourceFormDraftKey(descriptor, accountId) {
+  if (!descriptor || !descriptor.kind) return null;
+  accountId = accountId || forumDraftAccountId();
+  if (!accountId || accountId === 'anonymous' || !/^[0-9a-f-]{36}$/i.test(accountId)) return null;
+  return 'aetherverse:form-draft:v' + RESOURCE_DRAFT_VERSION + ':' + encodeURIComponent(accountId) + ':'
+    + descriptor.kind + ':' + encodeURIComponent(String(descriptor.resourceId));
+}
+
+function captureResourceFormDraft(descriptor) {
+  try {
+    if (descriptor.kind === 'profile') {
+      return {
+        title: (document.getElementById('prof-title') || {}).value || '',
+        avatar: (document.getElementById('prof-avatar') || {}).value || '',
+        bio: (document.getElementById('prof-bio') || {}).value || ''
+      };
+    }
+    if (descriptor.kind === 'character') return lerFormPersonagem();
+    if (descriptor.kind === 'scene') return lerFormularioCena();
+    if (descriptor.kind === 'turn') return readTurnFormValues(false);
+    if (descriptor.kind === 'turn-edit') return readTurnFormValues(true);
+    if (descriptor.kind === 'forum-post-edit') {
+      return {
+        content: getEditorContent('edit-post-editor'),
+        summary: (document.getElementById('edit-post-summary') || {}).value || ''
+      };
+    }
+  } catch (_) { return null; }
+  return null;
+}
+
+function writeResourceFormDraft(descriptor, values) {
+  var accountId = forumDraftAccountId();
+  var key = resourceFormDraftKey(descriptor, accountId);
+  if (!key) return false;
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return reportLocalDraftWrite(key, false);
+  var record = { version: RESOURCE_DRAFT_VERSION, accountId: accountId, kind: descriptor.kind,
+    resourceId: String(descriptor.resourceId), updatedAt: new Date().toISOString(), values: values };
+  var serialized;
+  try {
+    serialized = JSON.stringify(record);
+    if (serialized.length > 1000000) return reportLocalDraftWrite(key, false);
+    window.localStorage.setItem(key, serialized);
+    return reportLocalDraftWrite(key, true);
+  } catch (_) { return reportLocalDraftWrite(key, false); }
+}
+
+function readResourceFormDraftRecord(descriptor, accountId) {
+  var currentAccountId = accountId || forumDraftAccountId();
+  var key = resourceFormDraftKey(descriptor, currentAccountId);
+  if (!key) return null;
+  try {
+    var serialized = window.localStorage.getItem(key);
+    if (!serialized || serialized.length > 1000000) return null;
+    var record = JSON.parse(serialized);
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || record.version !== RESOURCE_DRAFT_VERSION || record.accountId !== currentAccountId
+      || record.kind !== descriptor.kind || record.resourceId !== String(descriptor.resourceId)
+      || !record.values || typeof record.values !== 'object' || Array.isArray(record.values)) return null;
+    return record;
+  } catch (_) { return null; }
+}
+
+function readResourceFormDraft(descriptor, accountId) {
+  var record = readResourceFormDraftRecord(descriptor, accountId);
+  return record ? record.values : null;
+}
+
+function clearResourceFormDraft(descriptor, accountId) {
+  var key = resourceFormDraftKey(descriptor, accountId);
+  if (!key) return;
+  try { window.localStorage.removeItem(key); } catch (_) { /* Draft cleanup is best-effort. */ }
+  delete resourceDraftRestored[key];
+}
+
+function saveActiveResourceFormDraft() {
+  var descriptor = resourceFormDraftDescriptor();
+  if (!descriptor) return null;
+  var values = captureResourceFormDraft(descriptor);
+  if (!values) return reportLocalDraftWrite(resourceFormDraftKey(descriptor), false);
+  var saved = writeResourceFormDraft(descriptor, values);
+  return saved ? { descriptor: descriptor, values: values } : false;
+}
+
+function initializeResourceFormDraftPersistence() {
+  ['main', 'modal-container'].forEach(function(id) {
+    var root = document.getElementById(id);
+    if (!root || root.__resourceDraftPersistence) return;
+    root.__resourceDraftPersistence = true;
+    ['input', 'change', 'click'].forEach(function(eventName) {
+      root.addEventListener(eventName, function(event) {
+        var descriptor = resourceFormDraftDescriptor();
+        if (!descriptor) return;
+        var formRootId = descriptor.kind === 'turn-edit' || descriptor.kind === 'forum-post-edit'
+          ? 'modal-container' : 'main';
+        // A click in the page can open an edit modal. Do not let that click
+        // overwrite the modal's existing draft with the server version used
+        // to initialize the editor.
+        if (root.id !== formRootId) return;
+        if (eventName === 'click' && event.target && event.target.closest
+          && event.target.closest('button') && (event.target.closest('button').type === 'submit'
+            || event.target.closest('button').hasAttribute('data-resource-draft-discard'))) return;
+        saveActiveResourceFormDraft();
+      });
+    });
+  });
+}
+
+function readTurnFormValues(editing) {
+  var prefix = editing ? 'edit-turn' : 'turn';
+  var containerId = editing ? 'edit-turn-extra-imgs' : 'turn-extra-images-list';
+  var values = {
+    characterName: ((document.getElementById(prefix + '-char-name') || {}).value || '').trim(),
+    characterTitle: ((document.getElementById(prefix + '-char-title') || {}).value || '').trim(),
+    characterAvatar: ((document.getElementById(prefix + '-char-avatar') || {}).value || '').trim(),
+    turnTitle: ((document.getElementById(prefix + '-title') || {}).value || '').trim(),
+    location: ((document.getElementById(prefix + '-location') || {}).value || '').trim(),
+    accentColor: (document.getElementById(prefix + '-accent') || {}).value || '#ffffff',
+    banner: ((document.getElementById(prefix + (editing ? '-banner' : '-banner-url')) || {}).value || '').trim(),
+    bannerStyle: (document.getElementById(prefix + '-banner-style') || {}).value || 'panoramic',
+    images: lerImagensExtrasTurno(containerId),
+    content: getEditorContent(prefix + '-editor'),
+    oocNotes: ((document.getElementById(prefix + '-ooc') || {}).value || '').trim()
+  };
+  if (!editing) values.fontFamily = (document.getElementById('turn-font') || {}).value || 'serif';
+  return values;
+}
+
+function restoreResourceFields(values, fields) {
+  Object.keys(fields).forEach(function(name) {
+    var target = document.getElementById(fields[name]);
+    var value = values && values[name];
+    if (!target || value === undefined || value === null) return;
+    if (target.type === 'checkbox') target.checked = value === true;
+    else if (typeof value === 'string' || typeof value === 'number') target.value = String(value);
+  });
+}
+
+function applyResourceFormDraft(descriptor, values, safe) {
+  if (descriptor.kind === 'profile') {
+    restoreResourceFields(values, { title: 'prof-title', avatar: 'prof-avatar', bio: 'prof-bio' });
+  } else if (descriptor.kind === 'character') {
+    restoreResourceFields(values, {
+      nome: 'p-nome', categoria: 'p-categoria', titulo: 'p-titulo', raca: 'p-raca',
+      faccao: 'p-faccao', status: 'p-status', imagem: 'p-imagem', mascaraTier: 'p-mascara-tier'
+    });
+    if (values.stats && typeof values.stats === 'object' && !Array.isArray(values.stats)) {
+      STAT_KEYS.forEach(function(key) {
+        var target = document.getElementById('p-stat-' + key);
+        if (target && Object.hasOwn(values.stats, key)) target.value = String(values.stats[key]);
+      });
+    }
+    if (values.theme && typeof values.theme.accentColor === 'string') {
+      restoreResourceFields({ accentColor: values.theme.accentColor }, { accentColor: 'p-accent-color' });
+    }
+    var skillsRoot = document.getElementById('p-skills-list');
+    if (skillsRoot && Array.isArray(values.skills)) {
+      skillsRoot.innerHTML = '';
+      values.skills.slice(0, 500).forEach(function(skill) {
+        if (skill && typeof skill === 'object') skillsRoot.insertAdjacentHTML('beforeend', skillFormRowHtml(skill.nome || '', skill.descricao || '', skill.tipo || 'skill'));
+      });
+    }
+    applySafeResourceBlocks(safe && safe.blocks);
+    if (typeof values.descricao === 'string') setEditorContent('p-editor', safe ? safe.html : '');
+  } else if (descriptor.kind === 'scene') {
+    restoreResourceFields(values, {
+      titulo: 'c-titulo', subtitulo: 'c-subtitulo', categoria: 'c-categoria', status: 'c-status',
+      resumo: 'c-resumo', banner: 'c-banner'
+    });
+    var theme = values.theme || {};
+    restoreResourceFields(theme, {
+      accentColor: 'c-accent', bannerStyle: 'c-banner-style', layout: 'c-layout',
+      fontFamily: 'c-font', bgEffect: 'c-bg-effect', bgm: 'c-bgm'
+    });
+    var infobox = values.infobox || {};
+    restoreResourceFields({ show: infobox.show, title: infobox.title, image: infobox.image, caption: infobox.caption, participants: Array.isArray(infobox.participants) ? infobox.participants.join(', ') : '' }, {
+      show: 'c-ib-show', title: 'c-ib-title', image: 'c-ib-image', caption: 'c-ib-caption', participants: 'c-ib-participants'
+    });
+    var fieldsRoot = document.getElementById('c-infobox-fields');
+    if (fieldsRoot && Array.isArray(infobox.fields)) {
+      fieldsRoot.innerHTML = '';
+      infobox.fields.slice(0, 500).forEach(function(field) {
+        if (field && typeof field === 'object') fieldsRoot.insertAdjacentHTML('beforeend', infoboxFieldRowHtml(field.label || '', field.value || ''));
+      });
+    }
+    applySafeResourceBlocks(safe && safe.blocks);
+    if (typeof values.descricao === 'string') setEditorContent('c-editor', safe ? safe.html : '');
+  } else if (descriptor.kind === 'turn' || descriptor.kind === 'turn-edit') {
+    var editing = descriptor.kind === 'turn-edit';
+    var p = editing ? 'edit-turn-' : 'turn-';
+    restoreResourceFields(values, {
+      characterName: p + 'char-name', characterTitle: p + 'char-title', characterAvatar: p + 'char-avatar',
+      turnTitle: p + 'title', location: p + 'location', accentColor: p + 'accent',
+      banner: p + (editing ? 'banner' : 'banner-url'), bannerStyle: p + 'banner-style',
+      oocNotes: p + 'ooc'
+    });
+    if (!editing) restoreResourceFields(values, { fontFamily: 'turn-font' });
+    var imageRoot = document.getElementById(editing ? 'edit-turn-extra-imgs' : 'turn-extra-images-list');
+    if (imageRoot && Array.isArray(values.images)) {
+      imageRoot.innerHTML = '';
+      values.images.slice(0, 500).forEach(function(image) {
+        if (image && typeof image === 'object') adicionarCampoImagemTurno(editing ? 'edit-turn-extra-imgs' : 'turn-extra-images-list', image.url || '', image.caption || '');
+      });
+    }
+    if (typeof values.content === 'string') setEditorContent(editing ? 'edit-turn-editor' : 'turn-editor', safe ? safe.html : '');
+  } else if (descriptor.kind === 'forum-post-edit') {
+    restoreResourceFields(values, { summary: 'edit-post-summary' });
+    if (typeof values.content === 'string') setEditorContent('edit-post-editor', safe ? safe.html : '');
+  }
+}
+
+function applySafeResourceBlocks(blocks) {
+  if (!Array.isArray(blocks)) return;
+  activeBuilderBlocks = JSON.parse(JSON.stringify(blocks));
+  var container = document.getElementById('modular-blocks-container');
+  if (container) container.innerHTML = renderBuilderBlocksList();
+}
+
+function restoreResourceFormDraft() {
+  var descriptor = resourceFormDraftDescriptor();
+  if (!descriptor) return;
+  var accountId = forumDraftAccountId();
+  var key = resourceFormDraftKey(descriptor, accountId);
+  if (!key || resourceDraftRestored[key] || resourceDraftRestorePending[key]) return;
+  var record = readResourceFormDraftRecord(descriptor, accountId);
+  if (!record) return;
+  var values = record.values;
+  var htmlField = descriptor.kind === 'character' || descriptor.kind === 'scene' ? 'descricao'
+    : descriptor.kind === 'turn' || descriptor.kind === 'turn-edit' || descriptor.kind === 'forum-post-edit' ? 'content' : null;
+  var hasBlocks = (descriptor.kind === 'character' || descriptor.kind === 'scene') && Array.isArray(values.blocks);
+  var needsPreview = !!htmlField && typeof values[htmlField] === 'string' || hasBlocks;
+  var restore = function(safe) {
+    var current = resourceFormDraftDescriptor();
+    delete resourceDraftRestorePending[key];
+    if (accountId !== forumDraftAccountId() || !current
+      || current.kind !== descriptor.kind || String(current.resourceId) !== String(descriptor.resourceId)) return;
+    var currentRecord = readResourceFormDraftRecord(descriptor, accountId);
+    if (!currentRecord) return;
+    if (JSON.stringify(currentRecord.values) !== JSON.stringify(values)) {
+      resourceDraftRestored[key] = true;
+      return;
+    }
+    applyResourceFormDraft(descriptor, values, safe);
+    resourceDraftRestored[key] = true;
+  };
+  if (!needsPreview) {
+    restore(null);
+    return;
+  }
+  var preview = {};
+  if (htmlField) preview.html = values[htmlField] || '';
+  if (hasBlocks) preview.blocks = values.blocks;
+  resourceDraftRestorePending[key] = true;
+  requestSafeContentPreview(preview).then(restore).catch(function() {
+    delete resourceDraftRestorePending[key];
+    var current = resourceFormDraftDescriptor();
+    if (accountId === forumDraftAccountId() && current && current.kind === descriptor.kind
+      && String(current.resourceId) === String(descriptor.resourceId)) {
+      showAlert('O rascunho local foi mantido, mas não pôde ser restaurado antes da validação segura do conteúdo.', 'error');
+    }
+  });
+}
+
+function addResourceDraftNotice() {
+  var descriptor = resourceFormDraftDescriptor();
+  if (!descriptor) return;
+  var accountId = forumDraftAccountId();
+  var key = resourceFormDraftKey(descriptor, accountId);
+  if (!key || !readResourceFormDraft(descriptor, accountId)) return;
+  var root = descriptor.kind === 'turn-edit' || descriptor.kind === 'forum-post-edit'
+    ? document.querySelector('#modal-container .modal-body') : document.getElementById('main');
+  if (!root || Array.from(root.querySelectorAll('[data-resource-draft-notice]')).some(function(item) {
+    return item.getAttribute('data-resource-draft-notice') === key;
+  })) return;
+  var notice = document.createElement('div');
+  notice.className = 'alert alert-info';
+  notice.setAttribute('data-resource-draft-notice', key);
+  var label = document.createElement('span');
+  label.textContent = 'Rascunho local da sua conta restaurado. Ele não substitui a versão compartilhada.';
+  var button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn-small';
+  button.setAttribute('data-resource-draft-discard', 'true');
+  button.textContent = 'Descartar rascunho';
+  button.addEventListener('click', discardActiveResourceFormDraft);
+  notice.append(label, button);
+  root.insertBefore(notice, root.firstChild);
+}
+
+function discardActiveResourceFormDraft() {
+  var descriptor = resourceFormDraftDescriptor();
+  if (!descriptor) return;
+  var kind = descriptor.kind;
+  var resourceId = descriptor.resourceId;
+  clearResourceFormDraft(descriptor);
+  if (kind === 'turn-edit') {
+    closeModal();
+    abrirModalEditarTurno(resourceId.slice(resourceId.indexOf(':') + 1));
+  } else if (kind === 'forum-post-edit') {
+    closeModal();
+    editPost(resourceId);
+  } else render();
+  showAlert('Rascunho local descartado.', 'success');
+}
+
+function beginResourceFormSubmission(key) {
+  if (resourceDraftSubmissionPending[key]) return null;
+  resourceDraftSubmissionPending[key] = true;
+  var button = document.activeElement && document.activeElement.closest
+    ? document.activeElement.closest('button') : null;
+  if (!button) button = document.querySelector('#main button.btn-primary:not(:disabled), #modal-container button.btn-primary:not(:disabled)');
+  if (button) button.disabled = true;
+  var finished = false;
+  return function() {
+    if (finished) return;
+    finished = true;
+    delete resourceDraftSubmissionPending[key];
+    if (button) button.disabled = false;
+  };
+}
+
+function forumDraftAccountId() {
+  if (!DB.session) return 'anonymous';
+  var id = DB.session.serverId || DB.session.id;
+  return typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id) ? id.toLowerCase() : null;
+}
+
+function forumDraftStorageKey(kind, resourceId, accountId) {
+  var validKinds = ['topic', 'topic-edit', 'reply'];
+  if (validKinds.indexOf(kind) === -1) return null;
+  accountId = accountId || forumDraftAccountId();
+  if (!accountId || (accountId !== 'anonymous' && !/^[0-9a-f-]{36}$/i.test(accountId))) return null;
+  return 'aetherverse:forum-draft:v' + FORUM_DRAFT_VERSION + ':' + encodeURIComponent(accountId) + ':'
+    + kind + ':' + encodeURIComponent(resourceId === null || resourceId === undefined ? 'new' : String(resourceId));
+}
+
+function forumDraftFields(kind) {
+  if (kind === 'topic') return { categoryId: 64, title: 200, tag: 8, content: 250000 };
+  if (kind === 'topic-edit') return { title: 200, tag: 8 };
+  if (kind === 'reply') return { content: 250000 };
+  return null;
+}
+
+function normalizeForumDraftValues(kind, values) {
+  var fields = forumDraftFields(kind);
+  if (!fields || !values || typeof values !== 'object' || Array.isArray(values)) return null;
+  var normalized = {};
+  var invalid = false;
+  Object.keys(fields).forEach(function(field) {
+    if (!Object.prototype.hasOwnProperty.call(values, field)) return;
+    var value = values[field];
+    if (typeof value !== 'string' || value.length > fields[field]) invalid = true;
+    else normalized[field] = value;
+  });
+  return invalid ? null : normalized;
+}
+
+function writeForumDraft(kind, resourceId, values, idempotencyKey) {
+  var accountId = forumDraftAccountId();
+  var key = forumDraftStorageKey(kind, resourceId, accountId);
+  var normalized = normalizeForumDraftValues(kind, values);
+  if (!key) return false;
+  if (!normalized) return reportLocalDraftWrite(key, false);
+  var record = { version: FORUM_DRAFT_VERSION, accountId: accountId, kind: kind,
+    resourceId: resourceId === null || resourceId === undefined ? 'new' : String(resourceId),
+    updatedAt: new Date().toISOString(), values: normalized };
+  if (typeof idempotencyKey === 'string' && /^[0-9a-f-]{36}$/i.test(idempotencyKey)) {
+    record.idempotencyKey = idempotencyKey.toLowerCase();
+  }
+  try {
+    window.localStorage.setItem(key, JSON.stringify(record));
+    return reportLocalDraftWrite(key, true);
+  } catch (_) {
+    return reportLocalDraftWrite(key, false);
+  }
+}
+
+function readForumDraft(kind, resourceId) {
+  var accountId = forumDraftAccountId();
+  var key = forumDraftStorageKey(kind, resourceId, accountId);
+  if (!key) return null;
+  try {
+    var raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    var record = JSON.parse(raw);
+    var expectedResourceId = resourceId === null || resourceId === undefined ? 'new' : String(resourceId);
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || record.version !== FORUM_DRAFT_VERSION || record.accountId !== accountId
+      || record.kind !== kind || record.resourceId !== expectedResourceId) return null;
+    var values = normalizeForumDraftValues(kind, record.values);
+    if (!values) return null;
+    return { values: values, idempotencyKey: typeof record.idempotencyKey === 'string'
+      && /^[0-9a-f-]{36}$/i.test(record.idempotencyKey) ? record.idempotencyKey.toLowerCase() : null };
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearForumDraft(kind, resourceId, accountId) {
+  var key = forumDraftStorageKey(kind, resourceId, accountId);
+  if (!key) return;
+  try { window.localStorage.removeItem(key); } catch (_) { /* Draft cleanup is best-effort. */ }
+}
+
+function activeForumDraftDescriptor() {
+  if (currentPage === 'novaThread') {
+    return editandoThread === null
+      ? { kind: 'topic', resourceId: 'new' }
+      : { kind: 'topic-edit', resourceId: String(editandoThread) };
+  }
+  if (currentPage === 'thread' && document.getElementById('reply-editor')) {
+    return { kind: 'reply', resourceId: String(currentThread) };
+  }
+  return null;
+}
+
+function forumDraftValuesFromForm(descriptor) {
+  if (!descriptor) return null;
+  if (descriptor.kind === 'topic') {
+    return {
+      categoryId: (document.getElementById('thread-cat') || {}).value || '',
+      title: (document.getElementById('thread-title') || {}).value || '',
+      tag: (document.getElementById('thread-tag') || {}).value || '',
+      content: typeof getEditorContent === 'function' ? getEditorContent('thread-editor') : ''
+    };
+  }
+  if (descriptor.kind === 'topic-edit') {
+    return { title: (document.getElementById('thread-title') || {}).value || '',
+      tag: (document.getElementById('thread-tag') || {}).value || '' };
+  }
+  return { content: typeof getEditorContent === 'function' ? getEditorContent('reply-editor') : '' };
+}
+
+function saveActiveForumDraft() {
+  var descriptor = activeForumDraftDescriptor();
+  if (!descriptor || !forumDraftAccountId() || forumDraftAccountId() === 'anonymous') return null;
+  var values = forumDraftValuesFromForm(descriptor);
+  var idempotencyKey = null;
+  if (descriptor.kind === 'topic') {
+    var topicPayload = { categoryId: values.categoryId, title: values.title, tag: values.tag, content: values.content };
+    var topicSerialized = JSON.stringify(topicPayload);
+    if (pendingTopicPayload && pendingTopicPayload !== topicSerialized) {
+      pendingTopicKey = null;
+      pendingTopicPayload = null;
+    }
+    if (pendingTopicKey && pendingTopicPayload === topicSerialized) idempotencyKey = pendingTopicKey;
+  } else if (descriptor.kind === 'reply') {
+    var replyPayload = { content: values.content };
+    var replySerialized = JSON.stringify(replyPayload);
+    if (pendingReplyPayload && pendingReplyPayload !== replySerialized) {
+      pendingReplyKey = null;
+      pendingReplyPayload = null;
+    }
+    if (pendingReplyKey && pendingReplyPayload === replySerialized) idempotencyKey = pendingReplyKey;
+  }
+  writeForumDraft(descriptor.kind, descriptor.resourceId, values, idempotencyKey);
+  return { descriptor: descriptor, values: values };
+}
+
+function forumDraftInputChanged(event) {
+  if (!event || !event.target || !document.getElementById('main')
+    || !document.getElementById('main').contains(event.target)) return;
+  saveActiveForumDraft();
+}
+
+function restoreForumDraftForCurrentRoute() {
+  var descriptor = activeForumDraftDescriptor();
+  if (!descriptor) return;
+  var draft = readForumDraft(descriptor.kind, descriptor.resourceId);
+  if (!draft) return;
+  var values = draft.values;
+  if (descriptor.kind === 'topic' || descriptor.kind === 'topic-edit') {
+    ['categoryId', 'title', 'tag'].forEach(function(field) {
+      if (typeof values[field] !== 'string') return;
+      var target = document.getElementById(field === 'categoryId' ? 'thread-cat' : 'thread-' + field);
+      if (target) target.value = values[field];
+    });
+    if (descriptor.kind === 'topic' && typeof values.content === 'string' && values.content) {
+      restoreForumEditorDraft('thread-editor', values.content, draft.idempotencyKey, descriptor);
+    } else if (descriptor.kind === 'topic' && draft.idempotencyKey) {
+      pendingTopicKey = draft.idempotencyKey;
+      pendingTopicPayload = JSON.stringify({ categoryId: values.categoryId || '', title: values.title || '',
+        tag: values.tag || '', content: values.content || '' });
+    }
+  } else if (typeof values.content === 'string' && values.content) {
+    restoreForumEditorDraft('reply-editor', values.content, draft.idempotencyKey, descriptor);
+  }
+}
+
+function restoreForumEditorDraft(editorId, html, idempotencyKey, descriptor) {
+  if (!window.Aetherverse || typeof window.Aetherverse.apiRequest !== 'function') return;
+  var accountId = forumDraftAccountId();
+  var editor = document.getElementById(editorId);
+  if (!editor || editor.innerHTML || !html) return;
+  var sequence = ++forumDraftRestoreSequence;
+  window.Aetherverse.apiRequest('POST', '/api/content/preview', { html: html }).then(function(response) {
+    var result = response && response.data && typeof response.data === 'object' ? response.data : response;
+    var active = activeForumDraftDescriptor();
+    if (sequence !== forumDraftRestoreSequence || accountId !== forumDraftAccountId()
+      || !descriptor || !active || active.kind !== descriptor.kind
+      || String(active.resourceId) !== String(descriptor.resourceId)) return;
+    editor = document.getElementById(editorId);
+    if (!editor || editor.innerHTML || !result || typeof result.html !== 'string') return;
+    if (typeof setEditorContent !== 'function' || !setEditorContent(editorId, result.html)) return;
+    if (descriptor.kind === 'topic' && idempotencyKey) {
+      var topicValues = forumDraftValuesFromForm(descriptor);
+      pendingTopicKey = idempotencyKey;
+      pendingTopicPayload = JSON.stringify({ categoryId: topicValues.categoryId, title: topicValues.title,
+        tag: topicValues.tag, content: topicValues.content });
+      writeForumDraft('topic', descriptor.resourceId, topicValues, idempotencyKey);
+    } else if (descriptor.kind === 'reply' && idempotencyKey) {
+      pendingReplyKey = idempotencyKey;
+      pendingReplyPayload = JSON.stringify({ content: getEditorContent(editorId) });
+      writeForumDraft('reply', descriptor.resourceId, { content: getEditorContent(editorId) }, idempotencyKey);
+    } else if (descriptor.kind === 'topic') {
+      writeForumDraft('topic', descriptor.resourceId, forumDraftValuesFromForm(descriptor));
+    } else if (descriptor.kind === 'reply') {
+      writeForumDraft('reply', descriptor.resourceId, { content: getEditorContent(editorId) });
+    }
+  }).catch(function() {
+    // Keep the account-scoped stored draft; it is never inserted unless the server validates it.
+  });
+}
+
+function clearForumDraftEditors() {
+  forumDraftRestoreSequence += 1;
+  ['thread-title', 'thread-cat', 'thread-tag'].forEach(function(id) {
+    var field = document.getElementById(id);
+    if (field) field.value = '';
+  });
+  ['thread-editor', 'reply-editor'].forEach(function(id) {
+    if (typeof setEditorContent === 'function') setEditorContent(id, '');
+    else {
+      var editor = document.getElementById(id);
+      if (editor) editor.textContent = '';
+    }
+  });
+  pendingTopicKey = null;
+  pendingTopicPayload = null;
+  pendingReplyKey = null;
+  pendingReplyPayload = null;
+}
+
+function initializeForumDraftPersistence() {
+  var main = document.getElementById('main');
+  if (!main || main.getAttribute('data-forum-drafts') === 'ready') return;
+  main.setAttribute('data-forum-drafts', 'ready');
+  main.addEventListener('input', forumDraftInputChanged);
+  main.addEventListener('change', forumDraftInputChanged);
+}
+
+function formatForumTimestamp(value) {
+  if (!value) return '';
+  var date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+function authorName(author) {
+  return author && author.username ? author.username : 'Membro sem identificação';
+}
+
+function forumThreadTag(tag) {
+  return ['ooc', 'rp', 'wiki'].includes(tag) ? tag : 'ooc';
+}
+
 function renderForum() {
+  if (!forumLandingLoaded) {
+    loadForumLanding(false);
+    if (forumLoadError) return '<div class="alert alert-error">' + h(forumLoadError) + ' <button class="btn btn-small" onclick="loadForumLanding(true)">Tentar novamente</button></div>';
+    return '<div class="alert alert-info">Carregando categorias e tópicos compartilhados…</div>';
+  }
   var html = '<div class="breadcrumb">Início / Fórum</div>';
 
   html += '<div class="filter-bar">';
-  html += '<input type="text" id="forum-search-input" value="' + ha(forumFilterSearch) + '" placeholder="Pesquisar tópicos por título ou conteúdo..." oninput="onForumFilterChange()">';
+  html += '<input type="text" id="forum-search-input" maxlength="100" value="' + ha(forumFilterSearch) + '" placeholder="Pesquisar tópicos por título..." oninput="onForumFilterChange()">';
   html += '<select id="forum-tag-select" onchange="onForumFilterChange()">';
   html += '<option value="all"' + (forumFilterTag === 'all' ? ' selected' : '') + '>Todas as Tags</option>';
   html += '<option value="ooc"' + (forumFilterTag === 'ooc' ? ' selected' : '') + '>OOC</option>';
@@ -390,196 +1264,221 @@ function renderForum() {
   html += '<option value="wiki"' + (forumFilterTag === 'wiki' ? ' selected' : '') + '>Wiki</option>';
   html += '</select>';
   if (DB.session) {
-    html += '<button class="btn btn-primary" onclick="startNewThread(1)">+ Novo Tópico</button>';
+    html += '<button class="btn btn-primary" onclick="startNewThread(' + idJs(serverForumCategories[0] ? serverForumCategories[0].id : '') + ')">+ Novo Tópico</button>';
   }
   html += '</div>';
 
   if (forumFilterSearch.trim() || forumFilterTag !== 'all') {
     var q = forumFilterSearch.toLowerCase().trim();
-    var matched = DB.threads.filter(function(t) {
+    var allThreads = Object.keys(serverForumThreads).reduce(function(result, key) {
+      return result.concat(serverForumThreads[key] || []);
+    }, []);
+    var matched = allThreads.filter(function(t) {
       if (forumFilterTag !== 'all' && (t.tag || 'ooc') !== forumFilterTag) return false;
-      if (q) {
-        var inTitle = (t.title || '').toLowerCase().indexOf(q) !== -1;
-        var inPosts = DB.posts.some(function(p) { return p.threadId === t.id && (p.content || '').toLowerCase().indexOf(q) !== -1; });
-        if (!inTitle && !inPosts) return false;
-      }
+      if (q && (t.title || '').toLowerCase().indexOf(q) === -1) return false;
       return true;
     });
     html += '<div class="cat-header"><span>Resultados da Busca (' + matched.length + ')</span><a class="btn btn-small" onclick="forumFilterSearch=\'\';forumFilterTag=\'all\';render()">Limpar Filtro</a></div>';
-    html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Respostas</th><th>Views</th></tr></thead><tbody>';
+    html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Publicações</th><th>Última atividade</th></tr></thead><tbody>';
     if (!matched.length) {
       html += '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px;">Nenhum tópico encontrado.</td></tr>';
     }
     matched.forEach(function(t) {
-      var author = getUserById(t.authorId);
-      var replies = Math.max(0, DB.posts.filter(function(p) { return p.threadId === t.id; }).length - 1);
+      var author = t.author;
       html += '<tr><td>';
       if (t.pinned) html += '<span class="pin">FIXADO</span> ';
       if (t.locked) html += '<span class="tag">TRANCADO</span> ';
-      html += '<span class="tag">' + (t.tag || 'ooc').toUpperCase() + '</span> ';
-      html += '<a onclick="navigate(\'thread\',' + t.id + ')" style="font-weight:600;color:#fff;">' + h(t.title) + '</a></td>';
-      html += '<td>' + (author ? '<a onclick="openUserProfileModal(' + author.id + ')">' + h(author.username) + '</a>' : '?') + '</td>';
-      html += '<td>' + replies + '</td><td>' + (t.views || 0) + '</td></tr>';
+      html += '<span class="tag">' + h(forumThreadTag(t.tag).toUpperCase()) + '</span> ';
+      html += '<a onclick="navigate(\'thread\',' + idJs(t.id) + ')" style="font-weight:600;color:#fff;">' + h(t.title) + '</a></td>';
+      html += '<td>' + h(authorName(author)) + '</td>';
+      html += '<td>' + (Number(t.postsCount) || 0) + '</td><td>' + h(formatForumTimestamp(t.lastActivityAt)) + '</td></tr>';
     });
     html += '</tbody></table>';
   }
 
-  DB.categories.forEach(function(cat) {
-    var catThreads = DB.threads.filter(function(t) { return t.catId === cat.id; });
-    var catPosts = 0;
-    catThreads.forEach(function(t) { catPosts += DB.posts.filter(function(p) { return p.threadId === t.id; }).length; });
-    var lastThread = catThreads.length ? catThreads[catThreads.length - 1] : null;
-    var lastInfo = lastThread ? ('<a onclick="navigate(\'thread\',' + lastThread.id + ')" style="font-weight:500;">' + h(lastThread.title.substring(0, 38)) + (lastThread.title.length > 38 ? '...' : '') + '</a><br><small style="color:var(--text-muted);">' + lastThread.date + '</small>') : '<span style="color:var(--text-muted);">Nenhum tópico</span>';
+  var totalTopics = 0;
+  var totalPosts = 0;
+  serverForumCategories.forEach(function(cat) {
+    var catThreads = serverForumThreads[cat.id] || [];
+    totalTopics += Number(cat.topicsCount) || 0;
+    totalPosts += Number(cat.postsCount) || 0;
+    var lastThread = catThreads.length ? catThreads[0] : null;
+    var lastInfo = lastThread ? ('<a onclick="navigate(\'thread\',' + idJs(lastThread.id) + ')" style="font-weight:500;">' + h(lastThread.title.substring(0, 38)) + (lastThread.title.length > 38 ? '…' : '') + '</a><br><small style="color:var(--text-muted);">' + h(formatForumTimestamp(lastThread.lastActivityAt)) + '</small>') : '<span style="color:var(--text-muted);">Nenhum tópico</span>';
 
     html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-    if (DB.session) html += '<button class="btn btn-small" onclick="startNewThread(' + cat.id + ')">+ Novo Tópico</button>';
+    if (DB.session) html += '<button class="btn btn-small" onclick="startNewThread(' + idJs(cat.id) + ')">+ Novo Tópico</button>';
     html += '</div>';
     html += '<table class="forum-table"><thead><tr><th style="width:48%">Categoria</th><th>Tópicos</th><th>Posts</th><th>Última Atividade</th></tr></thead><tbody>';
-    html += '<tr><td><a onclick="navigate(\'cat\',' + cat.id + ')" style="font-weight:600;font-size:14px;color:#fff;">' + h(cat.name) + '</a><br><small style="color:var(--text-secondary);">' + h(cat.desc) + '</small></td>';
-    html += '<td><b>' + catThreads.length + '</b></td><td>' + catPosts + '</td><td style="font-size:12px;">' + lastInfo + '</td></tr>';
+    html += '<tr><td><a onclick="navigate(\'cat\',' + idJs(cat.id) + ')" style="font-weight:600;font-size:14px;color:#fff;">' + h(cat.name) + '</a><br><small style="color:var(--text-secondary);">' + h(cat.description || '') + '</small></td>';
+    html += '<td><b>' + (Number(cat.topicsCount) || 0) + '</b></td><td>' + (Number(cat.postsCount) || 0) + '</td><td style="font-size:12px;">' + lastInfo + '</td></tr>';
     html += '</tbody></table>';
   });
 
-  var totalPosts = DB.posts.length;
-  var totalThreads = DB.threads.length;
-  var totalUsers = DB.users.length;
-  var totalCenas = listaWikiPosts().length;
-  html += '<div class="stats-bar"><span><b>' + totalPosts + '</b> posts</span><span><b>' + totalThreads + '</b> tópicos</span><span><b>' + listaPersonagens().length + '</b> personagens</span><span><b>' + totalCenas + '</b> cenas</span><span><b>' + totalUsers + '</b> membros</span>';
-  if (DB.session) html += '<span><span class="online-dot"></span><b>' + h(DB.session.username) + '</b> online</span>';
-  html += '</div>';
+  html += '<div class="stats-bar"><span><b>' + totalPosts + '</b> publicações visíveis</span><span><b>' + totalTopics + '</b> tópicos</span><span><b>' + serverForumCategories.length + '</b> categorias</span></div>';
   return html;
 }
 
 function renderCat() {
-  var cat = DB.categories.find(function(c) { return c.id === currentCat; });
-  if (!cat) return '<p>Categoria não encontrada.</p>';
-  var threads = DB.threads.filter(function(t) { return t.catId === currentCat; });
-  threads.sort(function(a, b) { return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.id - a.id; });
+  var key = String(currentCat || '');
+  if (!serverForumCategories || !Object.hasOwn(serverForumThreads, key)) {
+    loadForumCategory(key, false);
+    if (forumLoadError) return '<div class="alert alert-error">' + h(forumLoadError) + ' <button class="btn btn-small" onclick="loadForumCategory(currentCat,true)">Tentar novamente</button></div>';
+    return '<div class="alert alert-info">Carregando a categoria…</div>';
+  }
+  var cat = serverForumCategories.find(function(category) { return String(category.id) === key; });
+  if (!cat) return '<div class="alert alert-error">Categoria não encontrada.</div>';
+  var threads = (serverForumThreads[key] || []).slice();
+  var search = forumFilterSearch.toLowerCase().trim();
+  threads = threads.filter(function(thread) {
+    if (forumFilterTag !== 'all' && forumThreadTag(thread.tag) !== forumFilterTag) return false;
+    return !search || (thread.title || '').toLowerCase().includes(search);
+  });
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / ' + h(cat.name) + '</div>';
   html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-  if (DB.session) html += '<button class="btn btn-small btn-primary" onclick="startNewThread(' + cat.id + ')">+ Novo Tópico</button>';
+  if (DB.session) html += '<button class="btn btn-small btn-primary" onclick="startNewThread(' + idJs(cat.id) + ')">+ Novo Tópico</button>';
   html += '</div>';
-  html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Respostas</th><th>Views</th><th>Último Post</th></tr></thead><tbody>';
+  html += '<p style="color:var(--text-secondary);">' + h(cat.description || '') + '</p>';
+  html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Publicações</th><th>Última atividade</th></tr></thead><tbody>';
 
   if (!threads.length) {
-    html += '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:28px;">Nenhum tópico ainda. <a onclick="startNewThread(' + cat.id + ')">Criar o primeiro</a></td></tr>';
+    html += '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:28px;">Nenhum tópico ainda.';
+    if (DB.session) html += ' <a onclick="startNewThread(' + idJs(cat.id) + ')">Criar o primeiro</a>';
+    html += '</td></tr>';
   }
 
   threads.forEach(function(t) {
-    var author = getUserById(t.authorId);
-    var replies = Math.max(0, DB.posts.filter(function(p) { return p.threadId === t.id; }).length - 1);
-    var tagClass = 'tag-' + (t.tag || 'ooc');
-    var lastPost = DB.posts.filter(function(p) { return p.threadId === t.id; });
-    var lastPostDate = lastPost.length ? lastPost[lastPost.length - 1].date : t.date;
+    var author = t.author;
+    var tag = forumThreadTag(t.tag);
     html += '<tr><td>';
     if (t.pinned) html += '<span class="pin">FIXADO</span> ';
     if (t.locked) html += '<span class="tag">TRANCADO</span> ';
-    html += '<span class="tag ' + tagClass + '">' + (t.tag || 'ooc').toUpperCase() + '</span> ';
-    html += '<a onclick="navigate(\'thread\',' + t.id + ')" style="font-weight:600;color:#fff;">' + h(t.title) + '</a>';
-    html += '</td><td>' + (author ? '<a onclick="openUserProfileModal(' + author.id + ')">' + h(author.username) + '</a>' : '?') + '</td>';
-    html += '<td>' + replies + '</td><td>' + (t.views || 0) + '</td>';
-    html += '<td style="font-size:12px;color:var(--text-muted);">' + lastPostDate + '</td></tr>';
+    html += '<span class="tag tag-' + tag + '">' + h(tag.toUpperCase()) + '</span> ';
+    html += '<a onclick="navigate(\'thread\',' + idJs(t.id) + ')" style="font-weight:600;color:#fff;">' + h(t.title) + '</a>';
+    html += '</td><td>' + h(authorName(author)) + '</td>';
+    html += '<td>' + (Number(t.postsCount) || 0) + '</td>';
+    html += '<td style="font-size:12px;color:var(--text-muted);">' + h(formatForumTimestamp(t.lastActivityAt)) + '</td></tr>';
   });
 
   html += '</tbody></table>';
   return html;
 }
 
+function canEditForumAuthor(author) {
+  return !!(DB.session && author && (isModOrAdmin() || String(DB.session.id) === String(author.id)));
+}
+
+function updateCachedForumThread(thread) {
+  if (!thread) return;
+  if (serverForumThread && String(serverForumThread.id) === String(thread.id)) serverForumThread = thread;
+  Object.keys(serverForumThreads).forEach(function(categoryId) {
+    var threads = serverForumThreads[categoryId] || [];
+    var index = threads.findIndex(function(item) { return String(item.id) === String(thread.id); });
+    if (index !== -1) {
+      if (String(thread.categoryId) === String(categoryId) && !thread.archivedAt) threads[index] = thread;
+      else threads.splice(index, 1);
+    } else if (String(thread.categoryId) === String(categoryId) && !thread.archivedAt) {
+      threads.unshift(thread);
+    }
+  });
+}
+
+function moderateForumThread(threadId, action, targetCategoryId) {
+  var thread = serverForumThread && String(serverForumThread.id) === String(threadId) ? serverForumThread : null;
+  if (!thread) Object.keys(serverForumThreads).some(function(categoryId) {
+    thread = (serverForumThreads[categoryId] || []).find(function(item) { return String(item.id) === String(threadId); }) || null;
+    return !!thread;
+  });
+  if (!thread) { showAlert('Atualize o tópico antes de moderá-lo.', 'error'); return; }
+  var labels = { pin: 'fixar', unpin: 'desafixar', lock: 'trancar', unlock: 'destrancar', archive: 'arquivar', unarchive: 'restaurar', move: 'mover' };
+  var reason = window.prompt('Informe o motivo para ' + (labels[action] || action) + ' este tópico:');
+  if (!reason || !reason.trim()) return;
+  var payload = { action: action, reason: reason.trim(), expectedVersion: thread.version };
+  if (targetCategoryId) payload.targetCategoryId = targetCategoryId;
+  forumApi().apiRequest('POST', '/api/forum/threads/' + encodeURIComponent(thread.id) + '/moderate', payload)
+    .then(function(response) {
+      updateCachedForumThread(response.data);
+      forumLandingLoaded = false;
+      if (action === 'archive' || action === 'move') navigate('cat', response.data.categoryId);
+      else { loadForumLanding(true); render(); }
+      showAlert('Moderação registrada.', 'success');
+    })
+    .catch(function(error) { showAlert(error.message || 'Não foi possível moderar o tópico.', 'error'); });
+}
+
 function togglePinThread(threadId) {
-  if (!isModOrAdmin()) return;
-  var thr = DB.threads.find(function(t) { return t.id === threadId; });
-  if (!thr) return;
-  thr.pinned = !thr.pinned;
-  saveDB();
-  render();
-  showAlert(thr.pinned ? 'Tópico fixado.' : 'Tópico desafixado.', 'success');
+  if (!serverForumThread || String(serverForumThread.id) !== String(threadId)) return;
+  moderateForumThread(threadId, serverForumThread.pinned ? 'unpin' : 'pin');
 }
 
 function toggleLockThread(threadId) {
-  if (!isModOrAdmin()) return;
-  var thr = DB.threads.find(function(t) { return t.id === threadId; });
-  if (!thr) return;
-  thr.locked = !thr.locked;
-  saveDB();
-  render();
-  showAlert(thr.locked ? 'Tópico trancado.' : 'Tópico destrancado.', 'success');
+  if (!serverForumThread || String(serverForumThread.id) !== String(threadId)) return;
+  moderateForumThread(threadId, serverForumThread.locked ? 'unlock' : 'lock');
 }
 
 function renderThread() {
-  var thread = DB.threads.find(function(t) { return t.id === currentThread; });
-  if (!thread) return '<p>Tópico não encontrado.</p>';
-  var cat = DB.categories.find(function(c) { return c.id === thread.catId; });
-  thread.views = (thread.views || 0) + 1;
-  saveDB();
-
-  var posts = DB.posts.filter(function(p) { return p.threadId === currentThread; });
-  var tagClass = 'tag-' + (thread.tag || 'ooc');
-
-  var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / <a onclick="navigate(\'cat\',' + thread.catId + ')">' + h(cat ? cat.name : '') + '</a> / ' + h(thread.title) + '</div>';
-  html += '<div class="thread-tools">';
-  html += '<h2>';
-  if (thread.pinned) html += '<span class="pin">FIXADO</span>';
-  if (thread.locked) html += '<span class="tag">TRANCADO</span>';
-  html += '<span class="tag ' + tagClass + '">' + (thread.tag || 'ooc').toUpperCase() + '</span> ' + h(thread.title) + '</h2>';
-  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+  var threadId = String(currentThread || '');
+  if (!serverForumThread || String(serverForumThread.id) !== threadId || !Array.isArray(serverForumPosts)) {
+    loadForumThread(threadId);
+    if (forumLoadError) return '<div class="alert alert-error">' + h(forumLoadError) + ' <button class="btn btn-small" onclick="loadForumThread(currentThread,{force:true})">Tentar novamente</button></div>';
+    return '<div class="alert alert-info">Carregando a conversa compartilhada…</div>';
+  }
+  var thread = serverForumThread;
+  var tagClass = 'tag-' + forumThreadTag(thread.tag);
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / <a onclick="navigate(\'cat\',' + idJs(thread.categoryId) + ')">' + h(thread.categoryName || 'Categoria') + '</a> / ' + h(thread.title) + '</div>';
+  html += '<div class="thread-tools"><h2>';
+  if (thread.pinned) html += '<span class="pin">FIXADO</span> ';
+  if (thread.locked) html += '<span class="tag">TRANCADO</span> ';
+  if (thread.archivedAt) html += '<span class="tag">ARQUIVADO</span> ';
+  html += '<span class="tag ' + tagClass + '">' + h(forumThreadTag(thread.tag).toUpperCase()) + '</span> ' + h(thread.title) + '</h2><div style="display:flex;gap:8px;flex-wrap:wrap;">';
   if (isModOrAdmin()) {
-    html += '<button class="btn btn-small" onclick="togglePinThread(' + thread.id + ')">' + (thread.pinned ? 'Desafixar' : 'Fixar') + '</button>';
-    html += '<button class="btn btn-small" onclick="toggleLockThread(' + thread.id + ')">' + (thread.locked ? 'Destrancar' : 'Trancar') + '</button>';
+    html += '<button class="btn btn-small" onclick="togglePinThread(' + idJs(thread.id) + ')">' + (thread.pinned ? 'Desafixar' : 'Fixar') + '</button>';
+    html += '<button class="btn btn-small" onclick="toggleLockThread(' + idJs(thread.id) + ')">' + (thread.locked ? 'Destrancar' : 'Trancar') + '</button>';
+    html += '<button class="btn btn-small btn-warn" onclick="moderateForumThread(' + idJs(thread.id) + ',\'' + (thread.archivedAt ? 'unarchive' : 'archive') + '\')">' + (thread.archivedAt ? 'Restaurar tópico' : 'Arquivar tópico') + '</button>';
   }
-  if (podeEditarThread(thread.authorId)) {
-    html += '<button class="btn btn-warn btn-small" onclick="editarThread(' + thread.id + ')">Editar</button>';
-    html += '<button class="btn btn-danger btn-small" onclick="deleteThread(' + thread.id + ')">Excluir Tópico</button>';
-  }
+  if (canEditForumAuthor(thread.author) && !thread.locked && !thread.archivedAt) html += '<button class="btn btn-warn btn-small" onclick="editarThread(' + idJs(thread.id) + ')">Editar</button>';
   html += '</div></div>';
 
-  posts.forEach(function(post, idx) {
-    var author = getUserById(post.authorId);
-    var initials = author ? author.username.substring(0, 2).toUpperCase() : '??';
-    var avatarHtml = (author && author.avatar) ? '<img src="' + ha(author.avatar) + '">' : initials;
-    var cargoHtml = '<div>' + badgeHtml(author) + '</div>';
-
-    html += '<div class="post-box">';
-    html += '<div class="post-header"><div class="post-meta"><span class="post-number">#' + (idx + 1) + '</span><strong style="color:#fff;">' + (author ? '<a onclick="openUserProfileModal(' + author.id + ')">' + h(author.username) + '</a>' : '?') + '</strong></div><div class="post-meta"><span class="post-date">' + post.date + '</span>' + (post.edited ? '<span class="tag">editado</span>' : '') + '</div></div>';
-    html += '<div class="post-body">';
-    html += '<div class="post-user-panel"><div class="avatar">' + avatarHtml + '</div><div class="username">' + (author ? '<a onclick="openUserProfileModal(' + author.id + ')">' + h(author.username) + '</a>' : '?') + '</div><div class="user-title">' + (author ? h(author.title) : '') + '</div><div class="user-posts">Posts: ' + (author ? author.posts : 0) + '</div>' + cargoHtml + '</div>';
-    html += '<div class="post-content">' + formatPost(post.content) + '</div>';
-    html += '</div>';
-    html += '<div class="post-footer"><div class="post-actions">';
-    if (DB.session) {
-      if (!thread.locked || isModOrAdmin()) {
-        html += '<a onclick="quotePost(' + post.id + ')">Citar</a>';
-      }
-      if (podeEditarPost(post.authorId)) {
-        html += '<a onclick="editPost(' + post.id + ')">Editar</a>';
-        html += '<a class="danger-link" onclick="deletePost(' + post.id + ')">Excluir</a>';
-      }
+  serverForumPosts.forEach(function(post) {
+    var author = post.author;
+    var name = author ? author.username : (post.authorLabel || 'Autoria não identificada');
+    var avatarHtml = author && author.avatar ? '<img src="' + ha(author.avatar) + '" alt="">' : h(name.substring(0, 2).toUpperCase());
+    html += '<div class="post-box"><div class="post-header"><div class="post-meta"><span class="post-number">#' + Number(post.postNo) + '</span><strong style="color:#fff;">' + h(name) + '</strong></div><div class="post-meta"><span class="post-date">' + h(formatForumTimestamp(post.createdAt)) + '</span>' + (post.edited ? '<span class="tag">editado</span>' : '') + '</div></div>';
+    html += '<div class="post-body"><div class="post-user-panel"><div class="avatar">' + avatarHtml + '</div><div class="username">' + h(name) + '</div><div class="user-title">' + h(author ? author.title : 'Registro legado') + '</div>' + (author ? roleBadgeFromRole(author.role) : '') + '</div>';
+    html += '<div class="post-content">' + (post.deleted ? '<p class="alert alert-info">Esta publicação foi ocultada.</p>' : formatPost(post.content)) + '</div></div>';
+    if (!post.deleted) {
+      html += '<div class="post-footer"><div class="post-actions">';
+      if (DB.session && !thread.locked && !thread.archivedAt) html += '<a onclick="quotePost(' + idJs(post.id) + ')">Citar</a>';
+      if (canEditForumAuthor(author) && !thread.locked && !thread.archivedAt) html += '<a onclick="editPost(' + idJs(post.id) + ')">Editar</a>';
+      if (DB.session && ((canEditForumAuthor(author) && Number(post.postNo) !== 1) || isModOrAdmin())) html += '<a class="danger-link" onclick="deletePost(' + idJs(post.id) + ')">Ocultar</a>';
+      html += '</div></div>';
+    } else if (isModOrAdmin()) {
+      html += '<div class="post-footer"><div class="post-actions"><a onclick="restoreForumPost(' + idJs(post.id) + ')">Restaurar publicação</a></div></div>';
     }
-    html += '</div></div></div>';
+    html += '</div>';
   });
 
-  if (thread.locked && !isModOrAdmin()) {
-    html += '<div class="alert alert-info" style="margin-top:14px;"><span>Este tópico está trancado e não recebe novas respostas.</span></div>';
+  if (serverForumPostsPage.hasMore) html += '<div style="text-align:center;margin:16px;"><button class="btn" onclick="loadMoreForumPosts()"' + (forumThreadLoading ? ' disabled' : '') + '>Carregar publicações anteriores</button></div>';
+  if (thread.locked || thread.archivedAt) {
+    html += '<div class="alert alert-info" style="margin-top:14px;">Este tópico está ' + (thread.archivedAt ? 'arquivado' : 'trancado') + ' e não recebe novas respostas.</div>';
   } else if (DB.session) {
-    html += '<div class="reply-box">';
-    html += '<div class="reply-title"><span>Responder ao Tópico</span><span style="color:var(--accent-light);">' + h(DB.session.username) + '</span></div>';
-    html += '<div class="reply-inner">';
-    html += buildEditor('reply-editor', '');
-    html += '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="submitReply()">Enviar Resposta</button></div>';
-    html += '</div></div>';
+    html += '<div class="reply-box"><div class="reply-title"><span>Responder ao Tópico</span><span style="color:var(--accent-light);">' + h(DB.session.username) + '</span></div><div class="reply-inner">' + buildEditor('reply-editor', '') + '<div style="margin-top:12px;"><button class="btn btn-primary" onclick="submitReply()">Enviar Resposta</button></div></div></div>';
   } else {
     html += '<div class="alert alert-info" style="margin-top:14px;"><span>Faça login para participar e responder neste tópico.</span><a class="btn btn-small btn-primary" onclick="showLoginModal()">Entrar</a></div>';
   }
-
   return html;
 }
 
 function renderNovaThread() {
   if (!DB.session) return '<div class="alert alert-error">Você precisa estar logado.</div>';
-  var selCat = currentCat || 1;
   var isEdit = editandoThread !== null;
-  var thr = isEdit ? DB.threads.find(function(t) { return t.id === editandoThread; }) : null;
-  var priPost = isEdit ? DB.posts.find(function(p) { return p.threadId === editandoThread; }) : null;
+  var thr = isEdit && serverForumThread && String(serverForumThread.id) === String(editandoThread) ? serverForumThread : null;
+  if (!isEdit && !serverForumCategories) {
+    loadForumLanding(false);
+    return '<div class="alert alert-info">Carregando categorias…</div>';
+  }
+  if (isEdit && !thr) return '<div class="alert alert-error">Atualize o tópico antes de editá-lo.</div>';
+  var selCat = currentCat || (serverForumCategories && serverForumCategories[0] && serverForumCategories[0].id);
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / ' + (isEdit ? 'Editar Tópico' : 'Novo Tópico') + '</div>';
   html += '<div class="cat-header"><span>' + (isEdit ? 'Editar Tópico' : 'Criar Novo Tópico') + '</span></div>';
@@ -588,8 +1487,8 @@ function renderNovaThread() {
   if (!isEdit) {
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">';
     html += '<div class="form-row"><label>Categoria</label><select id="thread-cat">';
-    DB.categories.forEach(function(c) {
-      html += '<option value="' + c.id + '"' + (c.id === selCat ? ' selected' : '') + '>' + h(c.name) + '</option>';
+    serverForumCategories.forEach(function(c) {
+      html += '<option value="' + ha(c.id) + '"' + (String(c.id) === String(selCat) ? ' selected' : '') + '>' + h(c.name) + '</option>';
     });
     html += '</select></div>';
     html += '<div class="form-row"><label>Tipo</label><select id="thread-tag"><option value="ooc">OOC (Discussão fora do personagem)</option><option value="rp">RP (Cena de Roleplay)</option><option value="wiki">Wiki / Lore</option></select></div>';
@@ -597,9 +1496,11 @@ function renderNovaThread() {
   }
 
   html += '<div class="form-row"><label>Título</label><input type="text" id="thread-title" value="' + (thr ? ha(thr.title) : '') + '" placeholder="Título do tópico"></div>';
-  html += '<div class="form-row"><label>Conteúdo</label>';
-  html += buildEditor('thread-editor', priPost ? priPost.content : '');
-  html += '</div>';
+  if (isEdit) {
+    html += '<div class="form-row"><label>Tipo</label><select id="thread-tag"><option value="ooc"' + (thr.tag === 'ooc' ? ' selected' : '') + '>OOC</option><option value="rp"' + (thr.tag === 'rp' ? ' selected' : '') + '>RP</option><option value="wiki"' + (thr.tag === 'wiki' ? ' selected' : '') + '>Wiki / Lore</option></select></div>';
+  } else {
+    html += '<div class="form-row"><label>Conteúdo</label>' + buildEditor('thread-editor', '') + '</div>';
+  }
   html += '<div style="display:flex;gap:10px;margin-top:12px;">';
   if (isEdit) {
     html += '<button class="btn btn-primary" onclick="salvarEdicaoThread()">Salvar Alterações</button>';
@@ -614,32 +1515,36 @@ function renderNovaThread() {
 // ==================== PERSONAGENS (WIKI) ====================
 
 var serverPersonagens = null;
+var personagensLoadError = null;
+var personagensLoading = false;
 
 function carregarPersonagensServidor() {
+  if (personagensLoading) return;
+  personagensLoading = true;
+  personagensLoadError = null;
   fetch('/api/personagens')
-    .then(function(res) { return res.ok ? res.json() : null; })
-    .then(function(data) {
-      if (!data || !data.personagens) return;
-      serverPersonagens = data.personagens;
-      if (currentPage === 'wiki' || currentPage === 'personagemView') render();
+    .then(function(res) {
+      if (!res.ok) throw new Error('Não foi possível carregar personagens do servidor.');
+      return res.json();
     })
-    .catch(function() {});
+    .then(function(data) {
+      if (!data || !Array.isArray(data.personagens)) throw new Error('A resposta de personagens é inválida.');
+      serverPersonagens = data.personagens;
+      if (currentPage === 'personagens' || currentPage === 'personagemView' || currentPage === 'novaCena') render();
+    })
+    .catch(function(error) {
+      personagensLoadError = error.message || 'Não foi possível carregar personagens do servidor.';
+      if (currentPage === 'personagens' || currentPage === 'personagemView') render();
+    })
+    .finally(function() { personagensLoading = false; });
 }
 
 function listaPersonagens() {
-  if (serverPersonagens === null) return DB.personagens;
-  var nomes = {};
-  serverPersonagens.forEach(function(p) { nomes[p.nome.toLowerCase()] = true; });
-  var locais = DB.personagens.filter(function(p) { return !nomes[p.nome.toLowerCase()]; });
-  return serverPersonagens.concat(locais);
-}
-
-function personagemLocalApenas(p) {
-  return serverPersonagens !== null && typeof p.id === 'number';
+  return Array.isArray(serverPersonagens) ? serverPersonagens : [];
 }
 
 function idJs(id) {
-  return typeof id === 'number' ? id : "'" + String(id).replace(/'/g, "\\'") + "'";
+  return typeof id === 'number' ? id : jsArg(id);
 }
 
 function renderCharCard(p) {
@@ -682,14 +1587,19 @@ function onWikiFilterChange() {
   }
 }
 
-function renderWiki() {
+function renderPersonagens() {
+  if (serverPersonagens === null) {
+    if (personagensLoadError) return '<div class="alert alert-error">' + h(personagensLoadError) + ' <button class="btn btn-small" onclick="carregarPersonagensServidor()">Tentar novamente</button></div>';
+    carregarPersonagensServidor();
+    return '<div class="alert alert-info">Carregando personagens compartilhados…</div>';
+  }
   var allChars = listaPersonagens();
   var racas = [];
   allChars.forEach(function(p) {
     if (p.raca && racas.indexOf(p.raca) === -1) racas.push(p.raca);
   });
 
-  var html = '<div class="breadcrumb">Início / Personagens</div>';
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / Personagens</div>';
   html += '<div class="cat-header"><span>Personagens (' + allChars.length + ')</span>';
   if (isModOrAdmin()) {
     html += '<button class="btn btn-small btn-primary" onclick="sessionStorage.removeItem(\'editPersonagemId\');navigate(\'novoPersonagem\')">+ Novo Personagem</button>';
@@ -757,42 +1667,1923 @@ function renderWiki() {
   return html;
 }
 
-function renderPersonagemView() {
-  var lista = listaPersonagens();
-  var p = lista.find(function(x) { return String(x.id) === String(currentPersonagem); });
-  if (!p && typeof currentPersonagem === 'number') {
-    var seed = DB.personagens.find(function(x) { return x.id === currentPersonagem; });
-    if (seed) {
-      p = lista.find(function(x) { return x.nome.toLowerCase() === seed.nome.toLowerCase(); });
+function renderWiki() {
+  if (serverWikiSections === null && !wikiSectionsLoading && !wikiSectionsError) loadWikiSections(false);
+  if (serverWikiCategories === null && !wikiCategoriesLoading && !wikiCategoriesError) loadWikiCategories(false);
+  if (serverWikiPages === null && !wikiPagesLoading && !wikiPagesLoadError) loadWikiPages(false);
+
+  var pages = (serverWikiPages || []).filter(function(page) {
+    if (wikiFilterCategory !== 'all' && !(page.categories || []).some(function(category) {
+      return wikiSectionCategoryKeys(wikiFilterCategory).has(wikiCategoryKey(category));
+    })) return false;
+    if (!wikiFilterSearch.trim()) return true;
+    var query = wikiFilterSearch.trim().toLocaleLowerCase('pt-BR');
+    return [page.title, page.summary, ...(page.aliases || []), ...(page.categories || [])]
+      .join('\n').toLocaleLowerCase('pt-BR').includes(query);
+  });
+  var html = '<div class="breadcrumb">Início / Wiki</div>'
+    + '<div class="cat-header"><span>Wiki de Referência</span>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+  if (isModOrAdmin()) html += '<button class="btn btn-small" onclick="navigate(\'wikiStaff\')">Rascunhos da equipe</button><button class="btn btn-small btn-primary" onclick="navigate(\'wikiCreate\')">+ Novo artigo</button>';
+  if (DB.session) html += '<button class="btn btn-small" onclick="navigate(\'wikiProposals\')">Propostas</button>';
+  html += '</div></div>';
+  html += '<div class="filter-bar"><input type="search" id="wiki-page-search" value="' + ha(wikiFilterSearch)
+    + '" placeholder="Buscar artigos, resumos e categorias" oninput="filterWikiPages(this.value)">'
+    + '</div>';
+  html += renderWikiSections();
+  if (wikiFilterCategory !== 'all') {
+    var selected = (serverWikiSections || []).concat(serverWikiCategories || []).find(function(item) { return item.key === wikiFilterCategory; });
+    html += '<div class="cat-header"><span>' + h(selected ? selected.name : wikiFilterCategory) + '</span><button class="btn btn-small" onclick="selectWikiCategory(\'all\')">Todas as seções</button></div>';
+  } else html += '<h2 class="wiki-articles-heading">Artigos publicados</h2>';
+  if (wikiPagesLoadError) return html + '<div class="alert alert-error">' + h(wikiPagesLoadError) + ' <button class="btn" onclick="loadWikiPages(true)">Tentar carregar artigos novamente</button></div>';
+  if (serverWikiPages === null) return html + '<p>Carregando artigos…</p>';
+  if (wikiCategoriesError) html += '<p class="field-desc">' + h(wikiCategoriesError)
+    + ' <button class="btn btn-small" onclick="loadWikiCategories(true)">Tentar carregar categorias novamente</button></p>';
+  else if (wikiCategoriesLoading && !serverWikiCategories) html += '<p class="field-desc">Carregando categorias…</p>';
+  if (!serverWikiPages.length) {
+    html += '<div class="builder-panel"><p>Ainda não há artigos publicados na wiki.</p>';
+    if (isModOrAdmin()) html += '<p style="margin-top:12px;"><button class="btn btn-small btn-primary" onclick="navigate(\'wikiCreate\')">Criar o primeiro artigo</button></p>';
+    html += '</div>';
+  } else if (!pages.length) {
+    html += '<div class="builder-panel">Ainda não há artigos nesta seção com os filtros atuais.'
+      + (wikiFilterCategory !== 'all' ? ' <button class="btn btn-small" onclick="selectWikiCategory(\'all\')">Limpar categoria</button>' : '')
+      + '</div>';
+  } else {
+    html += '<div class="char-grid">';
+    pages.forEach(function(page) {
+      html += '<article class="char-card" style="cursor:default;"><div class="char-card-info">'
+        + '<h3><a onclick="navigate(\'wikiArticle\',' + jsArg(page.slug) + ')">' + h(page.title) + '</a></h3>'
+        + '<p>' + h(page.summary || '') + '</p>';
+      if (Array.isArray(page.categories) && page.categories.length) {
+        html += '<p style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;">'
+          + page.categories.map(function(category) {
+            var key = wikiCategoryKey(category);
+            return '<button type="button" class="tag" onclick="selectWikiCategory(' + jsArg(key) + ')">' + h(category) + '</button>';
+          }).join('') + '</p>';
+      }
+      html += '</div></article>';
+    });
+    html += '</div>';
+  }
+  return html;
+}
+
+function wikiSectionCategoryKeys(key) {
+  var keys = new Set([key]);
+  var changed = true;
+  while (changed) {
+    changed = false;
+    (serverWikiSections || []).forEach(function(section) {
+      if (keys.has(section.parentKey) && !keys.has(section.key)) { keys.add(section.key); changed = true; }
+    });
+  }
+  return keys;
+}
+
+function loadWikiSections(force) {
+  if (wikiSectionsLoading || (serverWikiSections !== null && !force)) return;
+  wikiSectionsLoading = true;
+  wikiSectionsError = null;
+  var generation = ++wikiSectionsGeneration;
+  wikiApi()('GET', '/api/wiki/sections').then(function(response) {
+    if (generation !== wikiSectionsGeneration) return;
+    if (!response || !Array.isArray(response.data)) throw new Error('Estrutura da Wiki inválida.');
+    serverWikiSections = response.data;
+  }).catch(function(error) {
+    if (generation !== wikiSectionsGeneration) return;
+    wikiSectionsError = error && error.message || 'Não foi possível carregar as seções da Wiki.';
+  }).finally(function() {
+    if (generation !== wikiSectionsGeneration) return;
+    wikiSectionsLoading = false;
+    if (currentPage === 'wiki') render();
+  });
+}
+
+function renderWikiSections() {
+  if (wikiSectionsError) return '<div class="alert alert-error">' + h(wikiSectionsError) + ' <button class="btn" onclick="loadWikiSections(true)">Tentar carregar seções novamente</button></div>';
+  if (serverWikiSections === null) return '<p>Carregando seções da Wiki…</p>';
+  function row(section) {
+    var selected = wikiFilterCategory === section.key;
+    var count = Number(section.pagesCount || 0);
+    return '<li class="wiki-section-row' + (selected ? ' selected' : '') + '"><div><h3><a href="/wiki?categoria=' + ha(section.key) + '"' + (selected ? ' aria-current="page"' : '') + ' onclick="selectWikiCategory(' + jsArg(section.key) + ');return false;">' + h(section.name) + '</a></h3><p>' + h(section.description || '') + '</p></div><div class="wiki-section-count">' + count + (count === 1 ? ' artigo publicado' : ' artigos publicados') + (count === 0 ? '<span>Ainda não há artigos nesta seção.</span>' : '') + '</div></li>';
+  }
+  var html = '<nav class="wiki-sections" aria-label="Seções da Wiki">';
+  serverWikiSections.filter(function(section) {
+    return !section.parentKey && (wikiFilterCategory === 'all' || wikiSectionCategoryKeys(section.key).has(wikiFilterCategory));
+  }).forEach(function(root) {
+    var children = serverWikiSections.filter(function(section) {
+      return section.parentKey === root.key && (wikiFilterCategory === 'all' || wikiFilterCategory === root.key || wikiFilterCategory === section.key);
+    });
+    html += '<section class="wiki-section-group"><header><h2><a href="/wiki?categoria=' + ha(root.key) + '" onclick="selectWikiCategory(' + jsArg(root.key) + ');return false;">' + h(root.name) + '</a></h2><p>' + Number(root.pagesCount || 0) + (Number(root.pagesCount || 0) === 1 ? ' artigo publicado nesta área' : ' artigos publicados nesta área') + '</p>' + (root.description ? '<p>' + h(root.description) + '</p>' : '') + '</header><ul>' + (children.length ? children.map(row).join('') : row(root)) + '</ul></section>';
+  });
+  var known = new Set(serverWikiSections.map(function(section) { return section.key; }));
+  var extra = (serverWikiCategories || []).filter(function(category) { return !known.has(category.key) && (wikiFilterCategory === 'all' || wikiFilterCategory === category.key); });
+  if (extra.length) html += '<section class="wiki-section-group"><header><h2>Outras categorias</h2></header><ul>' + extra.map(row).join('') + '</ul></section>';
+  return html + '</nav>';
+}
+
+function wikiApi() {
+  return window.Aetherverse && typeof window.Aetherverse.apiRequest === 'function'
+    ? window.Aetherverse.apiRequest.bind(window.Aetherverse)
+    : apiRequest;
+}
+
+function wikiUnwrap(response) {
+  return response && response.data && typeof response.data === 'object' ? response.data : response;
+}
+
+function wikiCategoryKey(value) {
+  return String(value || '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase()
+    .replace(/[\s\p{P}]+/gu, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
+function loadWikiCategories(force) {
+  if (wikiCategoriesLoading || (serverWikiCategories !== null && !force)) return;
+  wikiCategoriesLoading = true;
+  wikiCategoriesError = null;
+  function nextPage(offset, items) {
+    return wikiApi()('GET', '/api/wiki/categories?limit=100&offset=' + offset).then(function(response) {
+      if (!response || !Array.isArray(response.data)) throw new Error('A resposta das categorias da wiki é inválida.');
+      var all = items.concat(response.data);
+      if (response.page && response.page.hasMore) {
+        if (!response.data.length) throw new Error('Paginação das categorias inválida.');
+        return nextPage(offset + response.data.length, all);
+      }
+      return all;
+    });
+  }
+  nextPage(0, []).then(function(data) {
+    serverWikiCategories = data;
+  }).catch(function(error) {
+    wikiCategoriesError = error && error.message ? error.message : 'Não foi possível carregar as categorias da wiki.';
+  }).finally(function() {
+    wikiCategoriesLoading = false;
+    if (currentPage === 'wiki') render();
+  });
+}
+
+function selectWikiCategory(key) {
+  var next = String(key || 'all');
+  if (next !== 'all' && !/^[a-z0-9][a-z0-9-]{0,99}$/.test(next)) return;
+  if (currentPage !== 'wiki') navigate('wiki');
+  wikiFilterCategory = next;
+  var destination = next === 'all' ? '/wiki' : '/wiki?categoria=' + encodeURIComponent(next);
+  window.history.pushState({ page: 'wiki' }, '', destination);
+  render();
+}
+
+function loadWikiPages(force) {
+  if (wikiPagesLoading || (serverWikiPages !== null && !force)) return;
+  wikiPagesLoading = true;
+  wikiPagesLoadError = null;
+  function nextPage(offset, items) {
+    return wikiApi()('GET', '/api/wiki/pages?limit=100&offset=' + offset).then(function(response) {
+      if (!response || !Array.isArray(response.data)) throw new Error('A resposta da wiki é inválida.');
+      var all = items.concat(response.data);
+      if (response.page && response.page.hasMore) {
+        if (!response.data.length) throw new Error('Paginação da wiki inválida.');
+        return nextPage(offset + response.data.length, all);
+      }
+      return all;
+    });
+  }
+  nextPage(0, []).then(function(data) {
+    serverWikiPages = data;
+  }).catch(function(error) {
+    wikiPagesLoadError = error && error.message ? error.message : 'Não foi possível carregar os artigos da wiki.';
+  }).finally(function() {
+    wikiPagesLoading = false;
+    if (currentPage === 'wiki') render();
+  });
+}
+
+function filterWikiPages(value) {
+  wikiFilterSearch = String(value || '');
+  render();
+  var input = document.getElementById('wiki-page-search');
+  if (input) {
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+function loadWikiArticle(slug, force) {
+  var key = String(slug || '');
+  if (!key || (wikiArticleLoading && wikiArticleLoadingSlug === key)
+      || (!force && currentWikiArticle && currentWikiArticle.slug === key)) return;
+  wikiArticleLoading = true;
+  wikiArticleLoadingSlug = key;
+  wikiArticleLoadError = null;
+  wikiArticleLoadErrorSlug = null;
+  currentWikiArticle = null;
+  var sequence = ++wikiArticleRequestSequence;
+  wikiApi()('GET', '/api/wiki/resolve/' + encodeURIComponent(key)).then(function(response) {
+    var resolved = wikiUnwrap(response);
+    if (!resolved || typeof resolved.id !== 'string' || typeof resolved.slug !== 'string') {
+      throw new Error('Não foi possível localizar este artigo.');
+    }
+    if (resolved.redirect && currentPage === 'wikiArticle' && currentWikiSlug === key) {
+      currentWikiSlug = resolved.slug;
+      window.history.replaceState({ page: 'wikiArticle', id: resolved.slug }, '', '/wiki/' + encodeURIComponent(resolved.slug));
+    }
+    return wikiApi()('GET', '/api/wiki/pages/' + encodeURIComponent(resolved.id));
+  }).then(function(response) {
+    if (sequence !== wikiArticleRequestSequence) return;
+    var article = wikiUnwrap(response);
+    if (!article || !article.id || !article.body || !Array.isArray(article.body.sections)) {
+      throw new Error('A resposta do artigo é inválida.');
+    }
+    currentWikiArticle = article;
+    wikiArticleLoadError = null;
+    if (!wikiBacklinksState || wikiBacklinksState.pageId !== article.id) {
+      wikiBacklinksState = { pageId: article.id, items: [], loading: false, loaded: false, hasMore: false, error: null };
+    }
+    loadWikiBacklinks(article.id, false);
+  }).catch(function(error) {
+    if (sequence !== wikiArticleRequestSequence) return;
+    wikiArticleLoadError = error && error.message ? error.message : 'Não foi possível carregar este artigo.';
+    wikiArticleLoadErrorSlug = key;
+  }).finally(function() {
+    if (sequence !== wikiArticleRequestSequence) return;
+    wikiArticleLoading = false;
+    wikiArticleLoadingSlug = null;
+    if (currentPage === 'wikiArticle') render();
+  });
+}
+
+function renderWikiSnapshot(snapshot, options) {
+  if (!snapshot || !snapshot.body || !Array.isArray(snapshot.body.sections)) return '<p>O artigo não contém seções disponíveis.</p>';
+  var html = '', entries = [];
+  snapshot.body.sections.forEach(function(section) {
+    var id = 'wiki-section-' + section.id;
+    var content = typeof section.html === 'string' ? section.html : '';
+    var subentries = [];
+    if (options && options.toc && typeof document.createElement === 'function') {
+      var container = document.createElement('div');
+      container.innerHTML = content;
+      container.querySelectorAll('h3').forEach(function(heading, index) {
+        var anchor = id + '-heading-' + index;
+        heading.id = anchor;
+        heading.tabIndex = -1;
+        subentries.push('<li><a href="#' + ha(anchor) + '">' + h(heading.textContent) + '</a></li>');
+      });
+      content = container.innerHTML;
+    }
+    entries.push('<li><a href="#' + ha(id) + '">' + h(section.heading || '') + '</a>'
+      + (subentries.length ? '<ul>' + subentries.join('') + '</ul>' : '') + '</li>');
+    html += '<section class="builder-panel"><h2' + (options && options.toc ? ' id="' + ha(id) + '" tabindex="-1"' : '') + '>' + h(section.heading || '') + '</h2>'
+      + '<div class="wiki-content-area">' + content + '</div></section>';
+  });
+  if (!snapshot.body.sections.length) return '<div class="builder-panel"><p>Este artigo ainda não tem seções.</p></div>';
+  return (options && options.toc ? '<nav class="wiki-toc" aria-label="Índice do artigo"><details open><summary>Índice</summary><ul>' + entries.join('') + '</ul></details></nav>' : '') + html;
+}
+
+function loadWikiStaff(articleId) {
+  var state = wikiStaffState;
+  if (state.loading || !isModOrAdmin()) return;
+  state.loading = true;
+  state.error = null;
+  var accountId = DB.session && (DB.session.serverId || DB.session.id);
+  function valid() { return wikiStaffState === state && isModOrAdmin() && String(DB.session.serverId || DB.session.id) === String(accountId); }
+  function list(offset, items) {
+    return wikiApi()('GET', '/api/staff/wiki/pages?limit=100&offset=' + offset).then(function(response) {
+      if (!valid()) return null;
+      if (!response || !Array.isArray(response.data)) throw new Error('Lista editorial inválida.');
+      var all = items.concat(response.data);
+      if (response.page && response.page.hasMore) {
+        if (!response.data.length) throw new Error('Paginação editorial inválida.');
+        return list(offset + response.data.length, all);
+      }
+      return all;
+    });
+  }
+  var promise = articleId ? wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(articleId)) : list(0, []);
+  promise.then(function(response) {
+    if (!valid()) return;
+    if (articleId) {
+      var page = wikiUnwrap(response);
+      if (!page || page.id !== articleId || !page.head || !page.head.snapshot) throw new Error('Artigo editorial inválido.');
+      state.article = page;
+    } else state.items = response;
+  }).catch(function(error) {
+    if (!valid()) return;
+    state.items = null; state.article = null;
+    state.error = error && error.message || 'Não foi possível carregar a Wiki da equipe.';
+  }).finally(function() {
+    if (!valid()) return;
+    state.loading = false;
+    if (currentPage === 'wikiStaff' || currentPage === 'wikiStaffArticle') render();
+  });
+}
+
+function renderWikiStaff() {
+  if (!isModOrAdmin()) return '<div class="alert alert-error">A Wiki da equipe é restrita à staff.</div>';
+  var state = wikiStaffState;
+  if (state.items === null && !state.loading && !state.error) loadWikiStaff(null);
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki pública</a> / Equipe</div><div class="cat-header"><span>Wiki da equipe</span><button class="btn" onclick="navigate(\'wikiCreate\')">+ Novo artigo</button></div><p>Rascunhos compartilhados: toda a equipe pode ler e editar. Publicar para todos é uma ação separada.</p>';
+  if (state.error) return html + '<div class="alert alert-error">' + h(state.error) + ' <button class="btn" onclick="navigate(\'wikiStaff\')">Tentar novamente</button></div>';
+  if (state.items === null) return html + '<p>Carregando rascunhos…</p>';
+  if (!state.items.length) return html + '<p>Ainda não há artigos de trabalho.</p>';
+  state.items.forEach(function(page) {
+    if (!page.head) return;
+    var snapshot = page.head.snapshot;
+    var published = page.accessLevel === 'public' && !!page.publishedRevisionId;
+    html += '<article class="builder-panel"><h2><a href="/wiki/rascunhos/' + ha(page.id) + '" onclick="navigate(\'wikiStaffArticle\',' + jsArg(page.id) + ');return false;">' + h(snapshot.title) + '</a></h2><p>' + h(snapshot.summary || '') + '</p><p class="field-desc">' + (published ? 'Publicado para todos' + (page.headRevisionId !== page.publishedRevisionId ? ' · Com alterações de trabalho' : '') : 'Rascunho · Somente equipe') + '</p></article>';
+  });
+  return html;
+}
+
+function renderWikiStaffArticle() {
+  if (!isModOrAdmin()) return '<div class="alert alert-error">A leitura deste rascunho é restrita à staff.</div>';
+  var state = wikiStaffState;
+  if ((!state.article || state.article.id !== currentWikiPageId) && !state.loading && !state.error) loadWikiStaff(currentWikiPageId);
+  if (state.error) return '<div class="alert alert-error">' + h(state.error) + ' <button class="btn" onclick="navigate(\'wikiStaffArticle\',' + jsArg(currentWikiPageId) + ')">Tentar novamente</button></div>';
+  if (!state.article || state.article.id !== currentWikiPageId) return '<p>Carregando artigo da equipe…</p>';
+  var page = state.article, snapshot = page.head.snapshot;
+  return '<div class="breadcrumb"><a onclick="navigate(\'wikiStaff\')">Wiki da equipe</a> / ' + h(snapshot.title) + '</div><div class="cat-header"><span>' + h(snapshot.title) + '</span><button class="btn" onclick="navigate(\'wikiEditor\',' + jsArg(page.id) + ')">Editar artigo</button><button class="btn btn-small" onclick="exportWikiArticleFile(' + jsArg(page.id) + ')">Exportar JSON da equipe</button></div><p class="alert alert-info">Versão de trabalho compartilhada com a equipe. Esta tela não altera a publicação pública.</p><p>' + h(snapshot.summary || '') + '</p>' + renderWikiSnapshot(snapshot, { toc: true });
+}
+
+function renderWikiArticle() {
+  if (!currentWikiSlug) return '<div class="alert alert-error">O endereço deste artigo é inválido. <a onclick="navigate(\'wiki\')">Voltar à wiki</a></div>';
+  if (!currentWikiArticle || currentWikiArticle.slug !== currentWikiSlug) {
+    if (wikiArticleLoadError && wikiArticleLoadErrorSlug === currentWikiSlug) return '<div class="alert alert-error">' + h(wikiArticleLoadError)
+      + ' <button class="btn btn-small" onclick="loadWikiArticle(' + jsArg(currentWikiSlug) + ',true)">Tentar novamente</button>'
+      + ' <button class="btn btn-small" onclick="navigate(\'wiki\')">Voltar à wiki</button></div>';
+    if (!wikiArticleLoading || wikiArticleLoadingSlug !== currentWikiSlug) loadWikiArticle(currentWikiSlug, false);
+    return '<div class="alert alert-info">Carregando artigo…</div>';
+  }
+  var article = currentWikiArticle;
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / ' + h(article.title) + '</div>'
+    + '<div class="cat-header"><span>' + h(article.title) + '</span><div style="display:flex;gap:8px;flex-wrap:wrap;">'
+    + '<a class="btn btn-small" onclick="navigate(\'wiki\')">Todos os artigos</a>';
+  if (isModOrAdmin()) html += '<button class="btn btn-small" onclick="navigate(\'wikiEditor\',' + jsArg(article.id) + ')">Editar artigo</button><button class="btn btn-small" title="Exportar a versão de trabalho mais recente" onclick="exportWikiArticleFile(' + jsArg(article.id) + ')">Exportar JSON da equipe</button>';
+  if (DB.session) html += '<button class="btn btn-small" onclick="navigate(\'wikiProposals\')">Minhas propostas</button>';
+  html += '</div></div>';
+  html += '<div class="builder-panel">';
+  if (article.summary) html += '<p>' + h(article.summary) + '</p>';
+  if (Array.isArray(article.categories) && article.categories.length) {
+    html += '<p style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;">'
+      + article.categories.map(function(category) {
+        return '<button type="button" class="tag" onclick="selectWikiCategory(' + jsArg(wikiCategoryKey(category)) + ')">' + h(category) + '</button>';
+      }).join('') + '</p>';
+  }
+  if (article.aliases && article.aliases.length) {
+    html += '<p class="field-desc" style="margin-top:8px;">Também conhecido como: ' + article.aliases.map(h).join(', ') + '</p>';
+  }
+  html += '</div>';
+  html += renderWikiSnapshot(article, { public: true, toc: true });
+  if (article.discussionThreadId) {
+    html += '<div class="builder-panel"><h3>Discussão pública</h3>'
+      + '<p>Converse sobre este artigo no fórum.</p>'
+      + '<button class="btn btn-small" onclick="navigate(\'thread\',' + jsArg(article.discussionThreadId) + ')">Abrir discussão</button></div>';
+  }
+  html += renderWikiBacklinks(article.id);
+  if (!DB.session) {
+    html += '<div class="builder-panel"><p>Entre na sua conta para propor uma edição deste artigo.</p>'
+      + '<button class="btn btn-small" onclick="showLoginModal()">Entrar</button></div>';
+  } else if (!isModOrAdmin()) {
+    html += renderWikiProposalForm(article);
+  }
+  return html;
+}
+
+function loadWikiBacklinks(pageId, force, append) {
+  var id = String(pageId || '');
+  append = !!append;
+  if (!id || (wikiBacklinksState.pageId === id && wikiBacklinksState.loading)
+      || (wikiBacklinksState.pageId === id && wikiBacklinksState.loaded && !force && !append)) return;
+  if (append && (!wikiBacklinksState.hasMore || wikiBacklinksState.pageId !== id)) return;
+  var previousItems = append ? wikiBacklinksState.items.slice() : [];
+  var offset = append ? previousItems.length : 0;
+  wikiBacklinksState = {
+    pageId: id, items: previousItems, loading: true, loaded: append ? wikiBacklinksState.loaded : false,
+    hasMore: append ? wikiBacklinksState.hasMore : false, error: null,
+  };
+  var sequence = ++wikiBacklinksRequestSequence;
+  if (currentPage === 'wikiArticle' && currentWikiArticle && currentWikiArticle.id === id) render();
+  wikiApi()('GET', '/api/wiki/pages/' + encodeURIComponent(id) + '/backlinks?limit=50&offset=' + offset).then(function(response) {
+    if (!response || !Array.isArray(response.data)) throw new Error('A resposta dos backlinks é inválida.');
+    if (sequence === wikiBacklinksRequestSequence) {
+      wikiBacklinksState.items = previousItems.concat(response.data);
+      wikiBacklinksState.loaded = true;
+      wikiBacklinksState.hasMore = !!(response.page && response.page.hasMore);
+    }
+  }).catch(function(error) {
+    if (sequence === wikiBacklinksRequestSequence) {
+      wikiBacklinksState.error = error && error.message ? error.message : 'Não foi possível carregar as referências a este artigo.';
+    }
+  }).finally(function() {
+    if (sequence !== wikiBacklinksRequestSequence) return;
+    wikiBacklinksState.loading = false;
+    if (currentPage === 'wikiArticle' && currentWikiArticle && currentWikiArticle.id === id) render();
+  });
+}
+
+function renderWikiBacklinks(pageId) {
+  if (!wikiBacklinksState || wikiBacklinksState.pageId !== pageId) loadWikiBacklinks(pageId, false);
+  var state = wikiBacklinksState;
+  var html = '<div class="builder-panel"><h3>Artigos que fazem referência</h3>';
+  if (state.loading && !state.items.length) return html + '<p>Carregando referências…</p></div>';
+  if (state.error && !state.items.length) return html + '<p class="alert alert-error">' + h(state.error)
+    + ' <button class="btn btn-small" onclick="loadWikiBacklinks(' + jsArg(pageId) + ',true,false)">Tentar novamente</button></p></div>';
+  if (!state.items.length) return html + '<p>Nenhum artigo publicado faz referência a este artigo.</p></div>';
+  html += '<ul>';
+  state.items.forEach(function(page) {
+    html += '<li><a onclick="navigate(\'wikiArticle\',' + jsArg(page.slug) + ')">' + h(page.title) + '</a>';
+    if (page.summary) html += ' <span class="field-desc">— ' + h(page.summary) + '</span>';
+    html += '</li>';
+  });
+  html += '</ul>';
+  if (state.error) html += '<p class="alert alert-error">' + h(state.error) + '</p>';
+  if (state.loading) html += '<p>Carregando mais referências…</p>';
+  else if (state.hasMore) html += '<button class="btn btn-small" onclick="loadMoreWikiBacklinks(' + jsArg(pageId) + ')">Carregar mais referências</button>';
+  return html + '</div>';
+}
+
+function loadMoreWikiBacklinks(pageId) {
+  loadWikiBacklinks(pageId, false, true);
+}
+
+function wikiDraftAccountId() {
+  if (!DB.session) return null;
+  var id = DB.session.serverId || DB.session.id;
+  return typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id) ? id.toLowerCase() : null;
+}
+
+function wikiDraftStorageKey(kind, resourceId, accountId) {
+  if (['editor', 'proposal'].indexOf(kind) === -1) return null;
+  accountId = accountId || wikiDraftAccountId();
+  if (!accountId || !/^[0-9a-f-]{36}$/i.test(accountId)) return null;
+  return 'aetherverse:wiki-draft:v' + WIKI_DRAFT_VERSION + ':' + accountId + ':' + kind + ':'
+    + encodeURIComponent(resourceId === null || resourceId === undefined ? 'new' : String(resourceId));
+}
+
+function readWikiDraft(kind, resourceId, accountId) {
+  var key = wikiDraftStorageKey(kind, resourceId, accountId);
+  if (!key) return null;
+  try {
+    var value = JSON.parse(window.localStorage.getItem(key) || 'null');
+    if (!value || value.version !== WIKI_DRAFT_VERSION || value.accountId !== (accountId || wikiDraftAccountId())
+        || !value.snapshot || typeof value.snapshot !== 'object' || Array.isArray(value.snapshot)
+        || !value.snapshot.body || typeof value.snapshot.body !== 'object'
+        || !Array.isArray(value.snapshot.body.sections)) return null;
+    return value;
+  } catch (_error) { return null; }
+}
+
+function writeWikiDraft(kind, resourceId, snapshot, metadata) {
+  var accountId = wikiDraftAccountId();
+  var key = wikiDraftStorageKey(kind, resourceId, accountId);
+  if (!key) return false;
+  if (!snapshot || typeof snapshot !== 'object') return reportLocalDraftWrite(key, false);
+  var existing = readWikiDraft(kind, resourceId, accountId) || {};
+  var next = {
+    version: WIKI_DRAFT_VERSION,
+    accountId: accountId,
+    updatedAt: new Date().toISOString(),
+    snapshot: snapshot,
+    summary: metadata && typeof metadata.summary === 'string' ? metadata.summary.slice(0, 1000) : '',
+    baseWorkVersion: metadata && Number.isInteger(metadata.baseWorkVersion) ? metadata.baseWorkVersion : existing.baseWorkVersion,
+    basePublishedRevisionId: metadata && typeof metadata.basePublishedRevisionId === 'string'
+      ? metadata.basePublishedRevisionId : existing.basePublishedRevisionId,
+    idempotencyKey: metadata && typeof metadata.idempotencyKey === 'string' ? metadata.idempotencyKey : existing.idempotencyKey,
+    idempotencyPayload: metadata && typeof metadata.idempotencyPayload === 'string'
+      ? metadata.idempotencyPayload : existing.idempotencyPayload,
+  };
+  var payload = wikiDraftRequestPayload({
+    snapshot: next.snapshot,
+    summary: next.summary,
+    basePublishedRevisionId: next.basePublishedRevisionId || null,
+  });
+  if (next.idempotencyPayload && next.idempotencyPayload !== payload) {
+    next.idempotencyKey = null;
+    next.idempotencyPayload = null;
+  }
+  try {
+    window.localStorage.setItem(key, JSON.stringify(next));
+    return reportLocalDraftWrite(key, true);
+  } catch (_error) { return reportLocalDraftWrite(key, false); }
+}
+
+function clearWikiDraft(kind, resourceId, accountId) {
+  var key = wikiDraftStorageKey(kind, resourceId, accountId);
+  if (!key) return false;
+  try { window.localStorage.removeItem(key); return true; } catch (_error) { return false; }
+}
+
+function clearWikiTransientState() {
+  wikiArticleFileState = createWikiArticleFileState();
+  adminWikiTransferState = createAdminWikiTransferState();
+  wikiStaffState = { items: null, article: null, loading: false, error: null };
+  serverWikiPages = null;
+  serverWikiSections = null; wikiSectionsError = null; wikiSectionsLoading = false; wikiSectionsGeneration += 1;
+  serverWikiCategories = null;
+  wikiCategoriesLoading = false;
+  wikiCategoriesError = null;
+  wikiPagesLoadError = null;
+  wikiPagesLoading = false;
+  currentWikiArticle = null;
+  wikiArticleLoading = false;
+  wikiArticleLoadingSlug = null;
+  wikiArticleLoadError = null;
+  wikiArticleLoadErrorSlug = null;
+  wikiBacklinksState = { pageId: null, items: [], loading: false, loaded: false, hasMore: false, error: null };
+  wikiBacklinksRequestSequence += 1;
+  wikiProposalState = { items: [], staffItems: [], loading: false, loaded: false, error: null };
+  wikiEditorPage = null;
+  wikiEditorLoading = false;
+  wikiEditorLoadingId = null;
+  wikiEditorError = null;
+  wikiEditorErrorId = null;
+  wikiEditorLoadedId = null;
+  wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+  wikiEditorDiffState = { pageId: null, beforeRevisionId: '', afterRevisionId: '', loading: false, error: null, result: null };
+  wikiEditorDiffRequestSequence += 1;
+  wikiEditorDiscussionState = {
+    pageId: null, categories: null, selectedCategoryId: '', threads: [], loadingCategories: false,
+    loadingThreads: false, error: null, currentThread: null, currentThreadId: null,
+    loadingCurrentThread: false, saving: false,
+  };
+  wikiEditorDiscussionRequestSequence += 1;
+  wikiEditorSections = [];
+  wikiEditorSectionsKey = null;
+  wikiEditorDraftRestoreKey = null;
+  wikiEditorDraftRestorePending = false;
+  wikiEditorDraftRestoreError = null;
+  wikiEditorDraftRestoreCompleteKey = null;
+  wikiProposalDraftRestorePending = false;
+  wikiProposalDraftRestoreError = null;
+  wikiProposalDraftSafeHtml = null;
+  wikiProposalDraftSafeHtmlKey = null;
+  wikiProposalDetail = null;
+  wikiProposalDetailLoading = false;
+  wikiProposalDetailLoadingId = null;
+  wikiProposalDetailError = null;
+  wikiProposalDetailErrorId = null;
+  wikiProposalPage = null;
+  wikiProposalRequestSequence += 1;
+  wikiEditorRequestSequence += 1;
+  wikiArticleRequestSequence += 1;
+  wikiProposalDetailRequestSequence += 1;
+}
+
+function previewWikiHtml(html) {
+  return wikiApi()('POST', '/api/content/preview', { html: String(html || '') }).then(function(response) {
+    var safe = wikiUnwrap(response);
+    if (!safe || typeof safe.html !== 'string') throw new Error('A prévia segura do conteúdo está incompleta.');
+    return safe.html;
+  });
+}
+
+function wikiEditorDraftRestoreToken(resourceId, draft) {
+  return wikiDraftAccountId() + ':' + resourceId + ':' + (draft.updatedAt || '') + ':' + wikiEditorLoadedId;
+}
+
+function wikiProposalDraftRestoreToken(article, draft) {
+  return wikiDraftAccountId() + ':' + article.id + ':' + (draft.updatedAt || '');
+}
+
+function restoreWikiEditorDraftContent() {
+  if (!isModOrAdmin()) return;
+  var id = currentPage === 'wikiCreate' ? null : currentWikiPageId;
+  var resourceId = id || 'new';
+  var draft = readWikiDraft('editor', resourceId);
+  if (!draft || !draft.snapshot || !draft.snapshot.body || !Array.isArray(draft.snapshot.body.sections)) return;
+  var key = wikiEditorDraftRestoreToken(resourceId, draft);
+  if (wikiEditorDraftRestoreCompleteKey === key
+      || (wikiEditorDraftRestoreKey === key && (wikiEditorDraftRestorePending || wikiEditorDraftRestoreError))) return;
+  var sections = draft.snapshot.body.sections;
+  if (!sections.some(function(section) { return section && typeof section.html === 'string'; })) return;
+  wikiEditorDraftRestoreKey = key;
+  wikiEditorDraftRestorePending = true;
+  wikiEditorDraftRestoreError = null;
+  if (currentPage === 'wikiEditor' || currentPage === 'wikiCreate') render();
+  Promise.all(sections.map(function(section) {
+    return section && typeof section.html === 'string' ? previewWikiHtml(section.html) : Promise.resolve(null);
+  })).then(function(safeSections) {
+    if (wikiEditorDraftRestoreKey !== key) return;
+    // Apply recovered section content only after every section has passed the
+    // authenticated sanitizer endpoint. A partial preview failure leaves the
+    // editor on its server-provided content.
+    wikiEditorSections = wikiEditorSections.map(function(section, index) {
+      return Object.assign({}, section, {
+        html: safeSections[index] === null ? section.html : safeSections[index],
+      });
+    });
+    wikiEditorDraftRestoreCompleteKey = key;
+    wikiEditorDraftRestorePending = false;
+    wikiEditorDraftRestoreError = null;
+    if (currentPage === 'wikiEditor' || currentPage === 'wikiCreate') render();
+  }).catch(function(error) {
+    if (wikiEditorDraftRestoreKey !== key) return;
+    wikiEditorDraftRestoreError = error && error.message ? error.message : 'Não foi possível validar o rascunho local.';
+    // Leave recovered HTML out of the editor until it can be checked.
+    if (currentPage === 'wikiEditor' || currentPage === 'wikiCreate') render();
+  });
+}
+
+function restoreWikiProposalDraftContent() {
+  if (currentPage !== 'wikiArticle' || !currentWikiArticle || !DB.session || isModOrAdmin()) return;
+  var articleId = currentWikiArticle.id;
+  var draft = readWikiDraft('proposal', articleId);
+  if (!draft || !draft.snapshot || !draft.snapshot.body || !Array.isArray(draft.snapshot.body.sections)) return;
+  var firstSection = draft.snapshot.body.sections[0];
+  if (!firstSection || typeof firstSection.html !== 'string') return;
+  var editor = document.getElementById('wiki-proposal-body');
+  if (!editor) return;
+  var key = wikiProposalDraftRestoreToken(currentWikiArticle, draft);
+  if (wikiProposalDraftSafeHtmlKey === key
+      || (wikiEditorDraftRestoreKey === key && (wikiProposalDraftRestorePending || wikiProposalDraftRestoreError))) return;
+  wikiEditorDraftRestoreKey = key;
+  wikiProposalDraftRestorePending = true;
+  wikiProposalDraftRestoreError = null;
+  render();
+  previewWikiHtml(firstSection.html).then(function(safeHtml) {
+    if (wikiEditorDraftRestoreKey !== key || currentPage !== 'wikiArticle'
+        || !currentWikiArticle || currentWikiArticle.id !== articleId) return;
+    wikiProposalDraftSafeHtml = safeHtml;
+    wikiProposalDraftSafeHtmlKey = key;
+    wikiProposalDraftRestorePending = false;
+    render();
+  }).catch(function() {
+    if (wikiEditorDraftRestoreKey === key) {
+      wikiProposalDraftRestoreError = 'Não foi possível validar o rascunho local.';
+      if (currentPage === 'wikiArticle') render();
+    }
+  });
+}
+
+function wikiSlugFromTitle(value) {
+  return String(value || '').normalize('NFKD').replace(/\p{M}+/gu, '').toLowerCase()
+    .replace(/[\s\p{P}]+/gu, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 100);
+}
+
+function wikiCsv(value) {
+  return String(value || '').split(',').map(function(item) { return item.trim(); }).filter(Boolean);
+}
+
+var wikiEditorSections = [];
+var wikiEditorSectionsKey = null;
+
+function wikiEditorResourceId() {
+  return (currentPage === 'wikiCreate' ? null : currentWikiPageId) || 'new';
+}
+
+function ensureWikiEditorPage(id) {
+  var key = id ? String(id).toLowerCase() : 'new';
+  if (wikiEditorLoadedId === key || (wikiEditorLoading && wikiEditorLoadingId === key)) return;
+  wikiEditorLoading = true;
+  wikiEditorLoadingId = key;
+  wikiEditorError = null;
+  wikiEditorErrorId = null;
+  var sequence = ++wikiEditorRequestSequence;
+  if (!id) {
+    wikiEditorPage = null;
+    wikiEditorLoadedId = 'new';
+    wikiEditorLoading = false;
+    wikiEditorLoadingId = null;
+    wikiEditorHistory = { items: [], loading: false, loaded: true, error: null };
+    wikiEditorSectionsKey = null;
+    return;
+  }
+  wikiEditorPage = null;
+  wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(id)).then(function(response) {
+    if (sequence !== wikiEditorRequestSequence) return;
+    var page = wikiUnwrap(response);
+    if (!page || page.id !== id || !page.head || !page.head.snapshot) throw new Error('O servidor não retornou o rascunho deste artigo.');
+    wikiEditorPage = page;
+    wikiEditorLoadedId = key;
+    wikiEditorSectionsKey = null;
+    wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+    loadWikiEditorHistory(id, false);
+  }).catch(function(error) {
+    if (sequence === wikiEditorRequestSequence) {
+      wikiEditorError = error && error.message ? error.message : 'Não foi possível carregar o artigo para edição.';
+      wikiEditorErrorId = key;
+    }
+  }).finally(function() {
+    if (sequence !== wikiEditorRequestSequence) return;
+    wikiEditorLoading = false;
+    wikiEditorLoadingId = null;
+    if (currentPage === 'wikiEditor' && String(currentWikiPageId) === String(id)) render();
+  });
+}
+
+function loadWikiEditorHistory(pageId, force) {
+  if (wikiEditorHistory.loading || (wikiEditorHistory.loaded && !force)) return;
+  wikiEditorHistory.loading = true;
+  wikiEditorHistory.error = null;
+  wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/revisions?limit=50&offset=0').then(function(response) {
+    if (!response || !Array.isArray(response.data)) throw new Error('A resposta do histórico é inválida.');
+    wikiEditorHistory.items = response.data;
+    wikiEditorHistory.loaded = true;
+  }).catch(function(error) {
+    wikiEditorHistory.error = error && error.message ? error.message : 'Não foi possível carregar o histórico.';
+  }).finally(function() {
+    wikiEditorHistory.loading = false;
+    if (currentPage === 'wikiEditor' && String(currentWikiPageId) === String(pageId)) render();
+  });
+}
+
+function initialWikiSnapshot() {
+  var id = newForumIdempotencyKey();
+  return {
+    schemaVersion: 1,
+    title: '', slug: '', aliases: [], type: 'concept', summary: '', categories: [],
+    accessLevel: 'public', audience: 'unspecified',
+    body: { format: 'richtext-v1', infobox: [], sections: [{
+      id: id, heading: 'Visão geral', html: '', blocks: [], authority: [], knowledgeLayer: 'unspecified',
+    }] },
+  };
+}
+
+function initializeWikiEditorSections(resourceId, draft) {
+  var key = String(resourceId) + ':' + (draft && draft.updatedAt || 'clean');
+  if (wikiEditorSectionsKey === key) return;
+  var serverSnapshot = wikiEditorPage && wikiEditorPage.head ? wikiEditorPage.head.snapshot : initialWikiSnapshot();
+  var chosen = draft && draft.snapshot && draft.snapshot.body && Array.isArray(draft.snapshot.body.sections)
+    ? draft.snapshot : serverSnapshot;
+  var serverSections = serverSnapshot.body && Array.isArray(serverSnapshot.body.sections) ? serverSnapshot.body.sections : [];
+  wikiEditorSections = (chosen.body.sections || []).map(function(section, index) {
+    var safeSection = serverSections[index] || {};
+    return {
+      id: typeof section.id === 'string' ? section.id : newForumIdempotencyKey(),
+      heading: typeof section.heading === 'string' ? section.heading : (safeSection.heading || 'Nova seção'),
+      html: typeof safeSection.html === 'string' ? safeSection.html : '',
+      blocks: Array.isArray(section.blocks) ? section.blocks : [],
+      authority: Array.isArray(section.authority) ? section.authority : [],
+      knowledgeLayer: typeof section.knowledgeLayer === 'string' ? section.knowledgeLayer : 'unspecified',
+    };
+  });
+  if (!wikiEditorSections.length) wikiEditorSections = initialWikiSnapshot().body.sections;
+  wikiEditorSectionsKey = key;
+}
+
+function wikiEditorFormSnapshot() {
+  var base = wikiEditorPage && wikiEditorPage.head ? wikiEditorPage.head.snapshot : initialWikiSnapshot();
+  var title = ((document.getElementById('wiki-editor-title') || {}).value || '').trim();
+  var slugInput = ((document.getElementById('wiki-editor-slug') || {}).value || '').trim();
+  var sections = wikiEditorSections.map(function(section, index) {
+    var heading = ((document.getElementById('wiki-section-heading-' + index) || {}).value || '').trim();
+    var editorId = 'wiki-section-' + index;
+    return {
+      id: section.id,
+      heading: heading || section.heading || 'Nova seção',
+      html: typeof getEditorContent === 'function' ? getEditorContent(editorId) : section.html,
+      blocks: section.blocks || [],
+      authority: section.authority || [],
+      knowledgeLayer: section.knowledgeLayer || 'unspecified',
+    };
+  });
+  var type = ((document.getElementById('wiki-editor-type') || {}).value || base.type || 'concept');
+  var audience = ((document.getElementById('wiki-editor-audience') || {}).value || base.audience || 'unspecified');
+  var accessLevel = ((document.getElementById('wiki-editor-access') || {}).value || base.accessLevel || 'public');
+  return {
+    schemaVersion: 1,
+    title: title,
+    slug: slugInput || (base.slug || wikiSlugFromTitle(title)),
+    aliases: wikiCsv((document.getElementById('wiki-editor-aliases') || {}).value),
+    type: type,
+    summary: ((document.getElementById('wiki-editor-summary') || {}).value || '').trim(),
+    categories: wikiCsv((document.getElementById('wiki-editor-categories') || {}).value),
+    accessLevel: accessLevel,
+    audience: audience,
+    body: { format: 'richtext-v1', infobox: base.body && Array.isArray(base.body.infobox) ? base.body.infobox : [], sections: sections },
+  };
+}
+
+function persistWikiEditorDraft() {
+  if (!isModOrAdmin()) return false;
+  var resourceId = wikiEditorResourceId();
+  var snapshot = wikiEditorFormSnapshot();
+  var existing = readWikiDraft('editor', resourceId);
+  var summary = ((document.getElementById('wiki-editor-edit-summary') || {}).value || '').trim();
+  return writeWikiDraft('editor', resourceId, snapshot, {
+    summary: summary,
+    baseWorkVersion: existing && Number.isInteger(existing.baseWorkVersion)
+      ? existing.baseWorkVersion : wikiEditorPage && wikiEditorPage.workVersion,
+    idempotencyKey: existing && existing.idempotencyKey,
+    idempotencyPayload: existing && existing.idempotencyPayload,
+  });
+}
+
+function addWikiEditorSection() {
+  var snapshot = wikiEditorFormSnapshot();
+  wikiEditorSections = snapshot.body.sections;
+  wikiEditorSections.push({
+    id: newForumIdempotencyKey(), heading: 'Nova seção', html: '', blocks: [], authority: [], knowledgeLayer: 'unspecified',
+  });
+  wikiEditorSectionsKey = null;
+  persistWikiEditorDraft();
+  wikiEditorSectionsKey = null;
+  render();
+}
+
+function removeWikiEditorSection(index) {
+  if (wikiEditorSections.length <= 1) return;
+  wikiEditorSections = wikiEditorFormSnapshot().body.sections;
+  wikiEditorSections.splice(index, 1);
+  wikiEditorSectionsKey = null;
+  persistWikiEditorDraft();
+  wikiEditorSectionsKey = null;
+  render();
+}
+
+function createWikiArticleFileState() {
+  return { resourceId: null, open: false, fileText: '', filename: '', preview: null, targetPageId: '',
+    sourceSets: {}, sectionBindings: {}, pending: false, reading: false, error: null,
+    guide: null, guideOpen: false, guideLoading: false, guideError: null, exportPending: false };
+}
+
+function wikiArticleFileContext(state) {
+  var account = wikiDraftAccountId();
+  return function() { return wikiArticleFileState === state && isModOrAdmin() && wikiDraftAccountId() === account; };
+}
+
+function downloadWikiArticleText(text, filename, mime) {
+  var url = window.URL.createObjectURL(new Blob([text], { type: mime || 'application/json;charset=utf-8' }));
+  var link = document.createElement('a');
+  link.href = url;
+  link.download = String(filename || 'artigo.json').replace(/[^a-z0-9._-]/gi, '-');
+  link.hidden = true;
+  document.body.appendChild(link);
+  link.click(); link.remove();
+  window.setTimeout(function() { window.URL.revokeObjectURL(url); }, 1000);
+}
+
+function loadWikiArticleGuide() {
+  if (!isModOrAdmin()) return;
+  var state = wikiArticleFileState;
+  if (state.guideLoading) return;
+  var valid = wikiArticleFileContext(state);
+  state.guideLoading = true; state.guideError = null;
+  wikiApi()('GET', '/api/staff/wiki/article-files/guide').then(function(response) {
+    if (!valid()) return;
+    var guide = wikiUnwrap(response);
+    if (!guide || typeof guide.brief !== 'string' || !guide.example) throw new Error('O modelo de autoria retornado é inválido.');
+    state.guide = guide;
+  }).catch(function(error) { if (valid()) state.guideError = error && error.message || 'Não foi possível carregar o brief.'; })
+    .finally(function() { if (valid()) { state.guideLoading = false; if (currentPage === 'wikiCreate' || currentPage === 'wikiEditor') render(); } });
+}
+
+function downloadWikiArticleGuide(kind) {
+  if (!isModOrAdmin() || !wikiArticleFileState.guide) return;
+  var guide = wikiArticleFileState.guide;
+  if (kind === 'example') downloadWikiArticleText(JSON.stringify(guide.example, null, 2) + '\n', 'modelo-artigo.authoring.json');
+  else downloadWikiArticleText(guide.brief + '\n\n## Catálogo de fontes disponíveis neste servidor\n\n'
+    + JSON.stringify(guide.sourceSets || [], null, 2) + '\n', 'brief-artigo-ia.md', 'text/markdown;charset=utf-8');
+}
+
+function readWikiArticleImportFile(input) {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var file = input && input.files && input.files[0];
+  if (!file) return Promise.resolve();
+  var state = wikiArticleFileState, valid = wikiArticleFileContext(state);
+  state.open = true; state.preview = null; state.error = null; state.sourceSets = {}; state.sectionBindings = {};
+  state.targetPageId = currentPage === 'wikiEditor' ? currentWikiPageId || '' : '';
+  state.fileText = ''; state.filename = file.name; state.reading = true;
+  if (file.size > 4 * 1024 * 1024) {
+    state.reading = false; state.error = 'O arquivo deve ter no máximo 4 MiB.'; render(); return Promise.resolve();
+  }
+  render();
+  return file.arrayBuffer().then(function(buffer) {
+    if (!valid()) return;
+    state.fileText = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    state.reading = false;
+    return previewWikiArticleFile();
+  }).catch(function(error) {
+    if (!valid()) return;
+    state.reading = false; state.fileText = '';
+    state.error = error && error.message || 'Não foi possível ler o arquivo JSON UTF-8.'; render();
+  });
+}
+
+function changeWikiArticleFileChoice(kind, key, value) {
+  if (!isModOrAdmin()) return;
+  var state = wikiArticleFileState;
+  if (state.pending || state.reading) return;
+  if (kind === 'target') { state.targetPageId = value; state.sectionBindings = {}; }
+  if (kind === 'source') state.sourceSets[key] = value;
+  if (kind === 'section') state.sectionBindings[key] = value;
+  if (state.preview) state.preview.previewToken = null;
+  state.error = null;
+  render();
+}
+
+function previewWikiArticleFile() {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var state = wikiArticleFileState;
+  if (!state.fileText || state.pending || state.reading) return Promise.resolve();
+  var valid = wikiArticleFileContext(state);
+  var body = { fileText: state.fileText };
+  var sets = Object.keys(state.sourceSets).filter(function(key) { return state.sourceSets[key]; });
+  if (sets.length) body.sourceSets = sets.map(function(key) { return { set: key, archiveSha256: state.sourceSets[key] }; });
+  if (state.targetPageId) body.targetPageId = state.targetPageId;
+  var bindings = Object.keys(state.sectionBindings);
+  if (bindings.length) body.sectionBindings = bindings.map(function(key) { return { sourceSectionId: key, targetSectionId: state.sectionBindings[key] || null }; });
+  state.pending = true; state.error = null; state.preview = null;
+  render();
+  return wikiApi()('POST', '/api/staff/wiki/article-files/preview', body).then(function(response) {
+    if (!valid()) return;
+    var preview = wikiUnwrap(response);
+    if (!preview || typeof preview !== 'object') throw new Error('A prévia retornada é inválida.');
+    state.preview = preview;
+  }).catch(function(error) { if (valid()) state.error = error && error.message || 'Não foi possível validar o artigo.'; })
+    .finally(function() { if (valid()) { state.pending = false; render(); } });
+}
+
+function commitWikiArticleFile() {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var state = wikiArticleFileState;
+  if (state.pending || !state.preview || !state.preview.previewToken) return Promise.resolve();
+  var valid = wikiArticleFileContext(state);
+  var token = state.preview.previewToken;
+  state.pending = true; state.error = null;
+  render();
+  return wikiApi()('POST', '/api/staff/wiki/article-files/commit', { previewToken: token }).then(function(response) {
+    if (!valid()) return;
+    var result = wikiUnwrap(response);
+    if (!result || !result.page || !result.page.id) throw new Error('Não foi possível confirmar o rascunho. Confira o estado antes de repetir.');
+    state.pending = false;
+    wikiStaffState = { items: null, article: null, loading: false, error: null };
+    wikiEditorLoadedId = null;
+    wikiArticleFileState = createWikiArticleFileState();
+    navigate('wikiStaffArticle', result.page.id);
+    showAlert(result.replay ? 'Esta importação já havia sido salva; nenhuma revisão foi duplicada.' : 'Arquivo salvo como rascunho compartilhado. A publicação permanece inalterada.', 'success');
+  }).catch(function(error) {
+    if (!valid()) return;
+    state.error = error && error.message || 'Não foi possível confirmar o rascunho. Confira o estado antes de repetir.';
+    // Keep the same signed token on transport failure: replay is idempotent.
+    if (error && ((error.status >= 400 && error.status < 500) || ['STALE_VERSION', 'STALE_HEAD', 'WIKI_NAME_CONFLICT', 'WIKI_ARTICLE_FILE_PREVIEW_STALE', 'WIKI_ARTICLE_PREVIEW_EXPIRED'].includes(error.code))) {
+      if (state.preview) state.preview.previewToken = null;
+    }
+  }).finally(function() { if (valid()) { state.pending = false; render(); } });
+}
+
+function exportWikiArticleFile(pageId) {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var state = wikiArticleFileState;
+  if (state.exportPending) return Promise.resolve();
+  var valid = wikiArticleFileContext(state);
+  state.exportPending = true;
+  return wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/article-file').then(function(response) {
+    if (!valid()) return;
+    var result = wikiUnwrap(response);
+    if (!result || !result.file || !result.filename) throw new Error('O arquivo exportado é inválido.');
+    downloadWikiArticleText(JSON.stringify(result.file, null, 2) + '\n', result.filename);
+    showAlert('Versão de trabalho exportada. ' + (result.notes || []).join(' '), 'success');
+  }).catch(function(error) { if (valid()) showAlert(error && error.message || 'Não foi possível exportar o artigo.', 'error'); })
+    .finally(function() { if (valid()) state.exportPending = false; });
+}
+
+function renderWikiArticleFileMetadata(snapshot) {
+  return '<dl class="wiki-file-metadata"><dt>Endereço</dt><dd>' + h(snapshot.slug || '') + '</dd><dt>Tipo</dt><dd>' + h(snapshot.type || '') + '</dd><dt>Nomes alternativos</dt><dd>' + h((snapshot.aliases || []).join(', ') || 'Nenhum') + '</dd><dt>Categorias</dt><dd>' + h((snapshot.categories || []).join(', ') || 'Nenhuma') + '</dd><dt>Público-alvo</dt><dd>' + h(snapshot.audience || '') + '</dd></dl>';
+}
+
+function renderWikiArticleFilePanel(pageId) {
+  if (!isModOrAdmin()) return '';
+  var state = wikiArticleFileState;
+  var resourceId = pageId || 'new';
+  if (state.resourceId !== resourceId) {
+    var guide = state.guide;
+    wikiArticleFileState = createWikiArticleFileState(); state = wikiArticleFileState;
+    state.resourceId = resourceId; state.guide = guide;
+  }
+  var preview = state.preview;
+  var disabled = state.pending || state.reading;
+  var html = '<details class="builder-panel wiki-article-file-panel"' + (state.open ? ' open' : '')
+    + ' ontoggle="wikiArticleFileState.open=this.open"><summary>Importar artigo JSON e modelo para IA</summary>'
+    + '<p>Envie um artigo por arquivo: AetherverseWikiAuthoringV1 (autoria do Work) ou AetherverseWikiBundleV1 (exportação portátil). A prévia não grava nem publica.</p>'
+    + '<label for="wiki-article-file">Arquivo JSON UTF-8, até 4 MiB</label><input id="wiki-article-file" type="file" accept=".json,application/json" onchange="readWikiArticleImportFile(this)"' + (disabled ? ' disabled' : '') + '>';
+  if (state.filename) html += '<p>Arquivo: ' + h(state.filename) + '</p>';
+  if (state.reading) html += '<p>Lendo arquivo…</p>';
+  if (state.pending) html += '<p role="status">Processando…</p>';
+  if (state.error) html += '<div class="alert alert-error" role="alert">' + h(state.error) + '</div>';
+  if (preview) {
+    (preview.needsBindings || []).forEach(function(binding) {
+      html += '<label>Conjunto de fontes: ' + h(binding.set) + '<select aria-label="Conjunto ' + ha(binding.set) + '" onchange="changeWikiArticleFileChoice(\'source\',' + jsArg(binding.set) + ',this.value)"' + (disabled ? ' disabled' : '') + '><option value="">Selecione o arquivo de origem</option>';
+      (binding.choices || []).forEach(function(hash) { html += '<option value="' + ha(hash) + '"' + (state.sourceSets[binding.set] === hash ? ' selected' : '') + '>' + h(hash) + '</option>'; });
+      html += '</select></label>';
+    });
+    if (preview.candidates && preview.candidates.length) {
+      html += '<label for="wiki-article-file-target">Artigo existente: importar como revisão</label><select id="wiki-article-file-target" onchange="changeWikiArticleFileChoice(\'target\',\'\',this.value)"' + (disabled ? ' disabled' : '') + '><option value="">Escolha o artigo a revisar</option>';
+      preview.candidates.forEach(function(candidate) { html += '<option value="' + ha(candidate.id) + '"' + (state.targetPageId === candidate.id ? ' selected' : '') + '>' + h(candidate.title) + ' · versão ' + Number(candidate.workVersion) + '</option>'; });
+      html += '</select>';
+    }
+    (preview.sectionOptions || []).forEach(function(section) {
+      var choice = Object.hasOwn(state.sectionBindings, section.sourceSectionId) ? state.sectionBindings[section.sourceSectionId] : section.selectedTargetId || '';
+      html += '<label>Identidade: ' + h(section.heading) + '<select aria-label="Identidade ' + ha(section.heading) + '" onchange="changeWikiArticleFileChoice(\'section\',' + jsArg(section.sourceSectionId) + ',this.value)"' + (disabled ? ' disabled' : '') + '><option value="">Usar identidade gerada do arquivo</option>';
+      (section.choices || []).forEach(function(target) { html += '<option value="' + ha(target.id) + '"' + (choice === target.id ? ' selected' : '') + '>' + h(target.heading) + '</option>'; });
+      html += '</select></label>';
+    });
+    (preview.warnings || []).forEach(function(warning) { html += '<p class="alert alert-info">' + h(warning) + '</p>'; });
+    if (preview.snapshot) {
+      if (preview.beforeSnapshot) html += '<details class="wiki-file-before"><summary>Comparar com a versão atual do artigo</summary><h2>' + h(preview.beforeSnapshot.title) + '</h2><p>' + h(preview.beforeSnapshot.summary || '') + '</p>' + renderWikiArticleFileMetadata(preview.beforeSnapshot) + renderWikiSnapshot(preview.beforeSnapshot) + '</details>';
+      html += '<div class="wiki-file-preview"><h2>Prévia: ' + h(preview.snapshot.title) + '</h2>'
+        + '<p>' + h(preview.snapshot.summary || '') + '</p>' + renderWikiArticleFileMetadata(preview.snapshot) + '<p>' + (preview.targetPageId ? 'Nova revisão do artigo existente, versão de base ' + Number(preview.expectedVersion) + '.' : (preview.candidates && preview.candidates.length ? 'Artigo existente encontrado: selecione o destino e valide novamente.' : 'Novo artigo.'))
+        + ' Somente equipe; nenhuma publicação será alterada.</p>' + renderWikiSnapshot(preview.snapshot) + '</div>';
+      html += '<details><summary>Fontes e citações (' + Number((preview.citations || []).length) + ')</summary><ul>';
+      (preview.sourceMatches || []).forEach(function(source) { html += '<li>' + h(source.set || '') + ' · ' + h(source.path || '') + '<br>SHA-256: ' + h(source.fileSha256 || '') + '</li>'; });
+      (preview.citations || []).forEach(function(citation) {
+        var section = (preview.snapshot.body.sections || []).find(function(item) { return item.id === citation.sectionId; });
+        var source = (preview.sourceMatches || []).find(function(item) { return (item.sourceId || item.id) === citation.sourceId; });
+        html += '<li>' + h(section ? section.heading : citation.sectionId) + ' · ' + h(source ? source.path : citation.sourceId) + ' · ' + h(citation.locator) + '</li>';
+      });
+      (preview.snapshot.body.sections || []).forEach(function(section) {
+        html += '<li>' + h(section.heading) + ' — Camada: ' + h(section.knowledgeLayer) + '; autoridade: ' + h((section.authority || []).join(', ') || 'sem marca agregada') + '</li>';
+      });
+      html += '</ul></details>';
+    }
+    if (preview.targetPageId && readWikiDraft('editor', preview.targetPageId)) html += '<p class="alert alert-info">Há um rascunho neste navegador para o artigo. Ele será preservado e poderá ficar desatualizado após a importação.</p>';
+  }
+  if (state.fileText) html += '<button type="button" class="btn" onclick="previewWikiArticleFile()"' + (disabled ? ' disabled' : '') + '>Validar arquivo / atualizar prévia</button> ';
+  if (preview && preview.previewToken) html += '<button type="button" class="btn btn-primary" id="wiki-article-file-commit" onclick="commitWikiArticleFile()"' + (disabled ? ' disabled' : '') + '>Salvar prévia como rascunho</button>';
+  html += '<details class="wiki-file-guide"' + (state.guideOpen ? ' open' : '') + ' ontoggle="wikiArticleFileState.guideOpen=this.open"><summary>Como pedir a uma IA que formate o artigo</summary>';
+  if (!state.guide) html += '<p><button type="button" class="btn" onclick="loadWikiArticleGuide()"' + (state.guideLoading ? ' disabled' : '') + '>' + (state.guideLoading ? 'Carregando…' : 'Carregar brief e modelo') + '</button></p>';
+  if (state.guideError) html += '<p class="alert alert-error">' + h(state.guideError) + '</p>';
+  if (state.guide) html += '<p><button type="button" class="btn" onclick="downloadWikiArticleGuide(\'example\')">Baixar exemplo JSON</button> <button type="button" class="btn" onclick="downloadWikiArticleGuide(\'brief\')">Baixar brief para IA</button></p><label for="wiki-article-ai-brief">Instruções de formatação</label><textarea id="wiki-article-ai-brief" readonly rows="12">' + h(state.guide.brief) + '</textarea><p>O brief baixado inclui caminhos e identidades das fontes disponíveis, sem seus textos. Forneça à IA as fontes que ela não tiver. Arquivos exportados podem conter material privado.</p>';
+  return html + '</details></details>';
+}
+
+function renderWikiEditor() {
+  if (!isModOrAdmin()) return '<div class="alert alert-error">A edição de artigos é restrita à equipe.</div>';
+  var id = currentPage === 'wikiCreate' ? null : currentWikiPageId;
+  var resourceId = id || 'new';
+  if (wikiEditorLoadedId !== resourceId) ensureWikiEditorPage(id);
+  if (wikiEditorLoading && wikiEditorLoadingId === resourceId) return '<div class="alert alert-info">Carregando editor do artigo…</div>';
+  if (wikiEditorError && wikiEditorErrorId === resourceId) return '<div class="alert alert-error">' + h(wikiEditorError)
+    + ' <button class="btn btn-small" onclick="ensureWikiEditorPage(' + jsArg(id || '') + ')">Tentar novamente</button></div>';
+
+  var localDraft = readWikiDraft('editor', resourceId);
+  var base = wikiEditorPage && wikiEditorPage.head ? wikiEditorPage.head.snapshot : initialWikiSnapshot();
+  var snapshot = localDraft && localDraft.snapshot ? localDraft.snapshot : base;
+  initializeWikiEditorSections(resourceId, localDraft);
+  var restoreKey = localDraft ? wikiEditorDraftRestoreToken(resourceId, localDraft) : null;
+  var hasRecoveredHtml = !!(localDraft && localDraft.snapshot.body.sections.some(function(section) {
+    return section && typeof section.html === 'string';
+  }));
+  var restoreComplete = !!(restoreKey && wikiEditorDraftRestoreCompleteKey === restoreKey);
+  var restorePending = hasRecoveredHtml && !restoreComplete;
+  var restoreError = restoreKey && wikiEditorDraftRestoreKey === restoreKey ? wikiEditorDraftRestoreError : null;
+  var restoreDisabled = restorePending || !!restoreError;
+  var staleDraft = !!(id && localDraft && Number.isInteger(localDraft.baseWorkVersion)
+    && localDraft.baseWorkVersion !== wikiEditorPage.workVersion);
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / ' + (id ? 'Editar artigo' : 'Novo artigo') + '</div>'
+    + '<div class="cat-header"><span>' + (id ? 'Rascunho do artigo' : 'Novo artigo da wiki') + '</span>'
+    + '<button class="btn btn-small" onclick="navigate(\'wikiStaff\')">Wiki da equipe</button>'
+    + (id ? '<button class="btn btn-small" onclick="navigate(\'wikiStaffArticle\',' + jsArg(id) + ')">Ler artigo</button>' : '') + '</div>';
+  html += renderWikiArticleFilePanel(id);
+  if (id) html += '<p><button type="button" class="btn" onclick="exportWikiArticleFile(' + jsArg(id) + ')">Exportar JSON da equipe</button></p>';
+  if (staleDraft) html += '<div class="alert alert-error">Este rascunho local foi iniciado na versão '
+    + localDraft.baseWorkVersion + ', mas o artigo agora está na versão ' + wikiEditorPage.workVersion
+    + '. Atualize a página ou descarte o rascunho local antes de salvar.</div>';
+  if (localDraft) html += '<div class="alert alert-info">Rascunho local salvo neste navegador para sua conta.'
+    + ' <button class="btn btn-small" onclick="discardWikiEditorDraft()">Descartar rascunho local</button></div>';
+  if (restorePending && !restoreError) html += '<div class="alert alert-info">Validando o conteúdo do rascunho local antes de restaurá-lo…</div>';
+  if (restoreError) html += '<div class="alert alert-error">' + h(restoreError)
+    + ' <button class="btn btn-small" onclick="retryWikiEditorDraftRestore()">Tentar validar novamente</button></div>';
+  html += '<fieldset style="border:0;padding:0;margin:0;min-width:0;"' + (restoreDisabled ? ' disabled' : '') + '><div class="builder-panel">'
+    + '<div class="form-row"><label for="wiki-editor-title">Título</label><input id="wiki-editor-title" maxlength="200" value="' + ha(snapshot.title || '') + '" oninput="persistWikiEditorDraft()"></div>'
+    + '<div class="form-row"><label for="wiki-editor-slug">Endereço curto</label><input id="wiki-editor-slug" maxlength="100" value="' + ha(snapshot.slug || '') + '" placeholder="gerado a partir do título" oninput="persistWikiEditorDraft()"></div>'
+    + '<div class="form-row"><label for="wiki-editor-summary">Resumo</label><textarea id="wiki-editor-summary" maxlength="1000" rows="3" oninput="persistWikiEditorDraft()">' + h(snapshot.summary || '') + '</textarea></div>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;">'
+    + '<div class="form-row"><label for="wiki-editor-type">Tipo</label><select id="wiki-editor-type" onchange="persistWikiEditorDraft()">';
+  var wikiTypes = [
+    ['concept', 'Conceito'], ['organization', 'Organização'], ['place', 'Lugar'], ['entity', 'Entidade'],
+    ['technique', 'Técnica'], ['artifact', 'Artefato'], ['event', 'Evento'], ['character-reference', 'Personagem'],
+  ];
+  wikiTypes.forEach(function(type) { html += '<option value="' + type[0] + '"' + (snapshot.type === type[0] ? ' selected' : '') + '>' + type[1] + '</option>'; });
+  html += '</select></div><div class="form-row"><label for="wiki-editor-audience">Público-alvo</label><select id="wiki-editor-audience" onchange="persistWikiEditorDraft()">';
+  [['unspecified', 'Não especificado'], ['reader', 'Leitor'], ['player', 'Jogador'], ['author', 'Autor']].forEach(function(item) {
+    html += '<option value="' + item[0] + '"' + (snapshot.audience === item[0] ? ' selected' : '') + '>' + item[1] + '</option>';
+  });
+  html += '</select></div></div>'
+    + '<div class="form-row"><label for="wiki-editor-categories">Categorias (separadas por vírgula)</label><input id="wiki-editor-categories" value="' + ha((snapshot.categories || []).join(', ')) + '" oninput="persistWikiEditorDraft()"></div>'
+    + '<div class="form-row"><label for="wiki-editor-aliases">Nomes alternativos (separados por vírgula)</label><input id="wiki-editor-aliases" value="' + ha((snapshot.aliases || []).join(', ')) + '" oninput="persistWikiEditorDraft()"></div>'
+    + '</div>';
+  wikiEditorSections.forEach(function(section, index) {
+    var editorId = 'wiki-section-' + index;
+    var editorHtml = buildEditor(editorId, section.html || '', 'Escreva o conteúdo desta seção…')
+      .replace('contenteditable="true"', 'contenteditable="' + (restoreDisabled ? 'false' : 'true') + '" aria-disabled="' + (restoreDisabled ? 'true' : 'false') + '"')
+      .replace('oninput="updateEditorCount(\'' + editorId + '\')"', 'oninput="updateEditorCount(\'' + editorId + '\');persistWikiEditorDraft()"');
+    html += '<div class="builder-panel"><div class="builder-panel-title"><span>Seção ' + (index + 1) + '</span>'
+      + (wikiEditorSections.length > 1 ? '<button type="button" class="btn btn-small btn-danger" onclick="removeWikiEditorSection(' + index + ')">Remover</button>' : '')
+      + '</div><div class="form-row"><label for="wiki-section-heading-' + index + '">Título da seção</label>'
+      + '<input id="wiki-section-heading-' + index + '" maxlength="200" value="' + ha(section.heading || '') + '" oninput="persistWikiEditorDraft()"></div>'
+      + editorHtml + '</div>';
+  });
+  html += '<div class="builder-panel"><button type="button" class="btn btn-small" onclick="addWikiEditorSection()">Adicionar seção</button>'
+    + '<div class="form-row" style="margin-top:12px;"><label for="wiki-editor-edit-summary">Resumo da alteração</label><input id="wiki-editor-edit-summary" maxlength="1000" value="' + ha(localDraft && localDraft.summary || '') + '" placeholder="O que mudou?" oninput="persistWikiEditorDraft()"></div>'
+    + '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">'
+    + '<button class="btn btn-primary" onclick="saveWikiArticleDraft()">Salvar rascunho</button>';
+  if (id && wikiEditorPage && wikiEditorPage.headRevisionId && !wikiEditorPage.archivedAt) {
+    html += '<button class="btn" onclick="publishWikiArticle()"' + (localDraft || staleDraft || restoreDisabled ? ' disabled' : '') + '>Publicar para todos</button>';
+  }
+  html += '</div><p class="field-desc">Salvar cria uma nova revisão privada de trabalho. A publicação é uma ação separada.</p></div>';
+  html += '</fieldset>';
+  if (id) html += renderWikiDiscussionEditor(id) + renderWikiEditorHistory(id);
+  return html;
+}
+
+function retryWikiEditorDraftRestore() {
+  wikiEditorDraftRestoreKey = null;
+  wikiEditorDraftRestoreCompleteKey = null;
+  wikiEditorDraftRestoreError = null;
+  wikiEditorDraftRestorePending = false;
+  render();
+}
+
+function renderWikiEditorHistory(pageId) {
+  if (!wikiEditorHistory.loaded && !wikiEditorHistory.loading) loadWikiEditorHistory(pageId, false);
+  var html = '<div class="builder-panel"><h3>Histórico de revisões</h3>';
+  if (wikiEditorHistory.loading) return html + '<p>Carregando histórico…</p></div>';
+  if (wikiEditorHistory.error) return html + '<p class="alert alert-error">' + h(wikiEditorHistory.error)
+    + ' <button class="btn btn-small" onclick="loadWikiEditorHistory(' + jsArg(pageId) + ',true)">Tentar novamente</button></p></div>';
+  if (!wikiEditorHistory.items.length) return html + '<p>Nenhuma revisão registrada.</p></div>';
+  if (wikiEditorHistory.items.length > 1) html += renderWikiRevisionDiffControls(pageId);
+  html += '<ol>';
+  wikiEditorHistory.items.forEach(function(revision) {
+    html += '<li style="margin:10px 0;"><b>Revisão ' + Number(revision.sequence) + '</b> — ' + h(revision.editSummary || '')
+      + ' <span class="field-desc">' + h(revision.actor && revision.actor.username || 'Equipe') + ' · ' + h(formatJoinDate(revision.createdAt)) + '</span>';
+    if (!readWikiDraft('editor', pageId)) html += ' <button class="btn btn-small" onclick="restoreWikiRevision(' + jsArg(pageId) + ',' + jsArg(revision.id) + ')">Restaurar como rascunho</button>';
+    html += '</li>';
+  });
+  return html + '</ol></div>';
+}
+
+function renderWikiRevisionDiffControls(pageId) {
+  var items = wikiEditorHistory.items;
+  var state = wikiEditorDiffState;
+  var validIds = items.map(function(item) { return item.id; });
+  if (state.pageId !== pageId || validIds.indexOf(state.beforeRevisionId) === -1 || validIds.indexOf(state.afterRevisionId) === -1) {
+    state = {
+      pageId: pageId,
+      beforeRevisionId: items[1].id,
+      afterRevisionId: items[0].id,
+      loading: false,
+      error: null,
+      result: null,
+    };
+    wikiEditorDiffState = state;
+  }
+  var html = '<div class="builder-panel" style="margin:12px 0;"><h4>Comparar revisões</h4>'
+    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">'
+    + '<div class="form-row"><label for="wiki-diff-before">Versão anterior</label><select id="wiki-diff-before">';
+  items.forEach(function(revision) {
+    html += '<option value="' + ha(revision.id) + '"' + (revision.id === state.beforeRevisionId ? ' selected' : '') + '>'
+      + h(wikiRevisionOptionLabel(revision)) + '</option>';
+  });
+  html += '</select></div><div class="form-row"><label for="wiki-diff-after">Versão comparada</label><select id="wiki-diff-after">';
+  items.forEach(function(revision) {
+    html += '<option value="' + ha(revision.id) + '"' + (revision.id === state.afterRevisionId ? ' selected' : '') + '>'
+      + h(wikiRevisionOptionLabel(revision)) + '</option>';
+  });
+  html += '</select></div></div><button class="btn btn-small" onclick="compareWikiRevisions(' + jsArg(pageId) + ')"'
+    + (state.loading ? ' disabled' : '') + '>Comparar selecionadas</button>';
+  if (state.loading) html += '<p>Comparando revisões…</p>';
+  if (state.error) html += '<p class="alert alert-error" style="margin-top:10px;">' + h(state.error) + '</p>';
+  if (state.result) html += renderWikiRevisionDiff(state.result);
+  return html + '</div>';
+}
+
+function wikiRevisionOptionLabel(revision) {
+  return 'Revisão ' + Number(revision.sequence) + (revision.editSummary ? ' — ' + revision.editSummary : '');
+}
+
+function compareWikiRevisions(pageId) {
+  if (!isModOrAdmin() || !wikiEditorPage || wikiEditorPage.id !== pageId) return;
+  var beforeId = ((document.getElementById('wiki-diff-before') || {}).value || '');
+  var afterId = ((document.getElementById('wiki-diff-after') || {}).value || '');
+  if (!beforeId || !afterId || beforeId === afterId) {
+    wikiEditorDiffState = { pageId: pageId, beforeRevisionId: beforeId, afterRevisionId: afterId, loading: false, error: 'Escolha duas revisões diferentes.', result: null };
+    render();
+    return;
+  }
+  var sequence = ++wikiEditorDiffRequestSequence;
+  wikiEditorDiffState = { pageId: pageId, beforeRevisionId: beforeId, afterRevisionId: afterId, loading: true, error: null, result: null };
+  render();
+  var baseUrl = '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/revisions/' + encodeURIComponent(beforeId);
+  var comparedUrl = '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/revisions/' + encodeURIComponent(afterId)
+    + '?compareTo=' + encodeURIComponent(beforeId);
+  Promise.all([wikiApi()('GET', baseUrl), wikiApi()('GET', comparedUrl)]).then(function(responses) {
+    var before = wikiUnwrap(responses[0]);
+    var after = wikiUnwrap(responses[1]);
+    if (!before || !before.snapshot || !after || !after.snapshot || !after.diff) throw new Error('O servidor não retornou as duas revisões para comparação.');
+    if (sequence !== wikiEditorDiffRequestSequence) return;
+    wikiEditorDiffState.result = { before: before, after: after, diff: after.diff };
+  }).catch(function(error) {
+    if (sequence !== wikiEditorDiffRequestSequence) return;
+    wikiEditorDiffState.error = error && error.message ? error.message : 'Não foi possível comparar estas revisões.';
+  }).finally(function() {
+    if (sequence !== wikiEditorDiffRequestSequence) return;
+    wikiEditorDiffState.loading = false;
+    if (currentPage === 'wikiEditor' && currentWikiPageId === pageId) render();
+  });
+}
+
+function renderWikiRevisionDiff(result) {
+  var diff = result.diff || {};
+  var fieldLabels = {
+    title: 'Título', slug: 'Endereço curto', aliases: 'Nomes alternativos', type: 'Tipo',
+    summary: 'Resumo', categories: 'Categorias', accessLevel: 'Visibilidade', audience: 'Público-alvo', body: 'Conteúdo',
+  };
+  var html = '<div class="builder-panel" style="margin-top:12px;"><h4>Resultado da comparação</h4>'
+    + '<p>Revisão ' + Number(result.before.sequence) + ' comparada com a revisão ' + Number(result.after.sequence) + '.</p>';
+  var changedFields = Array.isArray(diff.changedFields) ? diff.changedFields : [];
+  html += '<p><b>Campos alterados:</b> ' + (changedFields.length
+    ? changedFields.map(function(field) { return h(fieldLabels[field] || field); }).join(', ')
+    : 'nenhum') + '</p>';
+  function sectionNames(snapshot, ids) {
+    return (Array.isArray(ids) ? ids : []).map(function(id) {
+      var section = (snapshot.body && snapshot.body.sections || []).find(function(item) { return item.id === id; });
+      return section ? (section.heading || id) : id;
+    });
+  }
+  var added = sectionNames(result.after.snapshot, diff.addedSections);
+  var removed = sectionNames(result.before.snapshot, diff.removedSections);
+  var changed = sectionNames(result.after.snapshot, diff.changedSections);
+  if (added.length || removed.length || changed.length) {
+    html += '<ul>';
+    if (added.length) html += '<li><b>Seções adicionadas:</b> ' + added.map(h).join(', ') + '</li>';
+    if (removed.length) html += '<li><b>Seções removidas:</b> ' + removed.map(h).join(', ') + '</li>';
+    if (changed.length) html += '<li><b>Seções alteradas:</b> ' + changed.map(h).join(', ') + '</li>';
+    html += '</ul>';
+  } else html += '<p>Nenhuma seção foi adicionada, removida ou alterada.</p>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;">'
+    + '<div><h5>Antes — revisão ' + Number(result.before.sequence) + '</h5>'
+    + renderWikiRevisionMetadata(result.before.snapshot) + renderWikiSnapshot(result.before.snapshot, { staff: true }) + '</div>'
+    + '<div><h5>Depois — revisão ' + Number(result.after.sequence) + '</h5>'
+    + renderWikiRevisionMetadata(result.after.snapshot) + renderWikiSnapshot(result.after.snapshot, { staff: true }) + '</div>'
+    + '</div></div>';
+  return html;
+}
+
+function renderWikiRevisionMetadata(snapshot) {
+  var values = [
+    ['Título', snapshot.title], ['Endereço curto', snapshot.slug], ['Resumo', snapshot.summary],
+    ['Nomes alternativos', (snapshot.aliases || []).join(', ') || 'Nenhum'],
+    ['Categorias', (snapshot.categories || []).join(', ') || 'Nenhuma'],
+    ['Tipo', snapshot.type], ['Visibilidade', snapshot.accessLevel], ['Público-alvo', snapshot.audience],
+  ];
+  return '<ul>' + values.map(function(item) { return '<li><b>' + h(item[0]) + ':</b> ' + h(item[1] || '—') + '</li>'; }).join('') + '</ul>';
+}
+
+function ensureWikiEditorDiscussion(pageId) {
+  var id = String(pageId || '');
+  if (!id) return;
+  if (wikiEditorDiscussionState.pageId !== id) {
+    wikiEditorDiscussionRequestSequence += 1;
+    wikiEditorDiscussionState = {
+      pageId: id, categories: null, selectedCategoryId: '', threads: [], loadingCategories: false,
+      loadingThreads: false, error: null, currentThread: null, currentThreadId: null,
+      loadingCurrentThread: false, saving: false, generation: wikiEditorDiscussionRequestSequence,
+      categorySequence: 0, threadsSequence: 0, currentThreadSequence: 0,
+    };
+  }
+  var linkedId = wikiEditorPage && wikiEditorPage.discussionThreadId || null;
+  if (linkedId !== wikiEditorDiscussionState.currentThreadId) {
+    wikiEditorDiscussionState.currentThreadId = linkedId;
+    wikiEditorDiscussionState.currentThread = null;
+    if (linkedId) loadWikiEditorLinkedThread(id, linkedId);
+  }
+  if (wikiEditorDiscussionState.categories === null && !wikiEditorDiscussionState.loadingCategories) {
+    loadWikiEditorDiscussionCategories(id, false);
+  }
+}
+
+function loadWikiEditorDiscussionCategories(pageId, force) {
+  var state = wikiEditorDiscussionState;
+  if (state.loadingCategories || (state.categories !== null && !force)) return;
+  state.loadingCategories = true;
+  state.error = null;
+  var generation = state.generation;
+  var sequence = ++state.categorySequence;
+  wikiApi()('GET', '/api/forum/categories?limit=100&offset=0').then(function(response) {
+    if (!response || !Array.isArray(response.data)) throw new Error('A resposta das categorias do fórum é inválida.');
+    if (wikiEditorDiscussionState !== state || generation !== state.generation || sequence !== state.categorySequence) return;
+    state.categories = response.data.filter(function(category) { return !category.archivedAt; });
+    if (!state.selectedCategoryId && state.categories.length) state.selectedCategoryId = state.categories[0].id;
+    if (state.selectedCategoryId) loadWikiEditorDiscussionThreads(pageId, state.selectedCategoryId, true);
+  }).catch(function(error) {
+    if (wikiEditorDiscussionState === state && generation === state.generation && sequence === state.categorySequence) {
+      state.error = error && error.message ? error.message : 'Não foi possível carregar as categorias do fórum.';
+    }
+  }).finally(function() {
+    if (wikiEditorDiscussionState !== state || generation !== state.generation || sequence !== state.categorySequence) return;
+    state.loadingCategories = false;
+    if (currentPage === 'wikiEditor' && String(currentWikiPageId) === String(pageId)) render();
+  });
+}
+
+function loadWikiEditorDiscussionThreads(pageId, categoryId, resetSearch) {
+  var state = wikiEditorDiscussionState;
+  var category = String(categoryId || '');
+  if (!category) {
+    state.threads = [];
+    state.selectedCategoryId = '';
+    return;
+  }
+  state.selectedCategoryId = category;
+  var searchInput = document.getElementById('wiki-discussion-search');
+  var search = resetSearch ? '' : String(searchInput && searchInput.value || '').trim();
+  state.search = search;
+  state.loadingThreads = true;
+  state.error = null;
+  var generation = state.generation;
+  var sequence = ++state.threadsSequence;
+  var params = new URLSearchParams({ limit: '100', offset: '0' });
+  if (search) params.set('search', search);
+  wikiApi()('GET', '/api/forum/categories/' + encodeURIComponent(category) + '/threads?' + params.toString()).then(function(response) {
+    if (!response || !Array.isArray(response.data)) throw new Error('A resposta das discussões do fórum é inválida.');
+    if (wikiEditorDiscussionState === state && generation === state.generation && sequence === state.threadsSequence) state.threads = response.data;
+  }).catch(function(error) {
+    if (wikiEditorDiscussionState === state && generation === state.generation && sequence === state.threadsSequence) {
+      state.error = error && error.message ? error.message : 'Não foi possível carregar as discussões públicas.';
+    }
+  }).finally(function() {
+    if (wikiEditorDiscussionState !== state || generation !== state.generation || sequence !== state.threadsSequence) return;
+    state.loadingThreads = false;
+    if (currentPage === 'wikiEditor' && String(currentWikiPageId) === String(pageId)) render();
+  });
+}
+
+function changeWikiDiscussionCategory(categoryId) {
+  var input = document.getElementById('wiki-discussion-search');
+  if (input) input.value = '';
+  wikiEditorDiscussionState.search = '';
+  loadWikiEditorDiscussionThreads(wikiEditorDiscussionState.pageId, categoryId, true);
+  render();
+}
+
+function searchWikiEditorDiscussions() {
+  loadWikiEditorDiscussionThreads(wikiEditorDiscussionState.pageId, wikiEditorDiscussionState.selectedCategoryId, false);
+  render();
+}
+
+function loadWikiEditorLinkedThread(pageId, threadId) {
+  var state = wikiEditorDiscussionState;
+  state.loadingCurrentThread = true;
+  var generation = state.generation;
+  var sequence = ++state.currentThreadSequence;
+  wikiApi()('GET', '/api/forum/threads/' + encodeURIComponent(threadId)).then(function(response) {
+    if (wikiEditorDiscussionState === state && generation === state.generation && sequence === state.currentThreadSequence) state.currentThread = wikiUnwrap(response);
+  }).catch(function(error) {
+    if (wikiEditorDiscussionState === state && generation === state.generation && sequence === state.currentThreadSequence) {
+      state.error = error && error.message ? error.message : 'Não foi possível carregar a discussão vinculada.';
+    }
+  }).finally(function() {
+    if (wikiEditorDiscussionState !== state || generation !== state.generation || sequence !== state.currentThreadSequence) return;
+    state.loadingCurrentThread = false;
+    if (currentPage === 'wikiEditor' && String(currentWikiPageId) === String(pageId)) render();
+  });
+}
+
+function renderWikiDiscussionEditor(pageId) {
+  ensureWikiEditorDiscussion(pageId);
+  var state = wikiEditorDiscussionState;
+  var linkedId = wikiEditorPage && wikiEditorPage.discussionThreadId || null;
+  var localDraft = !!readWikiDraft('editor', pageId);
+  var html = '<div class="builder-panel"><h3>Discussão pública do artigo</h3>';
+  if (linkedId) {
+    if (state.currentThread) html += '<p>Vinculada: <a onclick="navigate(\'thread\',' + jsArg(linkedId) + ')">'
+      + h(state.currentThread.title || 'Abrir tópico') + '</a>'
+      + (state.currentThread.categoryName ? ' <span class="field-desc">em ' + h(state.currentThread.categoryName) + '</span>' : '') + '</p>';
+    else if (state.loadingCurrentThread) html += '<p>Carregando a discussão vinculada…</p>';
+    else html += '<p>Há uma discussão vinculada, mas o tópico não está disponível para consulta. ID: ' + h(linkedId) + '</p>';
+    html += '<button class="btn btn-small btn-danger" onclick="removeWikiDiscussionLink(' + jsArg(pageId) + ')"'
+      + (localDraft || state.saving ? ' disabled' : '') + '>Remover vínculo</button>';
+  } else html += '<p>Nenhuma discussão está vinculada a este artigo.</p>';
+  if (localDraft) html += '<p class="field-desc">Salve ou descarte o rascunho local antes de alterar o vínculo da discussão.</p>';
+  if (state.loadingCategories) html += '<p>Carregando categorias do fórum…</p>';
+  else if (state.categories === null && state.error) html += '<p class="alert alert-error">' + h(state.error)
+    + ' <button class="btn btn-small" onclick="loadWikiEditorDiscussionCategories(' + jsArg(pageId) + ',true)">Tentar novamente</button></p>';
+  else if (state.categories && !state.categories.length) html += '<p>Não há categorias públicas ativas para escolher uma discussão.</p>';
+  else if (state.categories && state.categories.length) {
+    html += '<div class="form-row"><label for="wiki-discussion-category">Categoria do fórum</label><select id="wiki-discussion-category" onchange="changeWikiDiscussionCategory(this.value)">';
+    state.categories.forEach(function(category) {
+      html += '<option value="' + ha(category.id) + '"' + (category.id === state.selectedCategoryId ? ' selected' : '') + '>' + h(category.name) + '</option>';
+    });
+    html += '</select></div><div class="form-row"><label for="wiki-discussion-search">Buscar tópico público</label>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;"><input id="wiki-discussion-search" type="search" maxlength="100" value="' + ha(state.search || '') + '" placeholder="Título do tópico">'
+      + '<button class="btn btn-small" onclick="searchWikiEditorDiscussions()"' + (state.loadingThreads ? ' disabled' : '') + '>Buscar tópicos</button></div></div>';
+    if (state.loadingThreads) html += '<p>Carregando tópicos públicos…</p>';
+    else if (!state.threads.length) html += '<p>Nenhum tópico público encontrado nesta categoria.</p>';
+    else {
+      html += '<div class="form-row"><label for="wiki-discussion-thread">Discussão pública</label><select id="wiki-discussion-thread">'
+        + '<option value="">Escolha um tópico</option>';
+      state.threads.forEach(function(thread) {
+        html += '<option value="' + ha(thread.id) + '">' + h(thread.title) + (thread.tag ? ' · ' + h(thread.tag) : '') + '</option>';
+      });
+      html += '</select></div><button class="btn btn-small btn-primary" onclick="saveWikiDiscussionLink(' + jsArg(pageId) + ')"'
+        + (localDraft || state.saving ? ' disabled' : '') + '>Vincular discussão selecionada</button>';
     }
   }
+  if (state.error && state.categories !== null) html += '<p class="alert alert-error" style="margin-top:10px;">' + h(state.error) + '</p>';
+  if (state.saving) html += '<p>Salvando vínculo…</p>';
+  return html + '</div>';
+}
+
+function saveWikiDiscussionLink(pageId) {
+  if (!isModOrAdmin() || !wikiEditorPage || wikiEditorPage.id !== pageId || readWikiDraft('editor', pageId)) return;
+  var threadId = ((document.getElementById('wiki-discussion-thread') || {}).value || '');
+  if (!threadId || !wikiEditorDiscussionState.threads.some(function(thread) { return thread.id === threadId; })) {
+    showAlert('Escolha uma discussão pública da lista.', 'error');
+    return;
+  }
+  if (threadId === wikiEditorPage.discussionThreadId) {
+    showAlert('Esta discussão já está vinculada ao artigo.', 'error');
+    return;
+  }
+  updateWikiDiscussionLink(pageId, threadId);
+}
+
+function removeWikiDiscussionLink(pageId) {
+  if (!isModOrAdmin() || !wikiEditorPage || wikiEditorPage.id !== pageId || !wikiEditorPage.discussionThreadId
+      || readWikiDraft('editor', pageId)) return;
+  updateWikiDiscussionLink(pageId, null);
+}
+
+function updateWikiDiscussionLink(pageId, threadId) {
+  var state = wikiEditorDiscussionState;
+  state.saving = true;
+  state.error = null;
+  render();
+  wikiApi()('PATCH', '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/discussion', {
+    threadId: threadId,
+    expectedVersion: wikiEditorPage.workVersion,
+  }).then(function(response) {
+    var page = wikiUnwrap(response);
+    if (!page || page.id !== pageId) throw new Error('A resposta ao atualizar o vínculo é inválida.');
+    wikiEditorPage = page;
+    state.currentThreadId = page.discussionThreadId || null;
+    state.currentThread = null;
+    if (page.discussionThreadId) loadWikiEditorLinkedThread(pageId, page.discussionThreadId);
+    showAlert(threadId ? 'Discussão vinculada ao artigo.' : 'Vínculo da discussão removido.', 'success');
+  }).catch(function(error) {
+    state.error = error && error.message ? error.message : 'Não foi possível atualizar o vínculo da discussão.';
+    showAlert(state.error, 'error');
+  }).finally(function() {
+    state.saving = false;
+    if (currentPage === 'wikiEditor' && String(currentWikiPageId) === String(pageId)) render();
+  });
+}
+
+function discardWikiEditorDraft() {
+  clearWikiDraft('editor', wikiEditorResourceId());
+  wikiEditorDraftRestoreKey = null;
+  wikiEditorDraftRestoreCompleteKey = null;
+  wikiEditorSectionsKey = null;
+  render();
+}
+
+function wikiIdempotencyKeyForDraft(kind, resourceId, payload) {
+  var current = readWikiDraft(kind, resourceId) || {};
+  var serialized = wikiDraftRequestPayload(payload);
+  var key = current.idempotencyPayload === serialized && /^[0-9a-f-]{36}$/i.test(current.idempotencyKey || '')
+    ? current.idempotencyKey : newForumIdempotencyKey();
+  var saved = writeWikiDraft(kind, resourceId, payload.snapshot, {
+    summary: payload.summary,
+    baseWorkVersion: current.baseWorkVersion,
+    basePublishedRevisionId: payload.basePublishedRevisionId,
+    idempotencyKey: key,
+    idempotencyPayload: serialized,
+  });
+  return saved ? key : null;
+}
+
+function wikiDraftRequestPayload(payload) {
+  return JSON.stringify({
+    snapshot: payload.snapshot,
+    summary: payload.summary || '',
+    basePublishedRevisionId: payload.basePublishedRevisionId || null,
+  });
+}
+
+function saveWikiArticleDraft() {
+  if (!isModOrAdmin()) return;
+  var resourceId = wikiEditorResourceId();
+  var snapshot = wikiEditorFormSnapshot();
+  var summary = ((document.getElementById('wiki-editor-edit-summary') || {}).value || '').trim() || 'Rascunho da equipe';
+  if (!snapshot.title || !snapshot.slug) { showAlert('Preencha o título e o endereço curto do artigo.', 'error'); return; }
+  var localDraft = readWikiDraft('editor', resourceId);
+  if (wikiEditorPage && localDraft && localDraft.baseWorkVersion !== wikiEditorPage.workVersion) {
+    showAlert('O artigo mudou desde que este rascunho local foi iniciado. Atualize ou descarte o rascunho antes de salvar.', 'error');
+    return;
+  }
+  var payload = { snapshot: snapshot, summary: summary };
+  var request;
+  var finish = beginResourceFormSubmission('wiki-save:' + String(resourceId));
+  if (!finish) return;
+  if (!wikiEditorPage) {
+    var key = wikiIdempotencyKeyForDraft('editor', resourceId, payload);
+    if (!key) { finish(); return; }
+    request = wikiApi()('POST', '/api/staff/wiki/pages', payload, null, { headers: { 'Idempotency-Key': key } });
+  } else {
+    payload.expectedVersion = localDraft && Number.isInteger(localDraft.baseWorkVersion)
+      ? localDraft.baseWorkVersion : wikiEditorPage.workVersion;
+    if (!writeWikiDraft('editor', resourceId, snapshot, { summary: summary, baseWorkVersion: payload.expectedVersion })) {
+      finish();
+      return;
+    }
+    request = wikiApi()('POST', '/api/staff/wiki/pages/' + encodeURIComponent(wikiEditorPage.id) + '/revisions', payload);
+  }
+  request.then(function(response) {
+    finish();
+    var page = wikiUnwrap(response);
+    if (!page || !page.id) throw new Error('A resposta ao salvar o artigo é inválida.');
+    clearWikiDraft('editor', resourceId);
+    wikiEditorDraftRestoreKey = null;
+    wikiEditorDraftRestoreCompleteKey = null;
+    wikiEditorPage = page;
+    wikiEditorLoadedId = page.id;
+    wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+    wikiEditorSectionsKey = null;
+    wikiStaffState = { items: null, article: null, loading: false, error: null };
+    if (currentPage === 'wikiCreate' || (currentPage === 'wikiEditor' && !currentWikiPageId)) navigate('wikiEditor', page.id, { replace: true });
+    else render();
+    loadWikiEditorHistory(page.id, true);
+    showAlert('Rascunho salvo como uma nova revisão.', 'success');
+  }).catch(function(error) {
+    finish();
+    showAlert(error && error.message ? error.message : 'Não foi possível salvar o rascunho.', 'error');
+  });
+}
+
+function publishWikiArticle() {
+  if (!isModOrAdmin() || !wikiEditorPage) return;
+  if (readWikiDraft('editor', wikiEditorPage.id)) {
+    showAlert('Salve ou descarte o rascunho local antes de publicar.', 'error');
+    return;
+  }
+  if (!window.confirm('Publicar esta revisão para todos, inclusive visitantes? O conteúdo deixará de ser restrito à equipe.')) return;
+  var payload = {
+    makePublic: true,
+    revisionId: wikiEditorPage.headRevisionId,
+    expectedVersion: wikiEditorPage.workVersion,
+    expectedPublishedRevisionId: wikiEditorPage.publishedRevisionId,
+    summary: ((document.getElementById('wiki-editor-edit-summary') || {}).value || '').trim() || 'Publicação da revisão',
+  };
+  var finish = beginResourceFormSubmission('wiki-publish:' + String(wikiEditorPage.id));
+  if (!finish) return;
+  var publishingAccount = DB.session && (DB.session.serverId || DB.session.id);
+  function samePublisher() { return isModOrAdmin() && String(DB.session.serverId || DB.session.id) === String(publishingAccount); }
+  wikiApi()('POST', '/api/staff/wiki/pages/' + encodeURIComponent(wikiEditorPage.id) + '/publish', payload).then(function(response) {
+    finish();
+    if (!samePublisher()) return;
+    var page = wikiUnwrap(response);
+    if (!page || !page.id) throw new Error('A resposta ao publicar o artigo é inválida.');
+    wikiEditorPage = page;
+    wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+    serverWikiPages = null; serverWikiCategories = null;
+    serverWikiSections = null; wikiSectionsError = null; wikiSectionsLoading = false; wikiSectionsGeneration += 1;
+    currentWikiArticle = null; wikiArticleRequestSequence += 1;
+    wikiArticleLoading = false; wikiArticleLoadingSlug = null;
+    wikiArticleLoadError = null; wikiArticleLoadErrorSlug = null;
+    wikiStaffState = { items: null, article: null, loading: false, error: null };
+    render();
+    loadWikiEditorHistory(page.id, true);
+    showAlert('Revisão publicada para todos.', 'success');
+  }).catch(function(error) {
+    finish();
+    if (!samePublisher()) return;
+    showAlert(error && error.message ? error.message : 'Não foi possível publicar esta revisão.', 'error');
+  });
+}
+
+function restoreWikiRevision(pageId, revisionId) {
+  if (!isModOrAdmin() || !wikiEditorPage || readWikiDraft('editor', pageId)) return;
+  var reason = window.prompt('Resumo desta restauração:');
+  if (reason === null) return;
+  wikiApi()('POST', '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/restore-revision', {
+    oldRevisionId: revisionId,
+    expectedVersion: wikiEditorPage.workVersion,
+    summary: reason.trim() || 'Restauração de uma revisão anterior',
+  }).then(function(response) {
+    wikiEditorPage = wikiUnwrap(response);
+    wikiEditorHistory = { items: [], loading: false, loaded: false, error: null };
+    wikiEditorSectionsKey = null;
+    render();
+    loadWikiEditorHistory(pageId, true);
+    showAlert('A revisão foi copiada para um novo rascunho.', 'success');
+  }).catch(function(error) {
+    showAlert(error && error.message ? error.message : 'Não foi possível restaurar esta revisão.', 'error');
+  });
+}
+
+function renderWikiProposalForm(article) {
+  var draft = readWikiDraft('proposal', article.id);
+  var snapshot = draft && draft.snapshot ? draft.snapshot : article;
+  var restoreKey = draft ? wikiProposalDraftRestoreToken(article, draft) : null;
+  var hasRecoveredHtml = !!(draft && draft.snapshot.body.sections[0]
+    && typeof draft.snapshot.body.sections[0].html === 'string');
+  var restoredHtml = restoreKey && wikiProposalDraftSafeHtmlKey === restoreKey;
+  var restoreError = restoreKey && wikiEditorDraftRestoreKey === restoreKey ? wikiProposalDraftRestoreError : null;
+  var restoreDisabled = hasRecoveredHtml && !restoredHtml || !!restoreError;
+  var safeHtml = restoredHtml ? wikiProposalDraftSafeHtml : (article.body.sections[0] && article.body.sections[0].html || '');
+  var id = 'wiki-proposal-body';
+  var editorHtml = buildEditor(id, safeHtml, 'Descreva a alteração proposta…')
+    .replace('contenteditable="true"', 'contenteditable="' + (restoreDisabled ? 'false' : 'true') + '" aria-disabled="' + (restoreDisabled ? 'true' : 'false') + '"')
+    .replace('oninput="updateEditorCount(\'' + id + '\')"', 'oninput="updateEditorCount(\'' + id + '\');persistWikiProposalDraft()"');
+  var html = '<div class="builder-panel"><h3>Propor uma edição</h3>'
+    + '<p>As propostas são revisadas pela equipe e não alteram a publicação automaticamente.</p>';
+  if (draft) html += '<p class="field-desc">Rascunho local salvo para sua conta. <button class="btn btn-small" onclick="discardWikiProposalDraft(' + jsArg(article.id) + ')">Descartar rascunho</button></p>';
+  if (restoreDisabled && !restoreError) html += '<p class="alert alert-info" id="wiki-proposal-restore-state">Validando o conteúdo do rascunho local antes de restaurá-lo…</p>';
+  if (restoreError) html += '<p class="alert alert-error" id="wiki-proposal-restore-state">' + h(restoreError)
+    + ' <button class="btn btn-small" onclick="retryWikiProposalDraftRestore()">Tentar validar novamente</button></p>';
+  if (!article.publishedRevisionId) html += '<div class="alert alert-error">O artigo ainda não informa a revisão pública usada como base; a proposta ficará indisponível até o servidor fornecer essa referência.</div>';
+  html += '<fieldset style="border:0;padding:0;margin:0;min-width:0;"' + (restoreDisabled ? ' disabled' : '') + '><div class="form-row"><label for="wiki-proposal-summary">Resumo da proposta</label><textarea id="wiki-proposal-summary" rows="2" maxlength="1000" oninput="persistWikiProposalDraft()">' + h(draft && draft.summary || '') + '</textarea></div>'
+    + '<div class="form-row"><label for="wiki-proposal-heading">Título da seção</label><input id="wiki-proposal-heading" maxlength="200" value="' + ha(snapshot.body.sections[0] && snapshot.body.sections[0].heading || 'Visão geral') + '" oninput="persistWikiProposalDraft()"></div>'
+    + editorHtml + '<button class="btn btn-primary" style="margin-top:12px;" onclick="submitWikiProposal(' + jsArg(article.id) + ')"'
+    + (article.publishedRevisionId && !restoreDisabled ? '' : ' disabled') + '>Enviar proposta para revisão</button></div></fieldset>';
+  return html;
+}
+
+function retryWikiProposalDraftRestore() {
+  wikiEditorDraftRestoreKey = null;
+  wikiProposalDraftRestorePending = false;
+  wikiProposalDraftRestoreError = null;
+  wikiProposalDraftSafeHtml = null;
+  wikiProposalDraftSafeHtmlKey = null;
+  render();
+}
+
+function wikiProposalFormSnapshot(article) {
+  var prior = readWikiDraft('proposal', article.id);
+  var section = article.body.sections[0] || { id: newForumIdempotencyKey(), heading: 'Visão geral', blocks: [], authority: [], knowledgeLayer: 'unspecified' };
+  var candidate = {
+    schemaVersion: 1,
+    title: article.title,
+    slug: article.slug,
+    aliases: Array.isArray(article.aliases) ? article.aliases.slice() : [],
+    type: article.type,
+    summary: article.summary || '',
+    categories: Array.isArray(article.categories) ? article.categories.slice() : [],
+    accessLevel: article.accessLevel,
+    audience: article.audience,
+    body: {
+      format: 'richtext-v1',
+      infobox: article.body && Array.isArray(article.body.infobox) ? article.body.infobox : [],
+      sections: article.body.sections.map(function(item) { return JSON.parse(JSON.stringify(item)); }),
+    },
+  };
+  candidate.body.sections[0] = {
+    id: section.id,
+    heading: ((document.getElementById('wiki-proposal-heading') || {}).value || '').trim() || section.heading,
+    html: typeof getEditorContent === 'function' ? getEditorContent('wiki-proposal-body') : section.html,
+    blocks: section.blocks || [], authority: section.authority || [], knowledgeLayer: section.knowledgeLayer || 'unspecified',
+  };
+  if (prior && prior.snapshot && prior.snapshot.body && prior.snapshot.body.sections.length > 1) {
+    candidate.body.sections = [candidate.body.sections[0]].concat(prior.snapshot.body.sections.slice(1));
+  }
+  return candidate;
+}
+
+function persistWikiProposalDraft() {
+  if (!DB.session || isModOrAdmin() || !currentWikiArticle) return false;
+  var article = currentWikiArticle;
+  var snapshot = wikiProposalFormSnapshot(article);
+  var prior = readWikiDraft('proposal', article.id);
+  return writeWikiDraft('proposal', article.id, snapshot, {
+    summary: ((document.getElementById('wiki-proposal-summary') || {}).value || '').trim(),
+    basePublishedRevisionId: prior && prior.basePublishedRevisionId || article.publishedRevisionId,
+    idempotencyKey: prior && prior.idempotencyKey,
+    idempotencyPayload: prior && prior.idempotencyPayload,
+  });
+}
+
+function discardWikiProposalDraft(pageId) {
+  clearWikiDraft('proposal', pageId);
+  wikiEditorDraftRestoreKey = null;
+  wikiProposalDraftRestorePending = false;
+  wikiProposalDraftRestoreError = null;
+  wikiProposalDraftSafeHtml = null;
+  wikiProposalDraftSafeHtmlKey = null;
+  render();
+}
+
+function submitWikiProposal(pageId) {
+  if (!DB.session || isModOrAdmin()) return;
+  var article = currentWikiArticle;
+  if (!article || article.id !== pageId || !article.publishedRevisionId) {
+    showAlert('Não foi possível confirmar a revisão publicada deste artigo.', 'error');
+    return;
+  }
+  var snapshot = wikiProposalFormSnapshot(article);
+  var summary = ((document.getElementById('wiki-proposal-summary') || {}).value || '').trim();
+  if (!summary) { showAlert('Explique brevemente a alteração proposta.', 'error'); return; }
+  var prior = readWikiDraft('proposal', pageId);
+  var basePublishedRevisionId = prior && prior.basePublishedRevisionId || article.publishedRevisionId;
+  if (basePublishedRevisionId !== article.publishedRevisionId) {
+    showAlert('A publicação mudou desde que este rascunho começou. Atualize a página e revise a proposta antes de enviá-la.', 'error');
+    return;
+  }
+  var payload = { snapshot: snapshot, basePublishedRevisionId: basePublishedRevisionId, summary: summary };
+  var key = wikiIdempotencyKeyForDraft('proposal', pageId, payload);
+  if (!key) return;
+  var finish = beginResourceFormSubmission('wiki-proposal:' + String(pageId));
+  if (!finish) return;
+  wikiApi()('POST', '/api/wiki/pages/' + encodeURIComponent(pageId) + '/proposals', payload, null,
+    { headers: { 'Idempotency-Key': key } }).then(function(response) {
+    finish();
+    var proposal = wikiUnwrap(response);
+    if (!proposal || !proposal.id) throw new Error('A resposta ao enviar a proposta é inválida.');
+    clearWikiDraft('proposal', pageId);
+    wikiEditorDraftRestoreKey = null;
+    wikiProposalState.loaded = false;
+    navigate('wikiProposal', proposal.id);
+    showAlert('Proposta enviada para revisão.', 'success');
+  }).catch(function(error) {
+    finish();
+    showAlert(error && error.message ? error.message : 'Não foi possível enviar a proposta.', 'error');
+  });
+}
+
+function loadWikiProposals(force) {
+  if (!DB.session) { wikiProposalState = { items: [], staffItems: [], loading: false, loaded: true, error: null }; return; }
+  if (wikiProposalState.loading || (wikiProposalState.loaded && !force)) return;
+  var sequence = ++wikiProposalRequestSequence;
+  wikiProposalState.loading = true;
+  wikiProposalState.error = null;
+  var requests = [wikiApi()('GET', '/api/wiki/proposals?limit=100&offset=0')];
+  if (isModOrAdmin()) requests.push(wikiApi()('GET', '/api/staff/wiki/proposals?limit=100&offset=0'));
+  Promise.all(requests).then(function(responses) {
+    if (sequence !== wikiProposalRequestSequence) return;
+    if (!responses[0] || !Array.isArray(responses[0].data)) throw new Error('A resposta das propostas é inválida.');
+    wikiProposalState.items = responses[0].data;
+    wikiProposalState.staffItems = responses[1] && Array.isArray(responses[1].data) ? responses[1].data : [];
+    wikiProposalState.loaded = true;
+  }).catch(function(error) {
+    if (sequence === wikiProposalRequestSequence) wikiProposalState.error = error && error.message ? error.message : 'Não foi possível carregar as propostas.';
+  }).finally(function() {
+    if (sequence !== wikiProposalRequestSequence) return;
+    wikiProposalState.loading = false;
+    if (currentPage === 'wikiProposals') render();
+  });
+}
+
+function renderWikiProposals() {
+  if (!DB.session) return '<div class="builder-panel"><p>Entre para consultar suas propostas.</p><button class="btn btn-small" onclick="showLoginModal()">Entrar</button></div>';
+  if (!wikiProposalState.loaded && !wikiProposalState.loading && !wikiProposalState.error) loadWikiProposals(false);
+  if (wikiProposalState.loading) return '<div class="alert alert-info">Carregando propostas…</div>';
+  if (wikiProposalState.error) return '<div class="alert alert-error">' + h(wikiProposalState.error)
+    + ' <button class="btn btn-small" onclick="loadWikiProposals(true)">Tentar novamente</button></div>';
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / Propostas</div>'
+    + '<div class="cat-header"><span>Minhas propostas</span><button class="btn btn-small" onclick="navigate(\'wiki\')">Voltar à wiki</button></div>';
+  html += renderWikiProposalList(wikiProposalState.items, false);
+  if (isModOrAdmin()) {
+    html += '<div class="cat-header" style="margin-top:20px;"><span>Fila de revisão da equipe</span></div>'
+      + renderWikiProposalList(wikiProposalState.staffItems, true);
+  }
+  return html;
+}
+
+function renderWikiProposalList(items, staffQueue) {
+  if (!items || !items.length) return '<div class="builder-panel"><p>' + (staffQueue ? 'Não há propostas pendentes.' : 'Você ainda não enviou propostas.') + '</p></div>';
+  var html = '<div class="builder-panel"><ul>';
+  items.forEach(function(proposal) {
+    html += '<li style="margin:10px 0;"><a onclick="navigate(\'wikiProposal\',' + jsArg(proposal.id) + ')">'
+      + h(proposal.page && proposal.page.title || 'Artigo') + '</a> — ' + h(proposal.state)
+      + (staffQueue && proposal.proposer && proposal.proposer.username ? ' · ' + h(proposal.proposer.username) : '')
+      + (proposal.stale ? ' · base desatualizada' : '') + '</li>';
+  });
+  return html + '</ul></div>';
+}
+
+function loadWikiProposalDetail(proposalId, force) {
+  var key = String(proposalId || '').toLowerCase();
+  if (!key || (wikiProposalDetailLoading && wikiProposalDetailLoadingId === key)
+      || (!force && wikiProposalDetail && wikiProposalDetail.id === key)) return;
+  wikiProposalDetailLoading = true;
+  wikiProposalDetailLoadingId = key;
+  wikiProposalDetailError = null;
+  wikiProposalDetailErrorId = null;
+  wikiProposalDetail = null;
+  wikiProposalPage = null;
+  var sequence = ++wikiProposalDetailRequestSequence;
+  var url = isModOrAdmin() ? '/api/staff/wiki/proposals/' : '/api/wiki/proposals/';
+  wikiApi()('GET', url + encodeURIComponent(key)).then(function(response) {
+    if (sequence !== wikiProposalDetailRequestSequence) return;
+    var proposal = wikiUnwrap(response);
+    if (!proposal || proposal.id !== key) throw new Error('A resposta da proposta é inválida.');
+    wikiProposalDetail = proposal;
+    if (isModOrAdmin()) return wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(proposal.pageId)).then(function(pageResponse) {
+      if (sequence === wikiProposalDetailRequestSequence) wikiProposalPage = wikiUnwrap(pageResponse);
+    });
+  }).catch(function(error) {
+    if (sequence === wikiProposalDetailRequestSequence) {
+      wikiProposalDetailError = error && error.message ? error.message : 'Não foi possível carregar esta proposta.';
+      wikiProposalDetailErrorId = key;
+    }
+  }).finally(function() {
+    if (sequence !== wikiProposalDetailRequestSequence) return;
+    wikiProposalDetailLoading = false;
+    wikiProposalDetailLoadingId = null;
+    if (currentPage === 'wikiProposal') render();
+  });
+}
+
+function renderWikiProposal() {
+  if (!DB.session) return '<div class="alert alert-error">Entre para consultar esta proposta.</div>';
+  if (!currentWikiPageId) return '<div class="alert alert-error">O endereço da proposta é inválido.</div>';
+  if (!wikiProposalDetail || wikiProposalDetail.id !== currentWikiPageId) {
+    if (wikiProposalDetailError && wikiProposalDetailErrorId === currentWikiPageId) return '<div class="alert alert-error">' + h(wikiProposalDetailError)
+      + ' <button class="btn btn-small" onclick="loadWikiProposalDetail(' + jsArg(currentWikiPageId) + ',true)">Tentar novamente</button></div>';
+    if (!wikiProposalDetailLoading || wikiProposalDetailLoadingId !== currentWikiPageId) loadWikiProposalDetail(currentWikiPageId, false);
+    return '<div class="alert alert-info">Carregando proposta…</div>';
+  }
+  var proposal = wikiProposalDetail;
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'wikiProposals\')">Propostas</a> / ' + h(proposal.page.title) + '</div>'
+    + '<div class="cat-header"><span>' + h(proposal.page.title) + '</span><span class="tag">' + h(proposal.state) + '</span></div>'
+    + '<div class="builder-panel"><p><b>Resumo:</b> ' + h(proposal.summary || '') + '</p>'
+    + '<p><b>Proponente:</b> ' + h(proposal.proposer && proposal.proposer.username || 'Membro') + '</p>'
+    + '<p><b>Enviada:</b> ' + h(formatJoinDate(proposal.createdAt)) + '</p>';
+  if (proposal.stale) html += '<p class="alert alert-error">A proposta usa uma publicação anterior e precisa ser revisada manualmente.</p>';
+  if (proposal.reviewReason) html += '<p><b>Resposta da equipe:</b> ' + h(proposal.reviewReason) + '</p>';
+  html += '</div><h3>Alteração proposta</h3>' + renderWikiSnapshot(proposal.snapshot, { proposal: true });
+  if (isModOrAdmin() && proposal.state === 'submitted') {
+    html += '<div class="builder-panel"><p>Aceitar cria um novo rascunho da equipe. A publicação continua sendo uma ação separada.</p>'
+      + '<button class="btn btn-primary" onclick="acceptWikiProposal(' + jsArg(proposal.id) + ')">Aceitar como rascunho</button> '
+      + '<button class="btn btn-danger" onclick="rejectWikiProposal(' + jsArg(proposal.id) + ')">Rejeitar com comentário</button></div>';
+  } else if (!isModOrAdmin() && proposal.state === 'submitted') {
+    html += '<div class="builder-panel"><button class="btn btn-small btn-danger" onclick="withdrawWikiProposal(' + jsArg(proposal.id) + ')">Retirar proposta</button></div>';
+  }
+  return html;
+}
+
+function withdrawWikiProposal(proposalId) {
+  if (!DB.session || isModOrAdmin() || !wikiProposalDetail || wikiProposalDetail.id !== proposalId) return;
+  wikiApi()('POST', '/api/wiki/proposals/' + encodeURIComponent(proposalId) + '/withdraw', { expectedVersion: wikiProposalDetail.version }).then(function(response) {
+    wikiProposalDetail = Object.assign({}, wikiProposalDetail, wikiUnwrap(response));
+    wikiProposalState.loaded = false;
+    render();
+    showAlert('Proposta retirada.', 'success');
+  }).catch(function(error) { showAlert(error && error.message ? error.message : 'Não foi possível retirar a proposta.', 'error'); });
+}
+
+function rejectWikiProposal(proposalId) {
+  if (!isModOrAdmin() || !wikiProposalDetail || wikiProposalDetail.id !== proposalId) return;
+  var reason = window.prompt('Informe o motivo da rejeição ou as mudanças necessárias:');
+  if (reason === null) return;
+  wikiApi()('POST', '/api/staff/wiki/proposals/' + encodeURIComponent(proposalId) + '/reject', {
+    expectedVersion: wikiProposalDetail.version, reason: reason.trim(),
+  }).then(function(response) {
+    wikiProposalDetail = Object.assign({}, wikiProposalDetail, wikiUnwrap(response));
+    wikiProposalState.loaded = false;
+    render();
+    showAlert('Proposta revisada.', 'success');
+  }).catch(function(error) { showAlert(error && error.message ? error.message : 'Não foi possível revisar a proposta.', 'error'); });
+}
+
+function acceptWikiProposal(proposalId) {
+  if (!isModOrAdmin() || !wikiProposalDetail || wikiProposalDetail.id !== proposalId) return;
+  wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(wikiProposalDetail.pageId)).then(function(response) {
+    var page = wikiUnwrap(response);
+    if (!page || !page.id) throw new Error('Não foi possível carregar a versão de trabalho do artigo.');
+    return wikiApi()('POST', '/api/staff/wiki/proposals/' + encodeURIComponent(proposalId) + '/accept', {
+      expectedVersion: wikiProposalDetail.version,
+      expectedWorkVersion: page.workVersion,
+      expectedPublishedRevisionId: page.publishedRevisionId,
+    });
+  }).then(function(response) {
+    var result = wikiUnwrap(response);
+    wikiProposalDetail = result.proposal || wikiProposalDetail;
+    wikiProposalState.loaded = false;
+    if (result.page && result.page.id) {
+      wikiEditorPage = null;
+      wikiEditorLoadedId = null;
+      navigate('wikiEditor', result.page.id);
+    } else render();
+    showAlert('Proposta aceita como rascunho da equipe. Revise antes de publicar.', 'success');
+  }).catch(function(error) { showAlert(error && error.message ? error.message : 'Não foi possível aceitar a proposta.', 'error'); });
+}
+
+function renderPersonagemView() {
+  if (serverPersonagens === null) {
+    if (personagensLoadError) return '<div class="alert alert-error">' + h(personagensLoadError) + ' <button class="btn btn-small" onclick="carregarPersonagensServidor()">Tentar novamente</button></div>';
+    carregarPersonagensServidor();
+    return '<div class="alert alert-info">Carregando personagem…</div>';
+  }
+  var lista = listaPersonagens();
+  var p = lista.find(function(x) { return String(x.id) === String(currentPersonagem); });
   if (!p) return '<p>Personagem não encontrado.</p>';
   var theme = p.theme || {};
   var pageAccent = theme.accentColor || '#ffffff';
 
-  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Personagens</a> / ' + h(p.nome) + '</div>';
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'personagens\')">Personagens</a> / ' + h(p.nome) + '</div>';
 
   html += '<div class="custom-wiki-page' + (theme.fontFamily ? ' font-' + ha(theme.fontFamily) : '') + (theme.bgEffect ? ' bg-' + ha(theme.bgEffect) : '') + '" style="--page-accent:' + ha(pageAccent) + ';--page-accent-light:' + ha(pageAccent) + ';">';
 
   html += '<div class="char-sheet-head">';
   html += '<h2>' + h(p.nome) + (p.titulo ? ' <em>&mdash; ' + h(p.titulo) + '</em>' : '') + '</h2>';
   if (isModOrAdmin()) {
-    html += '<div style="display:flex;gap:8px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Excluir</button></div>';
+    html += '<div style="display:flex;gap:8px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button></div>';
   }
   html += '</div>';
-
-  if (personagemLocalApenas(p)) {
-    html += '<div class="alert alert-info"><span>Esta ficha está salva apenas neste navegador — outras pessoas ainda não a veem.</span>';
-    if (isModOrAdmin()) {
-      html += ' <button class="btn btn-small btn-primary" onclick="enviarPersonagemAoServidor(' + p.id + ')">Sincronizar com Servidor</button>';
-    }
-    html += '</div>';
-  }
 
   html += '<div class="char-sheet-grid">';
   html += '<div class="char-sheet-card">';
   html += '<div class="char-sheet-card-title">' + h(p.nome) + '</div>';
-  if (p.imagem) html += '<div class="char-sheet-portrait" onclick="openLightbox(\'' + ha(p.imagem) + '\',\'' + ha(p.nome) + '\')" style="cursor:zoom-in;"><img src="' + ha(p.imagem) + '"></div>';
+  if (p.imagem) html += '<div class="char-sheet-portrait" onclick="openLightbox(' + jsArg(p.imagem) + ',' + jsArg(p.nome) + ')" style="cursor:zoom-in;"><img src="' + ha(p.imagem) + '"></div>';
   html += '<table>';
   if (p.categoria) html += '<tr><td><b>Categoria</b></td><td>' + h(p.categoria) + '</td></tr>';
   if (p.titulo) html += '<tr><td><b>Título</b></td><td>' + h(p.titulo) + '</td></tr>';
@@ -848,7 +3639,7 @@ function renderPersonagemView() {
   }
 
   html += '</div>';
-  html += '<div style="margin-top:24px;"><a onclick="navigate(\'wiki\')" class="btn">Voltar para Personagens</a></div>';
+  html += '<div style="margin-top:24px;"><a onclick="navigate(\'personagens\')" class="btn">Voltar para Personagens</a></div>';
   return html;
 }
 
@@ -928,7 +3719,7 @@ function renderNovoPersonagem() {
   var theme = (existing && existing.theme) ? existing.theme : {};
   activeBuilderBlocks = (existing && Array.isArray(existing.blocks)) ? JSON.parse(JSON.stringify(existing.blocks)) : [];
 
-  var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Personagens</a> / ' + (existing ? 'Editar Personagem' : 'Novo Personagem') + '</div>';
+  var html = '<div class="breadcrumb"><a onclick="navigate(\'personagens\')">Personagens</a> / ' + (existing ? 'Editar Personagem' : 'Novo Personagem') + '</div>';
   html += '<div class="cat-header"><span>' + (existing ? 'Editar Ficha de Personagem' : 'Cadastrar Novo Personagem') + '</span>';
   html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
   html += '<button type="button" class="btn btn-small" onclick="previewPersonagemModal()">Pré-visualizar</button>';
@@ -979,35 +3770,39 @@ function renderNovoPersonagem() {
 
   var btnLabel = existing ? 'Salvar Alterações' : 'Cadastrar Personagem';
   var onclick = existing ? 'salvarEdicaoPersonagem(' + idJs(existing.id) + ')' : 'submitPersonagem()';
-  html += '<div style="display:flex;gap:10px;margin-top:12px;"><button class="btn btn-primary" onclick="' + onclick + '">' + btnLabel + '</button><button type="button" class="btn" onclick="previewPersonagemModal()">Pré-visualizar</button><button class="btn" onclick="navigate(\'wiki\')">Cancelar</button></div>';
+  html += '<div style="display:flex;gap:10px;margin-top:12px;"><button class="btn btn-primary" onclick="' + onclick + '">' + btnLabel + '</button><button type="button" class="btn" onclick="previewPersonagemModal()">Pré-visualizar</button><button class="btn" onclick="navigate(\'personagens\')">Cancelar</button></div>';
   return html;
 }
 
 // ==================== WIKIA · CENAS & POSTS CUSTOMIZÁVEIS ====================
 
 var serverWikiPosts = null;
+var wikiPostsLoadError = null;
+var wikiPostsLoading = false;
 
 function carregarWikiPostsServidor() {
+  if (wikiPostsLoading) return;
+  wikiPostsLoading = true;
+  wikiPostsLoadError = null;
   fetch('/api/wiki-posts')
-    .then(function(res) { return res.ok ? res.json() : null; })
+    .then(function(res) {
+      if (!res.ok) throw new Error('Não foi possível carregar as cenas do servidor.');
+      return res.json();
+    })
     .then(function(data) {
-      if (!data || !Array.isArray(data.wikiPosts)) return;
+      if (!data || !Array.isArray(data.wikiPosts)) throw new Error('A resposta de cenas é inválida.');
       serverWikiPosts = data.wikiPosts;
       if (currentPage === 'cenas' || currentPage === 'cenaView' || currentPage === 'forum') render();
     })
-    .catch(function() {});
+    .catch(function(error) {
+      wikiPostsLoadError = error.message || 'Não foi possível carregar as cenas do servidor.';
+      if (currentPage === 'cenas' || currentPage === 'cenaView') render();
+    })
+    .finally(function() { wikiPostsLoading = false; });
 }
 
 function listaWikiPosts() {
-  if (serverWikiPosts === null) return DB.wikiPosts || [];
-  var titulos = {};
-  serverWikiPosts.forEach(function(w) { titulos[(w.titulo || '').toLowerCase()] = true; });
-  var locais = (DB.wikiPosts || []).filter(function(w) { return !titulos[(w.titulo || '').toLowerCase()]; });
-  return serverWikiPosts.concat(locais);
-}
-
-function wikiPostLocalApenas(w) {
-  return serverWikiPosts !== null && typeof w.id === 'number';
+  return Array.isArray(serverWikiPosts) ? serverWikiPosts : [];
 }
 
 function onCenasFilterChange() {
@@ -1026,6 +3821,11 @@ function onCenasFilterChange() {
 }
 
 function renderCenas() {
+  if (serverWikiPosts === null) {
+    if (wikiPostsLoadError) return '<div class="alert alert-error">' + h(wikiPostsLoadError) + ' <button class="btn btn-small" onclick="carregarWikiPostsServidor()">Tentar novamente</button></div>';
+    carregarWikiPostsServidor();
+    return '<div class="alert alert-info">Carregando cenas compartilhadas…</div>';
+  }
   var html = '<div class="breadcrumb">Início / Cenas</div>';
   html += '<div class="cat-header"><span>Cenas &amp; Posts</span>';
   if (isModOrAdmin()) {
@@ -1137,7 +3937,7 @@ function renderModularBlocks(blocks, prefixId) {
       if (b.title) html += '<div class="mod-block-title">' + h(b.title) + '</div>';
       html += '<div class="mod-tabs-nav">';
       items.forEach(function(it, tidx) {
-        html += '<button type="button" class="mod-tab-btn' + (tidx === 0 ? ' active' : '') + '" onclick="switchModTab(this,\'' + bid + '-tab-' + tidx + '\')">' + h(it.label || ('Aba ' + (tidx + 1))) + '</button>';
+        html += '<button type="button" class="mod-tab-btn' + (tidx === 0 ? ' active' : '') + '" onclick="switchModTab(this,' + jsArg(bid + '-tab-' + tidx) + ')">' + h(it.label || ('Aba ' + (tidx + 1))) + '</button>';
       });
       html += '</div>';
       items.forEach(function(it, tidx) {
@@ -1153,7 +3953,7 @@ function renderModularBlocks(blocks, prefixId) {
       html += '<div class="mod-gallery-grid cols-' + ha(cols) + '">';
       imgs.forEach(function(im) {
         if (!im || !im.url) return;
-        html += '<div class="mod-gallery-item" onclick="openLightbox(\'' + ha(im.url) + '\',\'' + ha(im.caption || '') + '\')">';
+        html += '<div class="mod-gallery-item" onclick="openLightbox(' + jsArg(im.url) + ',' + jsArg(im.caption || '') + ')">';
         html += '<img src="' + ha(im.url) + '" alt="' + ha(im.caption || 'Imagem') + '">';
         if (im.caption) html += '<div class="mod-gallery-caption">' + h(im.caption) + '</div>';
         html += '</div>';
@@ -1168,7 +3968,7 @@ function renderModularBlocks(blocks, prefixId) {
       cards.forEach(function(cd) {
         var cColor = cd.color || 'var(--page-accent)';
         html += '<div class="mod-custom-card" style="--card-color:' + ha(cColor) + ';">';
-        if (cd.image) html += '<img class="mod-custom-card-img" src="' + ha(cd.image) + '" onclick="openLightbox(\'' + ha(cd.image) + '\',\'' + ha(cd.title || '') + '\')" style="cursor:zoom-in;">';
+        if (cd.image) html += '<img class="mod-custom-card-img" src="' + ha(cd.image) + '" onclick="openLightbox(' + jsArg(cd.image) + ',' + jsArg(cd.title || '') + ')" style="cursor:zoom-in;">';
         html += '<div class="mod-custom-card-body">';
         html += '<div class="mod-custom-card-head"><h4>' + h(cd.title || '') + '</h4>';
         if (cd.badge) html += '<span class="mod-custom-card-badge">' + h(cd.badge) + '</span>';
@@ -1263,6 +4063,11 @@ function exportarLogCena() {
 }
 
 function renderCenaView() {
+  if (serverWikiPosts === null) {
+    if (wikiPostsLoadError) return '<div class="alert alert-error">' + h(wikiPostsLoadError) + ' <button class="btn btn-small" onclick="carregarWikiPostsServidor()">Tentar novamente</button></div>';
+    carregarWikiPostsServidor();
+    return '<div class="alert alert-info">Carregando cena…</div>';
+  }
   var lista = listaWikiPosts();
   var w = lista.find(function(x) { return String(x.id) === String(currentCena); });
   if (!w) return '<p>Cena ou post não encontrado.</p>';
@@ -1282,9 +4087,8 @@ function renderCenaView() {
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'cenas\')">Cenas</a> / ' + h(w.titulo) + '</div>';
 
-  if (wikiPostLocalApenas(w) && isModOrAdmin()) {
-    html += '<div class="alert alert-info"><span>Esta cena é um modelo local — clique ao lado para salvá-la no banco de dados do servidor.</span>';
-    html += '<button class="btn btn-small btn-primary" onclick="enviarCenaAoServidor(' + w.id + ')">Publicar no Servidor</button></div>';
+  if (w.turnsReadOnly) {
+    html += '<div class="alert alert-info">Esta cena está em modo de leitura enquanto os turnos antigos passam por revisão protegida.</div>';
   }
 
   html += '<div class="custom-wiki-page font-' + ha(fontFamily) + (bgEffect !== 'none' ? ' bg-' + ha(bgEffect) : '') + '" style="--page-accent:' + ha(accent) + ';--page-accent-light:' + ha(accent) + ';">';
@@ -1311,8 +4115,10 @@ function renderCenaView() {
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
     if (isModOrAdmin()) {
-      html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
-      html += '<button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Excluir</button>';
+      if (!w.turnsReadOnly) {
+        html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
+      }
+      html += '<button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Ocultar</button>';
     }
     html += '</div>';
     html += '</div></div></div>';
@@ -1322,7 +4128,8 @@ function renderCenaView() {
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
     if (isModOrAdmin()) {
-      html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button><button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Excluir</button>';
+      if (!w.turnsReadOnly) html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
+      html += '<button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Ocultar</button>';
     }
     html += '</div></div>';
   }
@@ -1335,7 +4142,7 @@ function renderCenaView() {
     infoboxHtml += '<aside class="char-sheet-card">';
     infoboxHtml += '<div class="char-sheet-card-title">' + h(infobox.title || w.titulo) + '</div>';
     if (infobox.image) {
-      infoboxHtml += '<div class="char-sheet-portrait" onclick="openLightbox(\'' + ha(infobox.image) + '\',\'' + ha(infobox.caption || w.titulo) + '\')" style="cursor:zoom-in;"><img src="' + ha(infobox.image) + '"></div>';
+      infoboxHtml += '<div class="char-sheet-portrait" onclick="openLightbox(' + jsArg(infobox.image) + ',' + jsArg(infobox.caption || w.titulo) + ')" style="cursor:zoom-in;"><img src="' + ha(infobox.image) + '"></div>';
     }
     if (infobox.caption) {
       infoboxHtml += '<div style="font-size:11.5px;color:var(--text-muted);margin-bottom:12px;font-style:italic;">' + h(infobox.caption) + '</div>';
@@ -1397,7 +4204,7 @@ function renderCenaView() {
   html += '<option value="asc"' + (turnSortOrder === 'asc' ? ' selected' : '') + '>Ordem Cronológica (#1 &rarr; #' + (turns.length || 1) + ')</option>';
   html += '<option value="desc"' + (turnSortOrder === 'desc' ? ' selected' : '') + '>Mais Recentes Primeiro</option>';
   html += '</select>';
-  if (DB.session) {
+  if (DB.session && !w.turnsReadOnly) {
     html += '<a class="btn btn-small btn-primary" onclick="document.getElementById(\'new-turn-form\').scrollIntoView({behavior:\'smooth\'})">+ Postar Turno</a>';
   }
   html += '</div></div>';
@@ -1419,7 +4226,7 @@ function renderCenaView() {
     html += '<div class="turn-top-bar">';
     html += '<div class="turn-identity">';
     if (t.characterAvatar) {
-      html += '<img class="turn-avatar" src="' + ha(t.characterAvatar) + '" alt="' + ha(displayName) + '" onclick="openLightbox(\'' + ha(t.characterAvatar) + '\',\'' + ha(displayName) + '\')" style="cursor:zoom-in;">';
+      html += '<img class="turn-avatar" src="' + ha(t.characterAvatar) + '" alt="' + ha(displayName) + '" onclick="openLightbox(' + jsArg(t.characterAvatar) + ',' + jsArg(displayName) + ')" style="cursor:zoom-in;">';
     } else {
       html += '<div class="turn-avatar">' + h(initials) + '</div>';
     }
@@ -1442,14 +4249,14 @@ function renderCenaView() {
     }
 
     if (t.banner && (bStyle === 'panoramic' || bStyle === 'full')) {
-      html += '<div class="turn-banner-media style-' + ha(bStyle) + '" onclick="openLightbox(\'' + ha(t.banner) + '\',\'' + ha(t.turnTitle || displayName) + '\')">';
+      html += '<div class="turn-banner-media style-' + ha(bStyle) + '" onclick="openLightbox(' + jsArg(t.banner) + ',' + jsArg(t.turnTitle || displayName) + ')">';
       html += '<img src="' + ha(t.banner) + '" alt="Imagem do turno">';
       html += '</div>';
     }
 
     html += '<div class="turn-content-wrap">';
     if (t.banner && bStyle === 'side') {
-      html += '<div class="turn-side-img" onclick="openLightbox(\'' + ha(t.banner) + '\',\'' + ha(t.turnTitle || displayName) + '\')"><img src="' + ha(t.banner) + '" alt="Retrato do turno"></div>';
+      html += '<div class="turn-side-img" onclick="openLightbox(' + jsArg(t.banner) + ',' + jsArg(t.turnTitle || displayName) + ')"><img src="' + ha(t.banner) + '" alt="Retrato do turno"></div>';
     }
     html += '<div class="turn-content-body' + fontCls + '">' + (t.content || '') + '</div>';
     html += '</div>';
@@ -1460,7 +4267,7 @@ function renderCenaView() {
         var u = typeof imgObj === 'string' ? imgObj : (imgObj && imgObj.url);
         var cap = (imgObj && imgObj.caption) ? imgObj.caption : '';
         if (!u) return;
-        html += '<div class="turn-gallery-card" onclick="openLightbox(\'' + ha(u) + '\',\'' + ha(cap || displayName) + '\')">';
+        html += '<div class="turn-gallery-card" onclick="openLightbox(' + jsArg(u) + ',' + jsArg(cap || displayName) + ')">';
         html += '<img src="' + ha(u) + '" alt="Anexo do turno">';
         if (cap) html += '<span>' + h(cap) + '</span>';
         html += '</div>';
@@ -1475,7 +4282,7 @@ function renderCenaView() {
     html += '<div class="turn-footer-bar">';
     html += '<span>Turno #' + num + ' &middot; ' + h(displayName) + '</span>';
     html += '<div class="post-actions">';
-    if (DB.session) {
+    if (DB.session && !w.turnsReadOnly) {
       html += '<a onclick="citarTurno(' + idJs(t.id) + ')">Citar Turno</a>';
       if (podeEditarTurno(t)) {
         html += '<a onclick="abrirModalEditarTurno(' + idJs(t.id) + ')">Editar</a>';
@@ -1486,7 +4293,7 @@ function renderCenaView() {
     html += '</article>';
   });
 
-  if (DB.session) {
+  if (DB.session && !w.turnsReadOnly) {
     var chars = listaPersonagens();
     html += '<div class="builder-panel" id="new-turn-form" style="border-top:2px solid ' + ha(accent) + ';margin-top:26px;">';
     html += '<div class="builder-panel-title"><span>Escrever Novo Turno na Cena</span><span style="font-size:12px;color:var(--text-secondary);">Postando como <b>' + h(DB.session.username) + '</b></span></div>';
@@ -1527,6 +4334,8 @@ function renderCenaView() {
 
     html += '<button class="btn btn-primary" onclick="publicarTurnoCena()">Publicar Turno na Cena</button>';
     html += '</div>';
+  } else if (w.turnsReadOnly) {
+    html += '<div class="alert alert-info">Novos turnos e alterações ficam desativados até a revisão dos dados antigos terminar.</div>';
   } else {
     html += '<div class="alert alert-info"><span>Faça login para postar seu turno textual e adicionar imagens nesta cena.</span><a class="btn btn-small btn-primary" onclick="showLoginModal()">Entrar</a></div>';
   }
@@ -1577,50 +4386,22 @@ function publicarTurnoCena() {
   var w = lista.find(function(x) { return String(x.id) === String(currentCena); });
   if (!w) return;
 
-  var content = getEditorContent('turn-editor');
-  if (!content || content === '<br>') {
+  var payload = readTurnFormValues(false);
+  if (!payload.content || payload.content === '<br>') {
     showAlert('Escreva o conteúdo do turno antes de publicar.', 'error');
     return;
   }
-
-  var payload = {
-    characterName: document.getElementById('turn-char-name').value.trim(),
-    characterTitle: document.getElementById('turn-char-title').value.trim(),
-    characterAvatar: document.getElementById('turn-char-avatar').value.trim(),
-    turnTitle: document.getElementById('turn-title').value.trim(),
-    location: document.getElementById('turn-location').value.trim(),
-    fontFamily: document.getElementById('turn-font').value,
-    accentColor: document.getElementById('turn-accent').value,
-    banner: document.getElementById('turn-banner-url').value.trim(),
-    bannerStyle: document.getElementById('turn-banner-style').value,
-    images: lerImagensExtrasTurno('turn-extra-images-list'),
-    content: content,
-    oocNotes: document.getElementById('turn-ooc').value.trim(),
-    date: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-  };
-
-  if (typeof w.id === 'number') {
-    var localW = DB.wikiPosts.find(function(x) { return x.id === w.id; });
-    if (!localW) return;
-    if (!Array.isArray(localW.turns)) localW.turns = [];
-    payload.id = 'turn-' + Date.now();
-    payload.authorId = DB.session.id;
-    payload.authorName = DB.session.username;
-    payload.authorRole = DB.session.role;
-    localW.turns.push(payload);
-    bumpPosts();
-    saveDB();
-    render();
-    showAlert('Turno publicado na cena!', 'success');
-    return;
-  }
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('turn-create:' + String(w.id));
+  if (!finish) return;
 
   apiRequest('POST', '/api/wiki-posts/' + w.id + '/turns', payload, function(err, data) {
+    finish();
     if (err) { showAlert(err, 'error'); return; }
+    clearResourceFormDraft(descriptor);
     var idx = serverWikiPosts.findIndex(function(x) { return x.id === w.id; });
     if (idx !== -1) serverWikiPosts[idx] = data.wikiPost;
-    bumpPosts();
-    saveDB();
     render();
     showAlert('Turno publicado com sucesso!', 'success');
   });
@@ -1648,6 +4429,7 @@ function abrirModalEditarTurno(turnId) {
   if (!w || !Array.isArray(w.turns)) return;
   var t = w.turns.find(function(x) { return String(x.id) === String(turnId); });
   if (!t || !podeEditarTurno(t)) return;
+  editingTurnId = String(turnId);
 
   var body = '';
   body += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">';
@@ -1671,6 +4453,8 @@ function abrirModalEditarTurno(turnId) {
       adicionarCampoImagemTurno('edit-turn-extra-imgs', im.url, im.caption);
     });
   }
+  restoreResourceFormDraft();
+  addResourceDraftNotice();
 }
 
 function salvarEdicaoTurno(turnId) {
@@ -1678,36 +4462,19 @@ function salvarEdicaoTurno(turnId) {
   var w = lista.find(function(x) { return String(x.id) === String(currentCena); });
   if (!w || !Array.isArray(w.turns)) return;
 
-  var updated = {
-    characterName: document.getElementById('edit-turn-char-name').value.trim(),
-    characterTitle: document.getElementById('edit-turn-char-title').value.trim(),
-    characterAvatar: document.getElementById('edit-turn-char-avatar').value.trim(),
-    turnTitle: document.getElementById('edit-turn-title').value.trim(),
-    location: document.getElementById('edit-turn-location').value.trim(),
-    accentColor: document.getElementById('edit-turn-accent').value,
-    banner: document.getElementById('edit-turn-banner').value.trim(),
-    bannerStyle: document.getElementById('edit-turn-banner-style').value,
-    images: lerImagensExtrasTurno('edit-turn-extra-imgs'),
-    content: getEditorContent('edit-turn-editor'),
-    oocNotes: document.getElementById('edit-turn-ooc').value.trim(),
-    edited: true
-  };
+  var updated = readTurnFormValues(true);
 
-  if (typeof w.id === 'number') {
-    var localW = DB.wikiPosts.find(function(x) { return x.id === w.id; });
-    if (!localW) return;
-    var idx = localW.turns.findIndex(function(x) { return String(x.id) === String(turnId); });
-    if (idx === -1) return;
-    Object.assign(localW.turns[idx], updated);
-    saveDB();
-    closeModal();
-    render();
-    showAlert('Turno atualizado.', 'success');
-    return;
-  }
-
-  apiRequest('PUT', '/api/wiki-posts/' + w.id + '/turns/' + turnId, updated, function(err, data) {
+  var existing = w.turns.find(function(turn) { return String(turn.id) === String(turnId); });
+  if (!existing) return;
+  updated.expectedVersion = existing.version;
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('turn-edit:' + String(w.id) + ':' + String(turnId));
+  if (!finish) return;
+  apiRequest('PUT', '/api/wiki-posts/' + w.id + '/turns/' + encodeURIComponent(turnId), updated, function(err, data) {
+    finish();
     if (err) { showAlert(err, 'error'); return; }
+    clearResourceFormDraft(descriptor);
     var idx = serverWikiPosts.findIndex(function(x) { return x.id === w.id; });
     if (idx !== -1) serverWikiPosts[idx] = data.wikiPost;
     closeModal();
@@ -1722,16 +4489,9 @@ function excluirTurnoCena(turnId) {
   var w = lista.find(function(x) { return String(x.id) === String(currentCena); });
   if (!w) return;
 
-  if (typeof w.id === 'number') {
-    var localW = DB.wikiPosts.find(function(x) { return x.id === w.id; });
-    if (!localW || !Array.isArray(localW.turns)) return;
-    localW.turns = localW.turns.filter(function(x) { return String(x.id) !== String(turnId); });
-    saveDB();
-    render();
-    return;
-  }
-
-  apiRequest('DELETE', '/api/wiki-posts/' + w.id + '/turns/' + turnId, undefined, function(err, data) {
+  var existing = (w.turns || []).find(function(turn) { return String(turn.id) === String(turnId); });
+  if (!existing) return;
+  apiRequest('POST', '/api/wiki-posts/' + w.id + '/turns/' + encodeURIComponent(turnId) + '/hide', { expectedVersion: existing.version }, function(err, data) {
     if (err) { showAlert(err, 'error'); return; }
     var idx = serverWikiPosts.findIndex(function(x) { return x.id === w.id; });
     if (idx !== -1) serverWikiPosts[idx] = data.wikiPost;
@@ -2147,7 +4907,7 @@ function renderNovaCena() {
   if (chars.length) {
     html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;"><span style="font-size:11px;color:var(--text-muted);">Adicionar rápido:</span>';
     chars.forEach(function(ch) {
-      html += '<button type="button" class="btn btn-small" style="padding:3px 9px;font-size:11px;" onclick="toggleParticipanteInput(\'' + ha(ch.nome) + '\')">+ ' + h(ch.nome) + '</button>';
+      html += '<button type="button" class="btn btn-small" style="padding:3px 9px;font-size:11px;" onclick="toggleParticipanteInput(' + jsArg(ch.nome) + ')">+ ' + h(ch.nome) + '</button>';
     });
     html += '</div>';
   }
@@ -2185,14 +4945,20 @@ function renderNovaCena() {
 
 function previewPersonagemModal() {
   var d = lerFormularioPersonagem();
-  var html = '<div style="max-height:70vh;overflow-y:auto;padding-right:4px;">';
-  html += '<div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border-subtle);">';
-  if (d.imagem) html += '<img src="' + ha(d.imagem) + '" style="width:72px;height:72px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border-medium);">';
-  html += '<div><h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">' + h(d.nome || 'Sem Nome') + '</h3>';
-  html += '<div style="font-size:12px;color:var(--text-secondary);">' + h(d.titulo || '') + ' · ' + h(d.raca || '') + '</div></div></div>';
-  html += '<div class="char-sheet-body" style="padding:18px;">' + renderRichText(d.descricao || 'Sem biografia.') + '</div>';
-  html += '</div>';
-  showModal('Pré-visualização: ' + (d.nome || 'Personagem'), html);
+  requestSafeContentPreview({ html: d.descricao || '' }).then(function(safe) {
+    var html = '<div style="max-height:70vh;overflow-y:auto;padding-right:4px;">';
+    html += '<div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border-subtle);">';
+    var imageUrl = d.imagem && typeof editorSafeContentUrl === 'function'
+      ? editorSafeContentUrl(d.imagem, { image: true }) : null;
+    if (imageUrl) html += '<img src="' + ha(imageUrl) + '" style="width:72px;height:72px;object-fit:cover;border-radius:var(--radius-sm);border:1px solid var(--border-medium);">';
+    html += '<div><h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">' + h(d.nome || 'Sem Nome') + '</h3>';
+    html += '<div style="font-size:12px;color:var(--text-secondary);">' + h(d.titulo || '') + ' · ' + h(d.raca || '') + '</div></div></div>';
+    html += '<div class="char-sheet-body" style="padding:18px;">' + safe.html + '</div>';
+    html += '</div>';
+    showModal('Pré-visualização: ' + (d.nome || 'Personagem'), html);
+  }).catch(function(error) {
+    showAlert(error.message || 'Não foi possível validar a prévia da ficha.', 'error');
+  });
 }
 
 function exportarPersonagemJson() {
@@ -2213,44 +4979,110 @@ function importarPersonagemJsonModal() {
   showModal('Importar Ficha via JSON', body);
 }
 
-function confirmImportPersonagemJson() {
-  var raw = (document.getElementById('import-char-json') || {}).value || '';
-  try {
-    var d = JSON.parse(raw);
-    if (d.nome !== undefined && document.getElementById('p-nome')) document.getElementById('p-nome').value = d.nome;
-    if (d.titulo !== undefined && document.getElementById('p-titulo')) document.getElementById('p-titulo').value = d.titulo;
-    if (d.raca !== undefined && document.getElementById('p-raca')) document.getElementById('p-raca').value = d.raca;
-    if (d.idade !== undefined && document.getElementById('p-idade')) document.getElementById('p-idade').value = d.idade;
-    if (d.afiliacao !== undefined && document.getElementById('p-afiliacao')) document.getElementById('p-afiliacao').value = d.afiliacao;
-    if (d.imagem !== undefined && document.getElementById('p-imagem')) document.getElementById('p-imagem').value = d.imagem;
-    if (d.resumo !== undefined && document.getElementById('p-resumo')) document.getElementById('p-resumo').value = d.resumo;
-    if (d.descricao !== undefined && document.getElementById('p-editor')) {
-      document.getElementById('p-editor').innerHTML = d.descricao;
-      updateEditorStats('p-editor');
-    }
-    closeModal();
-    showAlert('Dados importados para o formulário.', 'success');
-  } catch (e) {
-    showAlert('JSON inválido.', 'error');
+var importJsonPending = false;
+
+function requestSafeContentPreview(payload) {
+  if (!window.Aetherverse || typeof window.Aetherverse.apiRequest !== 'function') {
+    return Promise.reject(new Error('O serviço de validação segura não está disponível.'));
   }
+  return window.Aetherverse.apiRequest('POST', '/api/content/preview', payload).then(function(response) {
+    var safe = response && response.data && typeof response.data === 'object' ? response.data : response;
+    if (!safe || typeof safe !== 'object' || Array.isArray(safe)) throw new Error('A resposta de validação está incompleta.');
+    if (Object.prototype.hasOwnProperty.call(payload, 'html') && typeof safe.html !== 'string') {
+      throw new Error('A resposta de validação não incluiu HTML seguro.');
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'blocks') && !Array.isArray(safe.blocks)) {
+      throw new Error('A resposta de validação não incluiu blocos seguros.');
+    }
+    return safe;
+  });
+}
+
+function importedStringFields(source, fields) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('O JSON deve conter um objeto.');
+  var values = {};
+  fields.forEach(function(field) {
+    if (!Object.prototype.hasOwnProperty.call(source, field.name)) return;
+    var value = source[field.name];
+    if (typeof value === 'number' && Number.isFinite(value)) value = String(value);
+    if (typeof value !== 'string' || value.length > field.max) throw new Error('O campo "' + field.name + '" tem formato inválido.');
+    values[field.name] = value;
+  });
+  return values;
+}
+
+function confirmImportPersonagemJson() {
+  if (importJsonPending) return Promise.resolve();
+  var source = document.getElementById('import-char-json');
+  var raw = source ? source.value : '';
+  var data;
+  var values;
+  try {
+    data = JSON.parse(raw);
+    values = importedStringFields(data, [
+      { name: 'nome', max: 200 }, { name: 'titulo', max: 200 }, { name: 'raca', max: 100 },
+      { name: 'idade', max: 100 }, { name: 'afiliacao', max: 300 }, { name: 'imagem', max: 2048 },
+      { name: 'resumo', max: 2000 }, { name: 'descricao', max: 250000 }
+    ]);
+  } catch (error) {
+    showAlert(error && error.message && error.message !== 'Unexpected end of JSON input' ? error.message : 'JSON inválido.', 'error');
+    return Promise.resolve();
+  }
+  var description = Object.prototype.hasOwnProperty.call(values, 'descricao') ? values.descricao : '';
+  var targets = {};
+  var ids = { nome: 'p-nome', titulo: 'p-titulo', raca: 'p-raca', idade: 'p-idade',
+    afiliacao: 'p-afiliacao', imagem: 'p-imagem', resumo: 'p-resumo' };
+  try {
+    Object.keys(values).forEach(function(field) {
+      if (field === 'descricao') return;
+      targets[field] = document.getElementById(ids[field]);
+      if (!targets[field]) throw new Error('O formulário da ficha não está disponível.');
+    });
+  } catch (error) {
+    showAlert(error.message, 'error');
+    return Promise.resolve();
+  }
+  var editor = Object.prototype.hasOwnProperty.call(values, 'descricao') ? document.getElementById('p-editor') : null;
+  if (Object.prototype.hasOwnProperty.call(values, 'descricao') && !editor) {
+    showAlert('O editor da ficha não está disponível.', 'error');
+    return Promise.resolve();
+  }
+  importJsonPending = true;
+  var button = document.querySelector('#modal-container button.btn-primary');
+  if (button) button.disabled = true;
+  return requestSafeContentPreview({ html: description }).then(function(safe) {
+    if (document.getElementById('import-char-json') !== source || (editor && document.getElementById('p-editor') !== editor)) return;
+    Object.keys(targets).forEach(function(field) { targets[field].value = values[field]; });
+    if (editor && !setEditorContent('p-editor', safe.html)) throw new Error('Não foi possível atualizar o editor da ficha.');
+    closeModal();
+    showAlert(safe.formattingLoss && safe.formattingLoss.discarded
+      ? 'Dados importados; a formatação não permitida foi removida.'
+      : 'Dados importados para o formulário.', 'success');
+  }).catch(function(error) {
+    showAlert(error.message || 'Não foi possível validar o JSON importado.', 'error');
+  }).finally(function() {
+    importJsonPending = false;
+    if (button) button.disabled = false;
+  });
 }
 
 function previewCenaModal() {
   var d = lerFormularioCena();
-  var html = '<div style="max-height:72vh;overflow-y:auto;padding-right:4px;">';
-  html += '<div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border-subtle);">';
-  html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);">' + h(d.categoria) + ' · ' + h(d.status) + '</div>';
-  html += '<h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-top:4px;">' + h(d.titulo || 'Sem Título') + '</h2>';
-  if (d.subtitulo) html += '<div style="font-size:13px;color:var(--text-secondary);">' + h(d.subtitulo) + '</div>';
-  html += '</div>';
-  if (d.descricao) {
-    html += '<div class="char-sheet-body" style="padding:18px;margin-bottom:16px;">' + renderRichText(d.descricao) + '</div>';
-  }
-  if (d.blocks && d.blocks.length) {
-    html += renderModularBlocks(d.blocks);
-  }
-  html += '</div>';
-  showModal('Pré-visualização da Página', html);
+  var payload = { html: d.descricao || '', blocks: Array.isArray(d.blocks) ? d.blocks : [] };
+  requestSafeContentPreview(payload).then(function(safe) {
+    var html = '<div style="max-height:72vh;overflow-y:auto;padding-right:4px;">';
+    html += '<div style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border-subtle);">';
+    html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);">' + h(d.categoria) + ' · ' + h(d.status) + '</div>';
+    html += '<h2 style="font-size:20px;font-weight:700;color:var(--text-primary);margin-top:4px;">' + h(d.titulo || 'Sem Título') + '</h2>';
+    if (d.subtitulo) html += '<div style="font-size:13px;color:var(--text-secondary);">' + h(d.subtitulo) + '</div>';
+    html += '</div>';
+    if (safe.html) html += '<div class="char-sheet-body" style="padding:18px;margin-bottom:16px;">' + safe.html + '</div>';
+    if (safe.blocks.length) html += renderModularBlocks(safe.blocks);
+    html += '</div>';
+    showModal('Pré-visualização da Página', html);
+  }).catch(function(error) {
+    showAlert(error.message || 'Não foi possível validar a prévia da página.', 'error');
+  });
 }
 
 function exportarCenaJson() {
@@ -2272,26 +5104,63 @@ function importarCenaJsonModal() {
 }
 
 function confirmImportCenaJson() {
-  var raw = (document.getElementById('import-cena-json') || {}).value || '';
+  if (importJsonPending) return Promise.resolve();
+  var source = document.getElementById('import-cena-json');
+  var data;
+  var values;
+  var hasBlocks;
   try {
-    var d = JSON.parse(raw);
-    if (d.titulo !== undefined && document.getElementById('c-titulo')) document.getElementById('c-titulo').value = d.titulo;
-    if (d.subtitulo !== undefined && document.getElementById('c-subtitulo')) document.getElementById('c-subtitulo').value = d.subtitulo;
-    if (d.resumo !== undefined && document.getElementById('c-resumo')) document.getElementById('c-resumo').value = d.resumo;
-    if (d.banner !== undefined && document.getElementById('c-banner')) document.getElementById('c-banner').value = d.banner;
-    if (d.descricao !== undefined && document.getElementById('c-editor')) {
-      document.getElementById('c-editor').innerHTML = d.descricao;
-      updateEditorStats('c-editor');
-    }
-    if (Array.isArray(d.blocks)) {
-      activeBuilderBlocks = d.blocks;
+    data = JSON.parse(source ? source.value : '');
+    values = importedStringFields(data, [
+      { name: 'titulo', max: 200 }, { name: 'subtitulo', max: 300 }, { name: 'resumo', max: 2000 },
+      { name: 'banner', max: 2048 }, { name: 'descricao', max: 250000 }
+    ]);
+    hasBlocks = Object.prototype.hasOwnProperty.call(data, 'blocks');
+    if (hasBlocks && !Array.isArray(data.blocks)) throw new Error('O campo "blocks" deve ser uma lista.');
+  } catch (error) {
+    showAlert(error && error.message && error.message !== 'Unexpected end of JSON input' ? error.message : 'JSON inválido.', 'error');
+    return Promise.resolve();
+  }
+  var targets = {};
+  var ids = { titulo: 'c-titulo', subtitulo: 'c-subtitulo', resumo: 'c-resumo', banner: 'c-banner' };
+  try {
+    Object.keys(values).forEach(function(field) {
+      if (field === 'descricao') return;
+      targets[field] = document.getElementById(ids[field]);
+      if (!targets[field]) throw new Error('O formulário da cena não está disponível.');
+    });
+  } catch (error) {
+    showAlert(error.message, 'error');
+    return Promise.resolve();
+  }
+  var editor = Object.prototype.hasOwnProperty.call(values, 'descricao') ? document.getElementById('c-editor') : null;
+  if (Object.prototype.hasOwnProperty.call(values, 'descricao') && !editor) {
+    showAlert('O editor da cena não está disponível.', 'error');
+    return Promise.resolve();
+  }
+  var payload = { html: Object.prototype.hasOwnProperty.call(values, 'descricao') ? values.descricao : '' };
+  if (hasBlocks) payload.blocks = data.blocks;
+  importJsonPending = true;
+  var button = document.querySelector('#modal-container button.btn-primary');
+  if (button) button.disabled = true;
+  return requestSafeContentPreview(payload).then(function(safe) {
+    if (document.getElementById('import-cena-json') !== source || (editor && document.getElementById('c-editor') !== editor)) return;
+    Object.keys(targets).forEach(function(field) { targets[field].value = values[field]; });
+    if (editor && !setEditorContent('c-editor', safe.html)) throw new Error('Não foi possível atualizar o editor da cena.');
+    if (hasBlocks) {
+      activeBuilderBlocks = JSON.parse(JSON.stringify(safe.blocks));
       refreshBuilderDOM();
     }
     closeModal();
-    showAlert('Estrutura JSON carregada no construtor.', 'success');
-  } catch (e) {
-    showAlert('JSON inválido.', 'error');
-  }
+    showAlert(safe.formattingLoss && safe.formattingLoss.discarded
+      ? 'Estrutura carregada; a formatação não permitida foi removida.'
+      : 'Estrutura JSON carregada no construtor.', 'success');
+  }).catch(function(error) {
+    showAlert(error.message || 'Não foi possível validar o JSON importado.', 'error');
+  }).finally(function() {
+    importJsonPending = false;
+    if (button) button.disabled = false;
+  });
 }
 
 function lerFormularioCena() {
@@ -2337,16 +5206,15 @@ function submitNovaCena() {
   if (!isModOrAdmin()) { showAlert('Apenas Moderadores e Administradores podem criar páginas na Wikia.', 'error'); return; }
   var dados = lerFormularioCena();
   if (!dados.titulo) { showAlert('Preencha o título da cena/post.', 'error'); return; }
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('scene-create');
+  if (!finish) return;
 
   apiRequest('POST', '/api/wiki-posts', dados, function(err, data) {
-    if (err) {
-      var novoLocal = Object.assign({ id: DB.nextWikiPostId++, turns: [] }, dados);
-      DB.wikiPosts.unshift(novoLocal);
-      saveDB();
-      navigate('cenaView', novoLocal.id);
-      showAlert('Cena criada (salva localmente).', 'success');
-      return;
-    }
+    finish();
+    if (err) { showAlert(err, 'error'); return; }
+    clearResourceFormDraft(descriptor);
     if (serverWikiPosts === null) serverWikiPosts = [];
     serverWikiPosts.unshift(data.wikiPost);
     navigate('cenaView', data.wikiPost.id);
@@ -2364,19 +5232,17 @@ function salvarEdicaoCena(id) {
   var dados = lerFormularioCena();
   if (!dados.titulo) { showAlert('O título é obrigatório.', 'error'); return; }
 
-  if (typeof id === 'number') {
-    var localW = DB.wikiPosts.find(function(x) { return x.id === id; });
-    if (!localW) return;
-    Object.assign(localW, dados);
-    saveDB();
-    sessionStorage.removeItem('editCenaId');
-    navigate('cenaView', id);
-    showAlert('Página customizada salva!', 'success');
-    return;
-  }
-
-  apiRequest('PUT', '/api/wiki-posts/' + id, dados, function(err, data) {
+  var existing = listaWikiPosts().find(function(item) { return String(item.id) === String(id); });
+  if (!existing) { showAlert('Atualize a cena antes de salvar.', 'error'); return; }
+  dados.expectedVersion = existing.version;
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('scene-edit:' + String(id));
+  if (!finish) return;
+  apiRequest('PUT', '/api/wiki-posts/' + encodeURIComponent(id), dados, function(err, data) {
+    finish();
     if (err) { showAlert(err, 'error'); return; }
+    clearResourceFormDraft(descriptor);
     var idx = serverWikiPosts.findIndex(function(x) { return x.id === id; });
     if (idx !== -1) serverWikiPosts[idx] = data.wikiPost;
     sessionStorage.removeItem('editCenaId');
@@ -2387,34 +5253,13 @@ function salvarEdicaoCena(id) {
 
 function deletarCena(id) {
   if (!isModOrAdmin()) return;
-  if (!confirm('Deseja excluir esta página de cena e todos os seus turnos?')) return;
-
-  if (typeof id === 'number') {
-    DB.wikiPosts = DB.wikiPosts.filter(function(w) { return w.id !== id; });
-    saveDB();
-    navigate('cenas');
-    return;
-  }
-
-  apiRequest('DELETE', '/api/wiki-posts/' + id, undefined, function(err) {
+  if (!confirm('Ocultar esta cena? Ela poderá ser recuperada pela equipe.')) return;
+  var scene = listaWikiPosts().find(function(item) { return String(item.id) === String(id); });
+  if (!scene) return;
+  apiRequest('POST', '/api/wiki-posts/' + encodeURIComponent(id) + '/hide', { expectedVersion: scene.version }, function(err) {
     if (err) { showAlert(err, 'error'); return; }
     serverWikiPosts = serverWikiPosts.filter(function(w) { return w.id !== id; });
     navigate('cenas');
-  });
-}
-
-function enviarCenaAoServidor(id) {
-  if (!isModOrAdmin()) return;
-  var w = DB.wikiPosts.find(function(x) { return x.id === id; });
-  if (!w) return;
-  apiRequest('POST', '/api/wiki-posts', w, function(err, data) {
-    if (err) { showAlert(err, 'error'); return; }
-    DB.wikiPosts = DB.wikiPosts.filter(function(x) { return x.id !== id; });
-    saveDB();
-    if (serverWikiPosts === null) serverWikiPosts = [];
-    serverWikiPosts.unshift(data.wikiPost);
-    navigate('cenaView', data.wikiPost.id);
-    showAlert('Cena sincronizada com o banco de dados!', 'success');
   });
 }
 
@@ -2425,8 +5270,6 @@ function renderPerfil() {
     return '<div class="alert alert-info"><span>Você não está logado.</span><div><a class="btn btn-small btn-primary" onclick="showLoginModal()">Entrar</a> <a class="btn btn-small" onclick="navigate(\'registro\')">Cadastrar</a></div></div>';
   }
   var u = DB.session;
-  var userThreads = DB.threads.filter(function(t) { return t.authorId === u.id; });
-  var userPosts = DB.posts.filter(function(p) { return p.authorId === u.id; });
 
   var html = '<div class="breadcrumb">Início / Perfil</div>';
   html += '<div class="cat-header"><span>Perfil de ' + h(u.username) + '</span><button class="btn btn-danger btn-small" onclick="doLogout()">Sair da conta</button></div>';
@@ -2458,40 +5301,13 @@ function renderPerfil() {
   html += '<div class="form-row"><label>URL do Avatar (Imagem)</label><input type="text" id="prof-avatar" value="' + ha(u.avatar || '') + '" placeholder="https://..."></div>';
   html += '</div>';
   html += '<div class="form-row"><label>Biografia / Assinatura de Perfil</label><textarea id="prof-bio" rows="3" placeholder="Escreva uma breve apresentação ou citação do seu perfil...">' + h(u.bio || '') + '</textarea></div>';
-  html += '<div class="form-row"><label>Alterar Senha (deixe em branco para manter a atual)</label><input type="password" id="prof-password" placeholder="Nova senha (mín. 6 caracteres)"></div>';
+  html += '<div class="form-row"><label>Senha atual (obrigatória para trocar a senha)</label><input type="password" id="prof-current-password" autocomplete="current-password"></div>';
+  html += '<div class="form-row"><label>Nova senha (deixe em branco para manter a atual)</label><input type="password" id="prof-password" autocomplete="new-password" placeholder="Nova senha (mín. 6 caracteres)"></div>';
   html += '<button class="btn btn-primary" onclick="salvarEdicaoPerfil()">Salvar Alterações do Perfil</button>';
   html += '</div>';
 
-  if (userThreads.length) {
-    html += '<div class="builder-panel">';
-    html += '<div class="builder-panel-title"><span>Meus Tópicos Recentes (' + userThreads.length + ')</span></div>';
-    userThreads.slice(0, 6).forEach(function(t) {
-      html += '<div style="padding:8px 0;border-bottom:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center;font-size:13px;">';
-      html += '<a onclick="navigate(\'thread\',' + idJs(t.id) + ')" style="font-weight:500;">' + h(t.title) + '</a>';
-      html += '<span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);">' + h(t.created) + '</span>';
-      html += '</div>';
-    });
-    html += '</div>';
-  }
   html += '</div>';
   html += '</div>';
-
-  if (u.role !== 'admin') {
-    html += '<div class="cat-header" style="margin-top:18px;"><span>Validação de ADM (1 tentativa)</span></div>';
-    html += '<div class="builder-panel">';
-    if (jaTentouValidarAdmin()) {
-      html += '<div class="alert alert-error" style="margin-bottom:0;">Você já usou sua única tentativa de validação.</div>';
-    } else {
-      html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">';
-      html += '<div class="form-row"><label>Nome</label><input type="text" id="adm-nome" placeholder="Seu nome"></div>';
-      html += '<div class="form-row"><label>Cargo</label><input type="text" id="adm-cargo" placeholder="adm, moderador, etc"></div>';
-      html += '<div class="form-row"><label>Nível</label><input type="text" id="adm-nivel" placeholder="1, 5, 99..."></div>';
-      html += '</div>';
-      html += '<button class="btn btn-warn" id="validar-adm" onclick="onClickValidarAdmin()">Validar agora</button>';
-      html += '<div id="adm-message" style="margin-top:8px;font-size:12px;"></div>';
-    }
-    html += '</div>';
-  }
 
   return html;
 }
@@ -2501,35 +5317,34 @@ function salvarEdicaoPerfil() {
   var title = (document.getElementById('prof-title') || {}).value.trim();
   var avatar = (document.getElementById('prof-avatar') || {}).value.trim();
   var bio = (document.getElementById('prof-bio') || {}).value.trim();
+  var currentPassword = (document.getElementById('prof-current-password') || {}).value;
   var newPassword = (document.getElementById('prof-password') || {}).value;
 
   var payload = {
-    userId: DB.session.id,
     title: title || 'Membro',
     avatar: avatar,
-    bio: bio
+    bio: bio,
+    expectedVersion: DB.session.version
   };
   if (newPassword && newPassword.trim()) {
+    payload.currentPassword = currentPassword;
     payload.newPassword = newPassword;
   }
 
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('profile-update');
+  if (!finish) return;
   apiRequest('PUT', '/api/auth/profile', payload, function(err, data) {
+    finish();
     if (err) {
-      DB.session.title = payload.title;
-      DB.session.avatar = payload.avatar;
-      DB.session.bio = payload.bio;
-      var uLocal = getUser(DB.session.id);
-      if (uLocal) {
-        uLocal.title = payload.title;
-        uLocal.avatar = payload.avatar;
-        uLocal.bio = payload.bio;
-      }
-      saveDB();
-      render();
-      showAlert('Perfil atualizado localmente.', 'success');
+      showAlert(err, 'error');
       return;
     }
-    syncSessionUser(data.user);
+    clearResourceFormDraft(descriptor);
+    applyServerSession(data.user);
+    document.getElementById('prof-current-password').value = '';
+    document.getElementById('prof-password').value = '';
     render();
     showAlert('Perfil atualizado com sucesso.', 'success');
   });
@@ -2577,57 +5392,563 @@ function renderSobre() {
 
 function renderAdmin() {
   if (!isAdmin()) return '<div class="alert alert-error">Acesso negado.</div>';
+  if (!adminWikiTransferState.pagesLoaded && !adminWikiTransferState.pagesLoading) loadAdminWikiTransferPages(false);
+  if (!adminState.loaded && !adminState.loading) loadAdminData(false);
+  if (adminState.loading && !adminState.loaded) return '<div class="breadcrumb">Início / Painel Admin</div><div class="alert alert-info">Carregando dados administrativos do servidor…</div>';
+  if (adminState.error && !adminState.loaded) {
+    return '<div class="breadcrumb">Início / Painel Admin</div><div class="alert alert-error">' + h(adminState.error) + '</div><button class="btn" onclick="loadAdminData(true)">Tentar novamente</button>';
+  }
 
   var html = '<div class="breadcrumb">Início / Painel Admin</div>';
-  html += '<div class="cat-header"><span>Gerenciar Usuários</span><button class="btn btn-small" onclick="exportarBackupGeralJson()">Exportar Backup JSON</button></div>';
-  html += '<table class="forum-table"><thead><tr><th>Usuário</th><th>Cargo</th><th>Posts</th><th>Ações</th></tr></thead><tbody>';
-  DB.users.forEach(function(u) {
-    html += '<tr><td><b>' + h(u.username) + '</b></td><td>' + badgeHtml(u) + '</td><td>' + (u.posts || 0) + '</td><td style="display:flex;gap:8px;align-items:center;">';
-    html += '<select style="width:auto;" onchange="alterarCargoUsuario(' + u.id + ', this.value)">';
-    html += '<option value="member"' + (u.role === 'member' ? ' selected' : '') + '>Membro</option>';
-    html += '<option value="moderador"' + (u.role === 'moderador' ? ' selected' : '') + '>Moderador</option>';
-    html += '<option value="admin"' + (u.role === 'admin' ? ' selected' : '') + '>Admin</option>';
-    html += '</select>';
-    html += '<button class="btn btn-small btn-danger" onclick="deletarUsuario(' + u.id + ')">Excluir</button>';
-    html += '</td></tr>';
+  html += '<div class="cat-header"><span>Contas</span><button class="btn btn-small" onclick="loadAdminData(true)">Atualizar</button></div>';
+  if (adminState.error) html += '<div class="alert alert-error">' + h(adminState.error) + '</div>';
+  html += '<div style="overflow-x:auto"><table class="forum-table"><thead><tr><th>Usuário</th><th>Email</th><th>Cargo</th><th>Estado</th><th>Versão</th><th>Ações</th></tr></thead><tbody>';
+  adminState.users.forEach(function(user) {
+    var id = String(user.id);
+    html += '<tr><td><b>' + h(user.username) + '</b></td><td>' + h(user.email) + '</td><td>' + roleBadgeFromRole(user.role) + '</td>';
+    html += '<td>' + (user.disabledAt ? 'Desativada' : 'Ativa') + '</td><td>' + user.version + '</td><td style="min-width:270px;">';
+    html += '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><select id="admin-role-' + ha(id) + '" style="width:auto;">';
+    html += '<option value="member"' + (user.role === 'member' ? ' selected' : '') + '>Membro</option>';
+    html += '<option value="moderador"' + (user.role === 'moderador' ? ' selected' : '') + '>Moderador</option>';
+    html += '<option value="admin"' + (user.role === 'admin' ? ' selected' : '') + '>Admin</option></select>';
+    html += '<button class="btn btn-small" onclick="changeAdminUserRole(' + jsArg(id) + ',' + user.version + ')">Salvar cargo</button>';
+    html += '<button class="btn btn-small ' + (user.disabledAt ? 'btn-primary' : 'btn-danger') + '" onclick="changeAdminUserAccess(' + jsArg(id) + ',' + user.version + ',' + (user.disabledAt ? 'false' : 'true') + ')">' + (user.disabledAt ? 'Reativar' : 'Desativar') + '</button></div></td></tr>';
   });
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
+  html += '<div style="display:flex;gap:8px;justify-content:flex-end;margin:10px 0 22px;">';
+  html += '<button class="btn btn-small" onclick="changeAdminUserPage(-1)"' + (adminState.userPage.offset === 0 ? ' disabled' : '') + '>Anterior</button>';
+  html += '<span style="align-self:center;font-size:12px;color:var(--text-muted);">' + (adminState.userPage.offset + 1) + '–' + (adminState.userPage.offset + adminState.users.length) + '</span>';
+  html += '<button class="btn btn-small" onclick="changeAdminUserPage(1)"' + (!adminState.userPage.hasMore ? ' disabled' : '') + '>Próxima</button></div>';
 
-  html += '<div class="cat-header"><span>Categorias do Fórum</span></div>';
-  html += '<table class="forum-table"><thead><tr><th>Nome</th><th>Descrição</th><th>Ações</th></tr></thead><tbody>';
-  DB.categories.forEach(function(c) {
-    html += '<tr><td><b>' + h(c.name) + '</b></td><td>' + h(c.desc) + '</td><td><button class="btn btn-small btn-danger" onclick="removerCategoria(' + c.id + ')">Excluir</button></td></tr>';
+  html += '<div class="cat-header"><span>Categorias do fórum</span></div>';
+  html += '<div style="overflow-x:auto"><table class="forum-table"><thead><tr><th>Nome</th><th>Descrição</th><th>Estado</th><th>Ações</th></tr></thead><tbody>';
+  adminState.categories.forEach(function(category) {
+    html += '<tr><td><b>' + h(category.name) + '</b></td><td>' + h(category.description || '') + '</td><td>' + (category.archivedAt ? 'Arquivada' : 'Ativa') + '</td><td style="min-width:230px;">';
+    html += '<button class="btn btn-small" onclick="editAdminCategory(' + jsArg(category.id) + ')">Editar</button> ';
+    html += '<button class="btn btn-small ' + (category.archivedAt ? 'btn-primary' : 'btn-danger') + '" onclick="changeAdminCategoryArchive(' + jsArg(category.id) + ',' + category.version + ',' + (category.archivedAt ? 'false' : 'true') + ')">' + (category.archivedAt ? 'Restaurar' : 'Arquivar') + '</button></td></tr>';
   });
-  html += '</tbody></table>';
-  html += '<div class="builder-panel">';
-  html += '<div class="builder-panel-title"><span>Nova Categoria</span></div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end;">';
-  html += '<div class="form-row" style="margin-bottom:0"><label>Nome</label><input type="text" id="nova-cat-nome" placeholder="Nome da categoria"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>Descrição</label><input type="text" id="nova-cat-desc" placeholder="Descrição"></div>';
-  html += '<button class="btn btn-primary" onclick="adicionarCategoria()">Adicionar</button>';
-  html += '</div></div>';
+  html += '</tbody></table></div>';
+  html += '<div class="builder-panel"><div class="builder-panel-title"><span>Nova categoria</span></div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end;">';
+  html += '<div class="form-row"><label>Nome</label><input id="admin-category-name" maxlength="100"></div>';
+  html += '<div class="form-row"><label>Descrição</label><input id="admin-category-description" maxlength="1000"></div>';
+  html += '<div class="form-row"><label>Motivo administrativo</label><input id="admin-category-reason" maxlength="1000"></div>';
+  html += '</div><button class="btn btn-primary" onclick="createAdminCategory()">Criar categoria</button></div>';
 
-  html += '<div class="stats-bar"><span><b>' + DB.users.length + '</b> usuários</span><span><b>' + DB.threads.length + '</b> tópicos</span><span><b>' + DB.posts.length + '</b> posts</span><span><b>' + listaPersonagens().length + '</b> personagens</span><span><b>' + listaWikiPosts().length + '</b> cenas</span></div>';
+  html += renderAdminWikiTransfers();
+
+  html += '<div class="cat-header"><span>Auditoria recente</span></div>';
+  html += '<div style="overflow-x:auto"><table class="forum-table"><thead><tr><th>Data</th><th>Operador</th><th>Ação</th><th>Alvo</th><th>Motivo</th></tr></thead><tbody>';
+  adminState.events.forEach(function(event) {
+    html += '<tr><td>' + h(formatForumTimestamp(event.createdAt)) + '</td><td>' + h(event.actorLabel || event.actorId || 'Operador') + '</td><td>' + h(event.action) + '</td><td>' + h(event.targetType) + (event.targetId ? ' · ' + h(event.targetId) : '') + '</td><td>' + h(event.reason) + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
   return html;
 }
 
-function exportarBackupGeralJson() {
-  var dump = {
-    exportedAt: new Date().toISOString(),
-    categories: DB.categories,
-    threads: DB.threads,
-    posts: DB.posts,
-    personagens: listaPersonagens(),
-    wikiPosts: listaWikiPosts()
+function renderAdminWikiTransfers() {
+  var state = adminWikiTransferState;
+  var html = '<section class="builder-panel admin-wiki-transfers" id="admin-wiki-transfers" aria-labelledby="admin-wiki-transfers-title">';
+  html += '<div class="builder-panel-title"><h2 id="admin-wiki-transfers-title">Transferência da wiki</h2></div>';
+  html += '<p class="field-desc">Exporte revisões atuais da wiki ou analise um pacote portátil antes de importar. A importação não publica artigos.</p>';
+  html += '<div class="admin-wiki-transfer-grid">';
+
+  html += '<section class="wiki-transfer-panel" aria-labelledby="wiki-transfer-export-title">';
+  html += '<h3 id="wiki-transfer-export-title">Exportar páginas</h3>';
+  html += '<p class="field-desc">Cada página selecionada será exportada a partir da revisão atual.</p>';
+  if (state.pagesLoading && !state.pagesLoaded) {
+    html += '<p class="alert alert-info" role="status">Carregando páginas da wiki…</p>';
+  } else if (state.pagesError) {
+    html += '<p class="alert alert-error" role="alert">' + h(state.pagesError) + '</p>';
+    html += '<button type="button" class="btn btn-small" onclick="loadAdminWikiTransferPages(true)">Tentar novamente</button>';
+  } else if (!state.pages.length) {
+    html += '<p class="field-desc">Nenhuma página disponível para exportação.</p>';
+  } else {
+    html += '<div class="wiki-transfer-selection-actions">';
+    html += '<button type="button" class="btn btn-small" onclick="setAdminWikiTransferExportSelection(true)"' + (state.exportPending ? ' disabled' : '') + '>Selecionar todas</button>';
+    html += '<button type="button" class="btn btn-small" onclick="setAdminWikiTransferExportSelection(false)"' + (state.exportPending ? ' disabled' : '') + '>Limpar seleção</button>';
+    html += '<span id="wiki-transfer-export-selection-count" aria-live="polite">' + state.exportPageIds.length + ' selecionada(s)</span></div>';
+    html += '<fieldset class="wiki-transfer-page-list" id="wiki-transfer-export-pages"><legend class="sr-only">Páginas da wiki para exportação</legend>';
+    state.pages.forEach(function(page) {
+      var id = String(page.id || '');
+      if (!id) return;
+      var snapshot = page.head && page.head.snapshot ? page.head.snapshot : null;
+      var title = snapshot && snapshot.title || page.title || page.slug || 'Página sem título';
+      var sequence = page.head && page.head.sequence;
+      var detail = 'Revisão atual' + (Number.isInteger(sequence) ? ' #' + sequence : '');
+      if (page.archivedAt) detail += ' · arquivada';
+      else if (page.publishedRevisionId) detail += ' · ' + (page.accessLevel === 'public' ? 'publicada' : 'restrita');
+      else detail += ' · ainda não publicada';
+      var checked = state.exportPageIds.indexOf(id) !== -1 ? ' checked' : '';
+      html += '<label class="wiki-transfer-page" for="wiki-transfer-export-' + ha(id) + '">';
+      html += '<input type="checkbox" id="wiki-transfer-export-' + ha(id) + '" class="wiki-transfer-export-choice" value="' + ha(id) + '" onchange="setAdminWikiTransferExportPage(' + jsArg(id) + ',this.checked)"' + checked + (state.exportPending ? ' disabled' : '') + '>';
+      html += '<span class="wiki-transfer-page-copy"><strong>' + h(title) + '</strong><span>' + h(detail) + '</span>';
+      if (page.headRevisionId || (page.head && page.head.id)) html += '<code>' + h(page.headRevisionId || page.head.id) + '</code>';
+      html += '</span></label>';
+    });
+    html += '</fieldset>';
+  }
+  if (state.exportError) html += '<p class="alert alert-error" role="alert">' + h(state.exportError) + '</p>';
+  if (state.exportMessage) html += '<p class="alert alert-info" role="status">' + h(state.exportMessage) + '</p>';
+  html += '<button type="button" class="btn btn-primary" id="wiki-transfer-export-button" onclick="exportAdminWikiBundle()"' + (state.exportPending || !state.exportPageIds.length || !state.pagesLoaded ? ' disabled' : '') + '>';
+  html += state.exportPending ? 'Preparando exportação…' : 'Baixar pacote JSON';
+  html += '</button></section>';
+
+  html += '<section class="wiki-transfer-panel" aria-labelledby="wiki-transfer-import-title">';
+  html += '<h3 id="wiki-transfer-import-title">Importar pacote</h3>';
+  html += '<p class="field-desc">Escolha um arquivo JSON para gerar uma prévia com páginas, fontes, hashes e conflitos.</p>';
+  html += '<div class="form-row"><label for="wiki-transfer-file">Pacote JSON</label>';
+  html += '<input type="file" id="wiki-transfer-file" accept="application/json,.json" onchange="readAdminWikiTransferFile(this.files && this.files[0])">';
+  html += '</div>';
+  if (state.fileName) html += '<p class="wiki-transfer-file-name" aria-live="polite">Arquivo selecionado: ' + h(state.fileName) + '</p>';
+  if (state.importError) html += '<p class="alert alert-error" role="alert">' + h(state.importError) + '</p>';
+  html += '<div class="wiki-transfer-actions">';
+  html += '<button type="button" class="btn btn-primary" id="wiki-transfer-upload-button" onclick="startAdminWikiTransferImport()"' + (state.importPending || !state.bundle ? ' disabled' : '') + '>';
+  html += state.importPending ? 'Analisando pacote…' : 'Enviar e analisar';
+  html += '</button>';
+  if (state.importId) html += '<button type="button" class="btn btn-small" onclick="refreshAdminWikiTransferPreview()"' + (state.refreshPending || state.commitPending ? ' disabled' : '') + '>Atualizar prévia</button>';
+  if (state.importId || state.bundle) html += '<button type="button" class="btn btn-small" onclick="clearAdminWikiTransferImport()"' + (state.importPending || state.commitPending ? ' disabled' : '') + '>Descartar pacote</button>';
+  html += '</div>';
+  if (state.importPreview) html += renderAdminWikiTransferPreview();
+  html += '</section></div></section>';
+  return html;
+}
+
+function renderAdminWikiTransferPreview() {
+  var state = adminWikiTransferState;
+  var preview = state.importPreview || {};
+  var pages = Array.isArray(preview.pages) ? preview.pages : [];
+  var sources = Array.isArray(preview.sources) ? preview.sources : [];
+  var sourceMap = adminWikiTransferSourceMap(preview);
+  var selectedIds = state.importPageIds;
+  var html = '<div class="wiki-transfer-preview" id="wiki-transfer-preview">';
+  html += '<h4>Prévia da importação</h4>';
+  html += '<dl class="wiki-transfer-metadata">';
+  html += '<div><dt>Pacote de origem</dt><dd>' + h(preview.bundleId || 'Não informado') + '</dd></div>';
+  html += '<div><dt>Importação</dt><dd>' + h(state.importId || 'Não informada') + (preview.status ? ' · ' + h(adminWikiTransferActionLabel(String(preview.status).toLowerCase())) : '') + '</dd></div>';
+  html += '<div><dt>Versão da prévia</dt><dd>' + h(state.importVersion === null ? (preview.planVersion || 'Não informada') : state.importVersion) + '</dd></div>';
+  html += '<div><dt>Hash do plano</dt><dd><code>' + h(state.importPlanHash || preview.planHash || 'Não informado') + '</code></dd></div>';
+  html += '</dl>';
+  html += '<div class="wiki-transfer-count-grid"><div><strong>Páginas</strong><span>' + h(adminWikiTransferCounts(preview.pageCounts, pages)) + '</span></div>';
+  html += '<div><strong>Fontes</strong><span>' + h(adminWikiTransferCounts(preview.sourceCounts, sources)) + '</span></div></div>';
+
+  html += '<div class="wiki-transfer-preview-block"><h5>Páginas do pacote</h5>';
+  if (!pages.length) html += '<p class="field-desc">A prévia não contém páginas.</p>';
+  else {
+    html += '<fieldset class="wiki-transfer-page-list"><legend class="sr-only">Páginas que podem ser incluídas na importação</legend>';
+    pages.forEach(function(page) {
+      var pageId = adminWikiTransferPageId(page);
+      var action = adminWikiTransferAction(page.action || page.status);
+      var disabledReason = adminWikiTransferPageDisabledReason(page, sourceMap);
+      var disabled = disabledReason || state.commitPending || state.commitMessage ? ' disabled' : '';
+      var checked = selectedIds.indexOf(pageId) !== -1 ? ' checked' : '';
+      html += '<label class="wiki-transfer-page' + (disabledReason ? ' is-disabled' : '') + '" for="wiki-transfer-import-' + ha(pageId) + '">';
+      html += '<input type="checkbox" class="wiki-transfer-page-choice" id="wiki-transfer-import-' + ha(pageId) + '" value="' + ha(pageId) + '" onchange="setAdminWikiTransferImportPage(' + jsArg(pageId) + ',this.checked)"' + checked + disabled + '>';
+      html += '<span class="wiki-transfer-page-copy"><strong>' + h(page.title || page.slug || pageId || 'Página sem título') + '</strong>';
+      html += '<span>' + h(page.slug || 'Sem slug') + ' · ' + h(adminWikiTransferActionLabel(action)) + '</span>';
+      if (page.sourceRevisionId) html += '<code>Revisão de origem: ' + h(page.sourceRevisionId) + '</code>';
+      if (page.targetPageId) html += '<code>Destino: ' + h(page.targetPageId) + '</code>';
+      if (page.reason || disabledReason) html += '<span class="wiki-transfer-reason">' + h(page.reason || disabledReason) + '</span>';
+      html += '</span></label>';
+    });
+    html += '</fieldset>';
+    html += '<div class="wiki-transfer-selection-actions">';
+    html += '<button type="button" class="btn btn-small" onclick="setAdminWikiTransferImportSelection(true)"' + (state.commitPending || state.commitMessage || !adminWikiTransferSelectablePages(preview).length ? ' disabled' : '') + '>Selecionar páginas sem conflito</button>';
+    html += '<button type="button" class="btn btn-small" onclick="setAdminWikiTransferImportSelection(false)"' + (state.commitPending || state.commitMessage ? ' disabled' : '') + '>Limpar seleção</button>';
+    html += '<span id="wiki-transfer-import-selection-count" aria-live="polite">' + selectedIds.length + ' selecionada(s)</span></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="wiki-transfer-preview-block"><h5>Fontes e proveniência</h5>';
+  if (!sources.length) html += '<p class="field-desc">Nenhuma fonte incluída nesta prévia.</p>';
+  else {
+    html += '<div class="wiki-transfer-table-wrap"><table class="wiki-transfer-table"><thead><tr><th>Arquivo / fonte</th><th>Hash do arquivo</th><th>Estado</th></tr></thead><tbody>';
+    sources.forEach(function(source) {
+      var action = adminWikiTransferAction(source.action || source.status);
+      var label = [source.relativePath, source.sourceSourceId].filter(Boolean).join(' · ') || 'Fonte sem identificador';
+      html += '<tr><td><strong>' + h(label) + '</strong>';
+      if (source.sourceSourceId) html += '<code>Origem: ' + h(source.sourceSourceId) + '</code>';
+      if (source.archiveSha256) html += '<code>Arquivo: ' + h(source.archiveSha256) + '</code>';
+      if (source.reason) html += '<span class="wiki-transfer-reason">' + h(source.reason) + '</span>';
+      html += '</td><td><code>' + h(source.sha256 || 'Não informado') + '</code></td>';
+      html += '<td><span class="wiki-transfer-status wiki-transfer-status-' + ha(action) + '">' + h(adminWikiTransferActionLabel(action)) + '</span></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  var conflicts = Array.isArray(preview.conflicts) ? preview.conflicts : [];
+  var validationErrors = Array.isArray(preview.validationErrors) ? preview.validationErrors : [];
+  if (conflicts.length || validationErrors.length) {
+    html += '<div class="wiki-transfer-preview-block wiki-transfer-attention"><h5>Conflitos e validações</h5><ul>';
+    conflicts.forEach(function(item) { html += '<li>' + h(adminWikiTransferIssueText(item)) + '</li>'; });
+    validationErrors.forEach(function(item) { html += '<li>' + h(adminWikiTransferIssueText(item)) + '</li>'; });
+    html += '</ul></div>';
+  }
+
+  if (state.commitError) html += '<p class="alert alert-error" role="alert">' + h(state.commitError) + '</p>';
+  if (state.commitMessage) html += '<p class="alert alert-info" role="status">' + h(state.commitMessage) + '</p>';
+  if (state.commitReport) html += '<details class="wiki-transfer-result"><summary>Resultado da importação</summary><pre>' + h(JSON.stringify(state.commitReport, null, 2)) + '</pre></details>';
+  html += '<div class="wiki-transfer-confirm">';
+  html += '<label><input type="checkbox" id="wiki-transfer-confirm" onchange="setAdminWikiTransferConfirmation(this.checked)"' + (state.importConfirmed ? ' checked' : '') + (state.commitPending || !!state.commitMessage ? ' disabled' : '') + '>';
+  html += '<span>Confirmo a importação das páginas selecionadas no destino. A publicação continua sendo uma ação editorial separada.</span></label>';
+  html += '<button type="button" class="btn btn-primary" id="wiki-transfer-commit-button" onclick="commitAdminWikiTransferImport()"' + (state.commitPending || !!state.commitMessage || !state.importConfirmed || !selectedIds.length || !state.importId || !state.importPlanHash || state.importVersion === null ? ' disabled' : '') + '>';
+  html += state.commitPending ? 'Importando…' : 'Confirmar importação';
+  html += '</button></div>';
+  html += '</div>';
+  return html;
+}
+
+function adminWikiTransferSourceMap(preview) {
+  var sourceMap = Object.create(null);
+  (Array.isArray(preview.sources) ? preview.sources : []).forEach(function(source) {
+    var id = String(source.sourceSourceId || source.id || '');
+    if (id) sourceMap[id] = source;
+  });
+  return sourceMap;
+}
+
+function adminWikiTransferPageId(page) {
+  return String(page && (page.sourcePageId || page.id) || '');
+}
+
+function adminWikiTransferAction(value) {
+  return String(value || 'invalid').toLowerCase();
+}
+
+function adminWikiTransferActionLabel(action) {
+  var labels = {
+    total: 'Total',
+    create: 'Será criada',
+    reuse: 'Será reutilizada',
+    already_imported: 'Já importada',
+    conflict: 'Conflito',
+    invalid: 'Inválida',
+    ready: 'Pronta',
+    staged: 'Em análise',
+    committed: 'Concluída',
   };
-  var blob = new Blob([JSON.stringify(dump, null, 2)], { type: 'application/json;charset=utf-8' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'aetherverse-vault-backup.json';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  showAlert('Backup completo exportado em JSON.', 'success');
+  return labels[action] || action || 'Sem estado';
+}
+
+function adminWikiTransferPageDisabledReason(page, sourceMap) {
+  var action = adminWikiTransferAction(page.action || page.status);
+  if (action === 'conflict') return page.reason || 'Este item tem um conflito e não pode ser sobrescrito.';
+  if (action === 'invalid') return page.reason || 'Este item não passou pela validação.';
+  if (action !== 'create' && action !== 'reuse') return page.reason || 'Este item não pode ser incluído nesta importação.';
+  var required = Array.isArray(page.requiredSourceIds) ? page.requiredSourceIds : [];
+  for (var index = 0; index < required.length; index++) {
+    var source = sourceMap[String(required[index])];
+    if (!source) return 'Uma fonte necessária não está disponível na prévia.';
+    var sourceAction = adminWikiTransferAction(source.action || source.status);
+    if (sourceAction === 'conflict') return source.reason || 'Uma fonte necessária tem conflito e não pode ser sobrescrita.';
+    if (sourceAction === 'invalid') return source.reason || 'Uma fonte necessária não passou pela validação.';
+  }
+  return '';
+}
+
+function adminWikiTransferSelectablePages(preview) {
+  var sourceMap = adminWikiTransferSourceMap(preview || {});
+  return (Array.isArray(preview && preview.pages) ? preview.pages : []).filter(function(page) {
+    return !adminWikiTransferPageDisabledReason(page, sourceMap);
+  });
+}
+
+function adminWikiTransferCounts(counts, items) {
+  if (counts && typeof counts === 'object' && !Array.isArray(counts)) {
+    var keys = Object.keys(counts);
+    if (keys.length) return keys.map(function(key) { return adminWikiTransferActionLabel(key) + ': ' + Number(counts[key] || 0); }).join(' · ');
+  }
+  var total = Array.isArray(items) ? items.length : 0;
+  return total + (total === 1 ? ' item' : ' itens');
+}
+
+function adminWikiTransferIssueText(item) {
+  if (typeof item === 'string') return item;
+  if (!item || typeof item !== 'object') return String(item || 'Item com conflito.');
+  var parts = [item.title || item.slug || item.relativePath || item.sourcePageId || item.sourceSourceId || item.id, item.reason || item.message || item.code];
+  return parts.filter(Boolean).join(' · ') || JSON.stringify(item);
+}
+
+function loadAdminWikiTransferPages(force) {
+  var state = adminWikiTransferState;
+  if (!isAdmin() || state.pagesLoading || (state.pagesLoaded && !force)) return;
+  state.pagesLoading = true;
+  state.pagesError = null;
+  var offset = 0;
+  var pages = [];
+  function loadPage() {
+    return apiRequest('GET', '/api/staff/wiki/pages?limit=100&offset=' + offset + '&includeArchived=true').then(function(response) {
+      if (!response || !Array.isArray(response.data)) throw new Error('A resposta das páginas da wiki é inválida.');
+      pages = pages.concat(response.data);
+      var page = response.page || {};
+      if (!page.hasMore) return pages;
+      offset = Number(page.offset || offset) + Number(page.limit || 100);
+      return loadPage();
+    });
+  }
+  loadPage().then(function(items) {
+    if (!isAdmin()) return;
+    state.pages = items;
+    state.pagesLoaded = true;
+    var pageIds = new Set(items.map(function(page) { return String(page.id); }));
+    state.exportPageIds = state.exportPageIds.filter(function(id) { return pageIds.has(id); });
+  }).catch(function(error) {
+    if (isAdmin()) state.pagesError = error && error.message ? error.message : 'Não foi possível carregar as páginas da wiki.';
+  }).finally(function() {
+    state.pagesLoading = false;
+    if (currentPage === 'admin' && isAdmin()) render();
+  });
+}
+
+function setAdminWikiTransferExportPage(pageId, selected) {
+  if (!isAdmin()) return;
+  var id = String(pageId || '');
+  if (!adminWikiTransferState.pages.some(function(page) { return String(page.id) === id; })) return;
+  var ids = adminWikiTransferState.exportPageIds.filter(function(value) { return value !== id; });
+  if (selected) ids.push(id);
+  adminWikiTransferState.exportPageIds = ids;
+  syncAdminWikiTransferSelectionUi();
+}
+
+function setAdminWikiTransferExportSelection(selected) {
+  if (!isAdmin()) return;
+  adminWikiTransferState.exportPageIds = selected
+    ? adminWikiTransferState.pages.map(function(page) { return String(page.id); }).filter(Boolean)
+    : [];
+  syncAdminWikiTransferSelectionUi();
+}
+
+function setAdminWikiTransferImportPage(pageId, selected) {
+  if (!isAdmin()) return;
+  var state = adminWikiTransferState;
+  var id = String(pageId || '');
+  if (!adminWikiTransferSelectablePages(state.importPreview).some(function(page) { return adminWikiTransferPageId(page) === id; })) return;
+  var ids = state.importPageIds.filter(function(value) { return value !== id; });
+  if (selected) ids.push(id);
+  state.importPageIds = ids;
+  syncAdminWikiTransferSelectionUi();
+}
+
+function setAdminWikiTransferImportSelection(selected) {
+  if (!isAdmin()) return;
+  var state = adminWikiTransferState;
+  state.importPageIds = selected
+    ? adminWikiTransferSelectablePages(state.importPreview).map(adminWikiTransferPageId).filter(Boolean)
+    : [];
+  syncAdminWikiTransferSelectionUi();
+}
+
+function setAdminWikiTransferConfirmation(confirmed) {
+  if (!isAdmin()) return;
+  adminWikiTransferState.importConfirmed = !!confirmed;
+  syncAdminWikiTransferSelectionUi();
+}
+
+function syncAdminWikiTransferSelectionUi() {
+  var state = adminWikiTransferState;
+  var exportButton = document.getElementById('wiki-transfer-export-button');
+  if (exportButton) exportButton.disabled = !!(state.exportPending || !state.exportPageIds.length || !state.pagesLoaded);
+  var exportCount = document.getElementById('wiki-transfer-export-selection-count');
+  if (exportCount) exportCount.textContent = state.exportPageIds.length + ' selecionada(s)';
+  document.querySelectorAll('.wiki-transfer-export-choice').forEach(function(input) {
+    input.checked = state.exportPageIds.indexOf(input.value) !== -1;
+  });
+  var importCount = document.getElementById('wiki-transfer-import-selection-count');
+  if (importCount) importCount.textContent = state.importPageIds.length + ' selecionada(s)';
+  document.querySelectorAll('.wiki-transfer-page-choice').forEach(function(input) {
+    input.checked = state.importPageIds.indexOf(input.value) !== -1;
+  });
+  var commitButton = document.getElementById('wiki-transfer-commit-button');
+  if (commitButton) commitButton.disabled = !!(state.commitPending || state.commitMessage || !state.importConfirmed
+    || !state.importPageIds.length || !state.importId || !state.importPlanHash || state.importVersion === null);
+}
+
+function exportAdminWikiBundle() {
+  var state = adminWikiTransferState;
+  if (!isAdmin() || state.exportPending || !state.exportPageIds.length) return Promise.resolve();
+  state.exportPending = true;
+  state.exportError = null;
+  state.exportMessage = null;
+  render();
+  return apiRequest('POST', '/api/admin/wiki-transfers/export', { pageIds: state.exportPageIds.slice() }).then(function(response) {
+    if (!isAdmin()) return;
+    var bundle = response && response.bundle ? response.bundle : (response && response.data ? response.data : response);
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) throw new Error('O servidor retornou um pacote inválido.');
+    var blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json;charset=utf-8' });
+    var url = window.URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'aetherverse-wiki-' + new Date().toISOString().slice(0, 10) + '.json';
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(function() { window.URL.revokeObjectURL(url); }, 1000);
+    state.exportMessage = 'Pacote JSON baixado com as revisões atuais das páginas selecionadas.';
+  }).catch(function(error) {
+    if (isAdmin()) state.exportError = error && error.message ? error.message : 'Não foi possível exportar as páginas selecionadas.';
+  }).finally(function() {
+    state.exportPending = false;
+    if (currentPage === 'admin' && isAdmin()) render();
+  });
+}
+
+function readAdminWikiTransferFile(file) {
+  var state = adminWikiTransferState;
+  if (!isAdmin()) return Promise.resolve();
+  state.fileName = file && file.name ? file.name : '';
+  state.bundle = null;
+  state.importError = null;
+  state.importId = null;
+  state.importVersion = null;
+  state.importPlanHash = null;
+  state.importPreview = null;
+  state.importPageIds = [];
+  state.importConfirmed = false;
+  state.commitError = null;
+  state.commitMessage = null;
+  state.commitReport = null;
+  if (!file) { render(); return Promise.resolve(); }
+  var readFile = typeof file.text === 'function'
+    ? file.text()
+    : new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function() { resolve(String(reader.result || '')); };
+      reader.onerror = function() { reject(new Error('Não foi possível ler o arquivo selecionado.')); };
+      reader.readAsText(file);
+    });
+  return Promise.resolve(readFile).then(function(text) {
+    var parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('O arquivo deve conter um objeto JSON de pacote.');
+    state.bundle = parsed;
+  }).catch(function(error) {
+    state.fileName = '';
+    state.importError = error && error.message ? error.message : 'Não foi possível ler o pacote JSON.';
+  }).finally(function() {
+    if (currentPage === 'admin' && isAdmin()) render();
+  });
+}
+
+function applyAdminWikiTransferPreview(response, preserveSelection) {
+  var state = adminWikiTransferState;
+  var result = response && response.data && typeof response.data === 'object' ? response.data : (response || {});
+  var preview = result.preview && typeof result.preview === 'object' ? result.preview
+    : (result.report && typeof result.report === 'object' ? result.report : result);
+  var id = result.id || result.importId || state.importId;
+  var version = Number.isInteger(result.version) ? result.version
+    : (Number.isInteger(preview.planVersion) ? preview.planVersion : null);
+  var planHash = result.planHash || preview.planHash || null;
+  if (!id || !preview || typeof preview !== 'object') throw new Error('A prévia retornada pelo servidor está incompleta.');
+  var previous = preserveSelection ? new Set(state.importPageIds) : null;
+  state.importId = String(id);
+  state.importVersion = version;
+  state.importPlanHash = typeof planHash === 'string' ? planHash : null;
+  state.importPreview = preview;
+  var selectable = adminWikiTransferSelectablePages(preview).map(adminWikiTransferPageId).filter(Boolean);
+  state.importPageIds = previous
+    ? selectable.filter(function(pageId) { return previous.has(pageId); })
+    : selectable;
+  state.importConfirmed = false;
+  state.commitError = null;
+  state.commitMessage = null;
+  state.commitReport = null;
+}
+
+function startAdminWikiTransferImport() {
+  var state = adminWikiTransferState;
+  if (!isAdmin() || state.importPending || !state.bundle) return Promise.resolve();
+  state.importPending = true;
+  state.importError = null;
+  state.commitError = null;
+  render();
+  return apiRequest('POST', '/api/admin/wiki-transfers/imports', { bundle: state.bundle }).then(function(response) {
+    if (!isAdmin()) return;
+    applyAdminWikiTransferPreview(response, false);
+  }).catch(function(error) {
+    if (isAdmin()) state.importError = error && error.message ? error.message : 'Não foi possível analisar o pacote.';
+  }).finally(function() {
+    state.importPending = false;
+    if (currentPage === 'admin' && isAdmin()) render();
+  });
+}
+
+function refreshAdminWikiTransferPreview() {
+  var state = adminWikiTransferState;
+  if (!isAdmin() || !state.importId || state.refreshPending || state.commitPending) return Promise.resolve();
+  state.refreshPending = true;
+  state.commitError = null;
+  state.commitMessage = null;
+  state.commitReport = null;
+  render();
+  return apiRequest('POST', '/api/admin/wiki-transfers/imports/' + encodeURIComponent(state.importId) + '/refresh', {}).then(function(response) {
+    if (!isAdmin()) return;
+    applyAdminWikiTransferPreview(response, true);
+  }).catch(function(error) {
+    if (isAdmin()) state.commitError = error && error.message ? error.message : 'Não foi possível atualizar a prévia.';
+  }).finally(function() {
+    state.refreshPending = false;
+    if (currentPage === 'admin' && isAdmin()) render();
+  });
+}
+
+function clearAdminWikiTransferImport() {
+  if (!isAdmin() || adminWikiTransferState.importPending || adminWikiTransferState.commitPending) return;
+  var state = adminWikiTransferState;
+  state.fileName = '';
+  state.bundle = null;
+  state.importError = null;
+  state.importId = null;
+  state.importVersion = null;
+  state.importPlanHash = null;
+  state.importPreview = null;
+  state.importPageIds = [];
+  state.importConfirmed = false;
+  state.commitError = null;
+  state.commitMessage = null;
+  state.commitReport = null;
+  render();
+}
+
+function adminWikiTransferSelectedSourceIds(preview, pageIds) {
+  var pages = Array.isArray(preview && preview.pages) ? preview.pages : [];
+  var selected = new Set(pageIds);
+  var sourceIds = new Set();
+  pages.forEach(function(page) {
+    if (!selected.has(adminWikiTransferPageId(page))) return;
+    (Array.isArray(page.requiredSourceIds) ? page.requiredSourceIds : []).forEach(function(id) {
+      if (id) sourceIds.add(String(id));
+    });
+  });
+  return Array.from(sourceIds).sort();
+}
+
+function commitAdminWikiTransferImport() {
+  var state = adminWikiTransferState;
+  if (!isAdmin() || state.commitPending || state.commitMessage || !state.importConfirmed) return Promise.resolve();
+  var selectable = new Set(adminWikiTransferSelectablePages(state.importPreview).map(adminWikiTransferPageId));
+  var pageIds = state.importPageIds.filter(function(id) { return selectable.has(id); }).sort();
+  if (!pageIds.length || !state.importId || !state.importPlanHash || !Number.isInteger(state.importVersion)) return Promise.resolve();
+  state.commitPending = true;
+  state.commitError = null;
+  render();
+  var payload = {
+    expectedVersion: state.importVersion,
+    planHash: state.importPlanHash,
+    pageIds: pageIds,
+    sourceIds: adminWikiTransferSelectedSourceIds(state.importPreview, pageIds),
+  };
+  return apiRequest('POST', '/api/admin/wiki-transfers/imports/' + encodeURIComponent(state.importId) + '/commit', payload).then(function(response) {
+    if (!isAdmin()) return;
+    var result = response && response.data && typeof response.data === 'object' ? response.data : response;
+    state.commitReport = result && (result.report || result) || null;
+    state.commitMessage = 'Importação concluída. Revise as páginas no destino; a publicação é uma ação editorial separada.';
+  }).catch(function(error) {
+    if (isAdmin()) state.commitError = error && error.message ? error.message : 'Não foi possível confirmar a importação.';
+  }).finally(function() {
+    state.commitPending = false;
+    if (currentPage === 'admin' && isAdmin()) render();
+  });
 }
 
 function showModal(title, bodyHtml) {
@@ -2637,6 +5958,8 @@ function showModal(title, bodyHtml) {
 
 function closeModal() {
   document.getElementById('modal-container').innerHTML = '';
+  editingTurnId = null;
+  editingForumPostId = null;
 }
 
 function showLoginModal() {
@@ -2672,21 +5995,15 @@ function showAlert(msg, type) {
 }
 
 function apiRequest(method, url, body, cb) {
-  fetch(url, {
-    method: method,
-    headers: { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  })
-    .then(function(res) {
-      return res.json().then(function(data) { return { ok: res.ok, data: data }; });
-    })
-    .then(function(r) {
-      if (!r.ok) cb((r.data && r.data.error) || 'Erro no servidor.');
-      else cb(null, r.data);
-    })
-    .catch(function() {
-      cb('Não foi possível conectar ao servidor.');
-    });
+  var promise = window.Aetherverse.apiRequest(method, url, body, cb);
+  // Callback-style UI handlers already report request failures. Observe their
+  // rejection here so an ignored callback result (including anonymous /me
+  // during startup) does not become an unhandled browser error. Callers that
+  // explicitly return or await the original promise still receive rejection.
+  if (typeof cb === 'function' && promise && typeof promise.catch === 'function') {
+    promise.catch(function() {});
+  }
+  return promise;
 }
 
 function apiPost(url, body, cb) {
@@ -2701,29 +6018,43 @@ function formatJoinDate(iso) {
 }
 
 function applyServerSession(serverUser) {
+  var previousId = DB.session && (DB.session.serverId || DB.session.id);
+  var previousRole = DB.session && DB.session.role;
   if (!serverUser) {
+    if (previousId) {
+      clearForumDraftEditors();
+      clearWikiTransientState();
+    }
     DB.session = null;
-    saveDB();
+    if (window.Aetherverse) window.Aetherverse.clearSessionUser();
     return;
   }
-  var local = DB.users.find(function(u) {
-    return u.username.toLowerCase() === serverUser.username.toLowerCase();
-  });
-  if (!local) {
-    local = { id: DB.nextUserId++, posts: 0, avatar: '', bio: '' };
-    DB.users.push(local);
+  var safeUser = window.Aetherverse.setSessionUser(serverUser);
+  if (!safeUser || typeof safeUser.id !== 'string') {
+    if (previousId) {
+      clearForumDraftEditors();
+      clearWikiTransientState();
+    }
+    DB.session = null;
+    return;
   }
-  local.serverId = serverUser.id;
-  local.username = serverUser.username;
-  local.email = serverUser.email;
-  local.avatar = serverUser.avatar || local.avatar || '';
-  local.title = serverUser.title || local.title || 'Membro';
-  local.bio = serverUser.bio || local.bio || '';
-  local.role = serverUser.role || 'member';
-  if (!local.joinDate) local.joinDate = formatJoinDate(serverUser.joinDate);
-  if (local.admTentativaUsada === undefined) local.admTentativaUsada = !!serverUser.admTentativaUsada;
-  DB.session = local;
-  saveDB();
+  if (previousId && String(previousId) !== safeUser.id) {
+    clearForumDraftEditors();
+    clearWikiTransientState();
+  } else if (['admin', 'moderador'].includes(previousRole) && !['admin', 'moderador'].includes(safeUser.role)) {
+    clearWikiTransientState();
+  } else if (previousRole === 'admin' && safeUser.role !== 'admin') {
+    adminWikiTransferState = createAdminWikiTransferState();
+  }
+  DB.session = Object.assign({}, safeUser, {
+    serverId: safeUser.id,
+    posts: typeof safeUser.posts === 'number' ? safeUser.posts : 0,
+    joinDate: formatJoinDate(safeUser.joinDate),
+  });
+}
+
+function syncSessionUser(user) {
+  applyServerSession(user);
 }
 
 function doLogin() {
@@ -2743,10 +6074,11 @@ function doLogin() {
 }
 
 function doLogout() {
-  apiPost('/api/auth/logout', {}, function() {});
-  DB.session = null;
-  saveDB();
-  navigate('forum');
+  apiPost('/api/auth/logout', {}, function(err) {
+    if (err) { showAlert(err, 'error'); return; }
+    applyServerSession(null);
+    navigate('forum');
+  });
 }
 
 function submitRegistro() {
@@ -2780,127 +6112,180 @@ function startNewThread(catId) {
 
 function submitThread() {
   if (!DB.session) { showAlert('Faça login para criar tópicos.', 'error'); return; }
+  saveActiveForumDraft();
   var title = document.getElementById('thread-title').value.trim();
   var content = getEditorContent('thread-editor');
-  var catId = parseInt(document.getElementById('thread-cat').value, 10);
+  var catId = document.getElementById('thread-cat').value;
   var tag = document.getElementById('thread-tag').value;
   if (!title || !content || content === '<br>') { showAlert('Preencha o título e o conteúdo!', 'error'); return; }
-  var now = new Date();
-  var dateStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  var newThread = { id: DB.nextThreadId++, catId: catId, title: title, authorId: DB.session.id, date: dateStr, views: 0, pinned: false, tag: tag };
-  var newPost = { id: DB.nextPostId++, threadId: newThread.id, authorId: DB.session.id, date: dateStr, content: content, edited: false };
-  DB.threads.push(newThread);
-  DB.posts.push(newPost);
-  bumpPosts();
-  saveDB();
-  editandoThread = null;
-  navigate('thread', newThread.id);
+  var payload = { categoryId: catId, title: title, tag: tag, content: content };
+  var serialized = JSON.stringify(payload);
+  if (!pendingTopicKey || pendingTopicPayload !== serialized) {
+    pendingTopicKey = newForumIdempotencyKey();
+    pendingTopicPayload = serialized;
+  }
+  writeForumDraft('topic', 'new', payload, pendingTopicKey);
+  var button = document.querySelector('#main button[onclick="submitThread()"]');
+  if (button) button.disabled = true;
+  forumApi().apiRequest('POST', '/api/forum/threads', payload, null, { headers: { 'Idempotency-Key': pendingTopicKey } })
+    .then(function(response) {
+      clearForumDraft('topic', 'new');
+      pendingTopicKey = null;
+      pendingTopicPayload = null;
+      forumLandingLoaded = false;
+      navigate('thread', response.data.thread.id);
+    })
+    .catch(function(error) {
+      if (button) button.disabled = false;
+      showAlert(error.message || 'Não foi possível publicar o tópico. O conteúdo continua no formulário.', 'error');
+    });
 }
 
 function editarThread(threadId) {
-  var thread = DB.threads.find(function(t) { return t.id === threadId; });
-  if (!thread) return;
-  if (!podeEditarThread(thread.authorId)) { showAlert('Você não tem permissão para editar este tópico.', 'error'); return; }
+  var thread = serverForumThread && String(serverForumThread.id) === String(threadId) ? serverForumThread : null;
+  if (!thread || !canEditForumAuthor(thread.author)) { showAlert('Você não tem permissão para editar este tópico.', 'error'); return; }
   editandoThread = threadId;
   navigate('novaThread');
 }
 
 function salvarEdicaoThread() {
-  var thr = DB.threads.find(function(t) { return t.id === editandoThread; });
+  var thr = serverForumThread && String(serverForumThread.id) === String(editandoThread) ? serverForumThread : null;
   if (!thr) return;
-  if (!podeEditarThread(thr.authorId)) { showAlert('Você não tem permissão para salvar este tópico.', 'error'); return; }
+  if (!canEditForumAuthor(thr.author)) { showAlert('Você não tem permissão para salvar este tópico.', 'error'); return; }
+  saveActiveForumDraft();
   var title = document.getElementById('thread-title').value.trim();
-  var content = getEditorContent('thread-editor');
+  var tag = document.getElementById('thread-tag').value;
   if (!title) { showAlert('O título não pode ficar vazio.', 'error'); return; }
-  thr.title = title;
-  var firstPost = DB.posts.find(function(p) { return p.threadId === editandoThread; });
-  if (firstPost) { firstPost.content = content; firstPost.edited = true; }
-  saveDB();
-  var tid = editandoThread;
-  editandoThread = null;
-  navigate('thread', tid);
+  var button = document.querySelector('#main button[onclick="salvarEdicaoThread()"]');
+  if (button) button.disabled = true;
+  forumApi().apiRequest('PATCH', '/api/forum/threads/' + encodeURIComponent(thr.id), {
+    title: title, tag: tag, expectedVersion: thr.version
+  }).then(function(response) {
+    clearForumDraft('topic-edit', thr.id);
+    serverForumThread = response.data;
+    updateCachedForumThread(response.data);
+    editandoThread = null;
+    navigate('thread', response.data.id);
+  }).catch(function(error) {
+    if (button) button.disabled = false;
+    showAlert(error.message || 'Não foi possível salvar o tópico. Suas alterações continuam no formulário.', 'error');
+  });
 }
 
 function deleteThread(threadId) {
-  var thread = DB.threads.find(function(t) { return t.id === threadId; });
-  if (!thread) return;
-  if (!podeEditarThread(thread.authorId)) { showAlert('Você não tem permissão para deletar este tópico.', 'error'); return; }
-  if (!confirm('Deletar este tópico inteiro e todas as respostas?')) return;
-  var catId = thread.catId;
-  DB.threads = DB.threads.filter(function(t) { return t.id !== threadId; });
-  DB.posts = DB.posts.filter(function(p) { return p.threadId !== threadId; });
-  saveDB();
-  navigate('cat', catId);
+  if (!isModOrAdmin()) { showAlert('Somente a equipe pode arquivar tópicos.', 'error'); return; }
+  if (!confirm('Arquivar este tópico e manter suas publicações recuperáveis?')) return;
+  moderateForumThread(threadId, 'archive');
 }
 
 function submitReply() {
   if (!DB.session) { showAlert('Faça login para responder.', 'error'); return; }
+  saveActiveForumDraft();
   var content = getEditorContent('reply-editor');
   if (!content || content === '<br>') { showAlert('Escreva algo antes de enviar!', 'error'); return; }
-  var now = new Date();
-  var dateStr = now.toLocaleDateString('pt-BR') + ' ' + now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-  var newPost = { id: DB.nextPostId++, threadId: currentThread, authorId: DB.session.id, date: dateStr, content: content, edited: false };
-  DB.posts.push(newPost);
-  bumpPosts();
-  saveDB();
-  navigate('thread', currentThread);
+  var payload = { content: content };
+  var serialized = JSON.stringify(payload);
+  if (!pendingReplyKey || pendingReplyPayload !== serialized) {
+    pendingReplyKey = newForumIdempotencyKey();
+    pendingReplyPayload = serialized;
+  }
+  writeForumDraft('reply', currentThread, payload, pendingReplyKey);
+  var button = document.querySelector('#main button[onclick="submitReply()"]');
+  if (button) button.disabled = true;
+  forumApi().apiRequest('POST', '/api/forum/threads/' + encodeURIComponent(currentThread) + '/posts', payload, null, {
+    headers: { 'Idempotency-Key': pendingReplyKey }
+  }).then(function() {
+    clearForumDraft('reply', currentThread);
+    pendingReplyKey = null;
+    pendingReplyPayload = null;
+    serverForumThread = null;
+    serverForumPosts = null;
+    loadForumThread(currentThread, { force: true });
+    showAlert('Resposta publicada.', 'success');
+  }).catch(function(error) {
+    if (button) button.disabled = false;
+    showAlert(error.message || 'Não foi possível publicar a resposta. O texto continua no editor.', 'error');
+  });
 }
 
 function quotePost(postId) {
-  var post = DB.posts.find(function(p) { return p.id === postId; });
-  if (!post) return;
-  var author = getUserById(post.authorId);
+  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  if (!post || post.deleted) return;
+  var author = post.author;
   var replyEditor = document.getElementById('reply-editor');
   if (replyEditor) {
     replyEditor.focus();
-    var quoteHtml = '<blockquote><strong>' + h(author ? author.username : '?') + ' escreveu:</strong><br>' + post.content + '</blockquote><p></p>';
+    var quoteHtml = '<blockquote><strong>' + h(author ? author.username : (post.authorLabel || '?')) + ' escreveu:</strong><br>' + post.content + '</blockquote><p></p>';
     document.execCommand('insertHTML', false, quoteHtml);
     replyEditor.scrollIntoView({ behavior: 'smooth' });
   }
 }
 
 function editPost(postId) {
-  var post = DB.posts.find(function(p) { return p.id === postId; });
-  if (!post) return;
-  if (!podeEditarPost(post.authorId)) { showAlert('Você não tem permissão para editar este post.', 'error'); return; }
+  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  if (!post || post.deleted || !canEditForumAuthor(post.author)) return;
+  editingForumPostId = String(postId);
   showModal('Editar Post',
     '<div class="form-row"><label>Conteúdo:</label>' + buildEditor('edit-post-editor', post.content) + '</div>' +
-    '<div style="margin-top:10px;"><button class="btn btn-primary" onclick="saveEditPost(' + postId + ')">Salvar</button></div>'
+    '<div class="form-row"><label>Resumo da alteração:</label><input id="edit-post-summary" maxlength="1000" placeholder="Explique brevemente o que foi corrigido"></div>' +
+    '<div style="margin-top:10px;"><button class="btn btn-primary" onclick="saveEditPost(' + idJs(postId) + ')">Salvar</button></div>'
   );
+  restoreResourceFormDraft();
+  addResourceDraftNotice();
 }
 
 function saveEditPost(postId) {
-  var post = DB.posts.find(function(p) { return p.id === postId; });
-  if (!post) return;
-  if (!podeEditarPost(post.authorId)) { showAlert('Você não tem permissão para salvar este post.', 'error'); return; }
+  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  if (!post || !canEditForumAuthor(post.author)) return;
   var content = getEditorContent('edit-post-editor');
-  if (!content) return;
-  post.content = content;
-  post.edited = true;
-  saveDB();
-  closeModal();
-  navigate('thread', currentThread);
+  var summary = document.getElementById('edit-post-summary').value.trim();
+  if (!content || !summary) { showAlert('Informe o conteúdo e um resumo da alteração.', 'error'); return; }
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('forum-post-edit:' + String(postId));
+  if (!finish) return;
+  forumApi().apiRequest('PATCH', '/api/forum/posts/' + encodeURIComponent(post.id), {
+    content: content, summary: summary, expectedVersion: post.version
+  }).then(function() {
+    finish();
+    clearResourceFormDraft(descriptor);
+    closeModal();
+    serverForumThread = null;
+    serverForumPosts = null;
+    loadForumThread(currentThread, { force: true });
+    showAlert('Publicação atualizada.', 'success');
+  }).catch(function(error) {
+    finish();
+    showAlert(error.message || 'Não foi possível editar a publicação.', 'error');
+  });
 }
 
 function deletePost(postId) {
-  var post = DB.posts.find(function(p) { return p.id === postId; });
-  if (!post) return;
-  if (!podeEditarPost(post.authorId)) { showAlert('Você não tem permissão para deletar este post.', 'error'); return; }
-  if (!confirm('Deletar este post?')) return;
-  var postsInThread = DB.posts.filter(function(p) { return p.threadId === currentThread; });
-  if (postsInThread.length <= 1) {
-    if (!confirm('Esse é o único post — deletar vai apagar o tópico inteiro. Confirma?')) return;
-    var thr = DB.threads.find(function(t) { return t.id === currentThread; });
-    var catId = thr ? thr.catId : 1;
-    DB.threads = DB.threads.filter(function(t) { return t.id !== currentThread; });
-    DB.posts = DB.posts.filter(function(p) { return p.threadId !== currentThread; });
-    saveDB();
-    navigate('cat', catId);
-    return;
-  }
-  DB.posts = DB.posts.filter(function(p) { return p.id !== postId; });
-  saveDB();
-  render();
+  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  if (!post || post.deleted || !DB.session) return;
+  if (Number(post.postNo) === 1 && !isModOrAdmin()) { showAlert('A publicação de abertura só pode ser ocultada pela equipe.', 'error'); return; }
+  if (!confirm('Ocultar esta publicação mantendo o registro recuperável?')) return;
+  var reason = window.prompt('Informe o motivo da ocultação:');
+  if (!reason || !reason.trim()) return;
+  forumApi().apiRequest('POST', '/api/forum/posts/' + encodeURIComponent(post.id) + '/hide', {
+    reason: reason.trim(), expectedVersion: post.version
+  }).then(function(response) {
+    serverForumPosts = serverForumPosts.map(function(item) { return String(item.id) === String(post.id) ? response.data : item; });
+    render();
+  }).catch(function(error) { showAlert(error.message || 'Não foi possível ocultar a publicação.', 'error'); });
+}
+
+function restoreForumPost(postId) {
+  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  if (!isModOrAdmin() || !post || !post.deleted) return;
+  var reason = window.prompt('Informe o motivo para restaurar esta publicação:');
+  if (!reason || !reason.trim()) return;
+  forumApi().apiRequest('POST', '/api/forum/posts/' + encodeURIComponent(post.id) + '/restore', {
+    reason: reason.trim(), expectedVersion: post.version
+  }).then(function(response) {
+    serverForumPosts = serverForumPosts.map(function(item) { return String(item.id) === String(post.id) ? response.data : item; });
+    render();
+  }).catch(function(error) { showAlert(error.message || 'Não foi possível restaurar a publicação.', 'error'); });
 }
 
 function editarPersonagem(id) {
@@ -2977,12 +6362,18 @@ function submitPersonagem() {
   if (!isModOrAdmin()) { showAlert('Apenas administradores e moderadores podem cadastrar personagens.', 'error'); return; }
   var dados = lerFormPersonagem();
   if (!dados.nome || !dados.descricao || dados.descricao === '<br>') { showAlert('Preencha ao menos o nome e a descrição.', 'error'); return; }
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('character-create');
+  if (!finish) return;
 
   apiRequest('POST', '/api/personagens', dados, function(err, data) {
+    finish();
     if (err) { showAlert(err, 'error'); return; }
+    clearResourceFormDraft(descriptor);
     if (serverPersonagens === null) serverPersonagens = [];
     serverPersonagens.push(data.personagem);
-    navigate('wiki');
+    navigate('personagens');
     showAlert('Personagem cadastrado.', 'success');
   });
 }
@@ -2992,18 +6383,17 @@ function salvarEdicaoPersonagem(id) {
   var dados = lerFormPersonagem();
   if (!dados.nome || !dados.descricao || dados.descricao === '<br>') { showAlert('Preencha ao menos o nome e a descrição.', 'error'); return; }
 
-  if (typeof id === 'number') {
-    var p = DB.personagens.find(function(x) { return x.id === id; });
-    if (!p) return;
-    Object.assign(p, dados);
-    saveDB();
-    sessionStorage.removeItem('editPersonagemId');
-    navigate('personagemView', id);
-    return;
-  }
-
-  apiRequest('PUT', '/api/personagens/' + id, dados, function(err, data) {
+  var existing = listaPersonagens().find(function(item) { return String(item.id) === String(id); });
+  if (!existing) { showAlert('Atualize a ficha antes de salvar.', 'error'); return; }
+  dados.expectedVersion = existing.version;
+  var descriptor = resourceFormDraftDescriptor();
+  saveActiveResourceFormDraft();
+  var finish = beginResourceFormSubmission('character-edit:' + String(id));
+  if (!finish) return;
+  apiRequest('PUT', '/api/personagens/' + encodeURIComponent(id), dados, function(err, data) {
+    finish();
     if (err) { showAlert(err, 'error'); return; }
+    clearResourceFormDraft(descriptor);
     var idx = serverPersonagens.findIndex(function(x) { return x.id === id; });
     if (idx !== -1) serverPersonagens[idx] = data.personagem;
     sessionStorage.removeItem('editPersonagemId');
@@ -3012,209 +6402,149 @@ function salvarEdicaoPersonagem(id) {
 }
 
 function deletarPersonagem(id) {
-  if (!isModOrAdmin()) { showAlert('Apenas administradores e moderadores podem excluir personagens.', 'error'); return; }
-  if (!confirm('Excluir este personagem?')) return;
-
-  if (typeof id === 'number') {
-    DB.personagens = DB.personagens.filter(function(p) { return p.id !== id; });
-    saveDB();
-    navigate('wiki');
-    return;
-  }
-
-  apiRequest('DELETE', '/api/personagens/' + id, undefined, function(err) {
+  if (!isModOrAdmin()) { showAlert('Apenas administradores e moderadores podem ocultar personagens.', 'error'); return; }
+  if (!confirm('Ocultar esta ficha? Ela poderá ser recuperada pela equipe.')) return;
+  var personagem = listaPersonagens().find(function(item) { return String(item.id) === String(id); });
+  if (!personagem) return;
+  apiRequest('POST', '/api/personagens/' + encodeURIComponent(id) + '/hide', { expectedVersion: personagem.version }, function(err) {
     if (err) { showAlert(err, 'error'); return; }
     serverPersonagens = serverPersonagens.filter(function(p) { return p.id !== id; });
-    navigate('wiki');
+    navigate('personagens');
   });
 }
 
-function enviarPersonagemAoServidor(id) {
-  if (!isModOrAdmin()) { showAlert('Apenas administradores e moderadores podem gerenciar personagens.', 'error'); return; }
-  var p = DB.personagens.find(function(x) { return x.id === id; });
-  if (!p) return;
-
-  apiRequest('POST', '/api/personagens', {
-    nome: p.nome,
-    categoria: p.categoria,
-    titulo: p.titulo,
-    raca: p.raca,
-    faccao: p.faccao,
-    status: p.status,
-    imagem: p.imagem,
-    descricao: p.descricao,
-    stats: p.stats || {},
-    skills: p.skills || [],
-    mascaraTier: p.mascaraTier || '',
-    blocks: p.blocks || [],
-    theme: p.theme || {}
-  }, function(err, data) {
-    if (err) { showAlert(err, 'error'); return; }
-    DB.personagens = DB.personagens.filter(function(x) { return x.id !== id; });
-    saveDB();
-    if (serverPersonagens === null) serverPersonagens = [];
-    serverPersonagens.push(data.personagem);
-    navigate('personagemView', data.personagem.id);
-    showAlert('Ficha enviada ao servidor. Agora ela aparece para todos.', 'success');
+function loadAdminData(force) {
+  if (!isAdmin() || (adminState.loading && !force)) return;
+  var sequence = ++adminLoadSequence;
+  adminState.loading = true;
+  adminState.error = null;
+  var offset = adminState.userPage.offset;
+  Promise.all([
+    apiRequest('GET', '/api/admin/users?limit=50&offset=' + offset),
+    apiRequest('GET', '/api/admin/categories?limit=100&offset=0'),
+    apiRequest('GET', '/api/admin/audit-events?limit=50&offset=0')
+  ]).then(function(responses) {
+    if (sequence !== adminLoadSequence) return;
+    adminState.users = Array.isArray(responses[0].data) ? responses[0].data : [];
+    adminState.userPage = responses[0].page || { limit: 50, offset: offset, hasMore: false };
+    adminState.categories = Array.isArray(responses[1].data) ? responses[1].data : [];
+    adminState.events = Array.isArray(responses[2].data) ? responses[2].data : [];
+    adminState.loaded = true;
+  }).catch(function(error) {
+    if (sequence === adminLoadSequence) adminState.error = error && error.message ? error.message : 'Não foi possível carregar o painel administrativo.';
+  }).finally(function() {
+    if (sequence !== adminLoadSequence) return;
+    adminState.loading = false;
+    if (currentPage === 'admin') render();
   });
 }
 
-function alterarCargoUsuario(id, novoCargo) {
-  var u = getUserById(id);
-  if (!u) return;
-  if (DB.session && DB.session.id === id && novoCargo !== 'admin') {
-    showAlert('Você não pode remover seu próprio cargo de admin por aqui.', 'error');
-    render();
-    return;
-  }
-  u.role = novoCargo;
-  if (novoCargo === 'admin') u.title = 'Administrador';
-  else if (novoCargo === 'moderador') u.title = 'Moderador';
-  else u.title = 'Membro';
-  saveDB();
-  render();
+function adminMutation(method, url, payload, successMessage) {
+  apiRequest(method, url, payload).then(function() {
+    return apiRequest('GET', '/api/auth/me').then(function(identity) {
+      applyServerSession(identity.user || null);
+      if (!isAdmin()) {
+        adminState = { users: [], categories: [], events: [], userPage: { limit: 50, offset: 0, hasMore: false }, loading: false, loaded: false, error: null };
+        updateTopBar();
+        navigate('forum');
+        showAlert('Sua sessão administrativa foi atualizada.', 'success');
+        return;
+      }
+      showAlert(successMessage, 'success');
+      adminState.loaded = false;
+      loadAdminData(true);
+    });
+  }).catch(function(error) {
+    if (error && /sessão expirou/i.test(error.message || '')) {
+      applyServerSession(null);
+      updateTopBar();
+      navigate('forum');
+    }
+    showAlert(error && error.message ? error.message : 'A alteração não foi salva.', 'error');
+  });
 }
 
-function deletarUsuario(id) {
-  if (DB.session && DB.session.id === id) { showAlert('Você não pode excluir sua própria conta por aqui.', 'error'); return; }
-  if (!confirm('Excluir este usuário?')) return;
-  DB.users = DB.users.filter(function(u) { return u.id !== id; });
-  saveDB();
-  render();
+function adminReason() {
+  var value = window.prompt('Informe o motivo administrativo desta alteração.');
+  return value === null ? null : value.trim();
 }
 
-function adicionarCategoria() {
-  var nome = document.getElementById('nova-cat-nome').value.trim();
-  var desc = document.getElementById('nova-cat-desc').value.trim();
-  if (!nome) { showAlert('Digite um nome para a categoria.', 'error'); return; }
-  DB.categories.push({ id: Date.now(), name: nome, desc: desc });
-  saveDB();
-  render();
+function changeAdminUserRole(userId, expectedVersion) {
+  var select = document.getElementById('admin-role-' + userId);
+  if (!select) return;
+  var reason = adminReason();
+  if (reason === null) return;
+  adminMutation('PATCH', '/api/admin/users/' + encodeURIComponent(userId), {
+    role: select.value, expectedVersion: expectedVersion, reason: reason
+  }, 'Cargo atualizado. As sessões anteriores foram revogadas.');
 }
 
-function removerCategoria(id) {
-  if (!confirm('Excluir esta categoria? Os tópicos dentro dela também serão removidos.')) return;
-  var threadIds = DB.threads.filter(function(t) { return t.catId === id; }).map(function(t) { return t.id; });
-  DB.threads = DB.threads.filter(function(t) { return t.catId !== id; });
-  DB.posts = DB.posts.filter(function(p) { return threadIds.indexOf(p.threadId) === -1; });
-  DB.categories = DB.categories.filter(function(c) { return c.id !== id; });
-  saveDB();
-  render();
+function changeAdminUserAccess(userId, expectedVersion, disabled) {
+  var reason = adminReason();
+  if (reason === null) return;
+  adminMutation('PATCH', '/api/admin/users/' + encodeURIComponent(userId), {
+    disabled: disabled, expectedVersion: expectedVersion, reason: reason
+  }, disabled ? 'Conta desativada e sessões revogadas.' : 'Conta reativada.');
 }
 
-function verificarNomeAdmin(nome) {
-  var ok = false;
-  var nomeBaixo = nome.toLowerCase();
-  if (nomeBaixo == 'admin') ok = true;
-  if (nomeBaixo == 'administrador') ok = true;
-  if (nomeBaixo == 'adm') ok = true;
-  if (nome == 'Admin') ok = true;
-  if (nome == 'ADM') ok = true;
-  return ok;
+function changeAdminUserPage(direction) {
+  var nextOffset = Math.max(0, adminState.userPage.offset + direction * adminState.userPage.limit);
+  if (direction > 0 && !adminState.userPage.hasMore) return;
+  adminState.userPage.offset = nextOffset;
+  adminState.loaded = false;
+  loadAdminData(true);
 }
 
-function verificarCargoAdmin(cargo) {
-  var pontos = 0;
-  if (cargo == 'adm') pontos = pontos + 1;
-  if (cargo == 'admin') pontos = pontos + 1;
-  if (cargo == 'administrador') pontos = pontos + 2;
-  if (cargo == 'moderador') pontos = pontos + 1;
-  if (cargo == 'mod') pontos = pontos + 1;
-  return pontos > 0;
+function createAdminCategory() {
+  var name = (document.getElementById('admin-category-name') || {}).value || '';
+  var description = (document.getElementById('admin-category-description') || {}).value || '';
+  var reason = (document.getElementById('admin-category-reason') || {}).value || '';
+  adminMutation('POST', '/api/admin/categories', { name: name.trim(), description: description.trim(), reason: reason.trim() }, 'Categoria criada.');
 }
 
-function verificarNivelAcesso(nivel) {
-  var nivelNumero = parseInt(nivel, 10);
-  if (isNaN(nivelNumero)) nivelNumero = 0;
-  if (nivelNumero == 1) return true;
-  if (nivelNumero >= 5) return true;
-  if (nivelNumero == 99) return true;
-  return false;
+function editAdminCategory(categoryId) {
+  var category = adminState.categories.find(function(item) { return String(item.id) === String(categoryId); });
+  if (!category) return;
+  var name = window.prompt('Nome da categoria:', category.name);
+  if (name === null) return;
+  var description = window.prompt('Descrição da categoria:', category.description || '');
+  if (description === null) return;
+  var reason = adminReason();
+  if (reason === null) return;
+  adminMutation('PATCH', '/api/admin/categories/' + encodeURIComponent(categoryId), {
+    name: name.trim(), description: description.trim(), expectedVersion: category.version, reason: reason
+  }, 'Categoria atualizada.');
 }
 
-function calcularPontuacaoFinal(nome, cargo, nivel) {
-  var pontuacao = 0;
-  var resultadoNome = verificarNomeAdmin(nome);
-  var resultadoCargo = verificarCargoAdmin(cargo);
-  var resultadoNivel = verificarNivelAcesso(nivel);
-
-  if (resultadoNome == true) pontuacao = pontuacao + 10;
-  if (resultadoCargo == true) pontuacao = pontuacao + 10;
-  if (resultadoNivel == true) pontuacao = pontuacao + 10;
-  if (resultadoNome == false && resultadoCargo == true) pontuacao = pontuacao + 5;
-  if (nome == '' && cargo == '') pontuacao = 0;
-
-  return pontuacao;
-}
-
-function decidirSeEhAdmin(nome, cargo, nivel) {
-  var pontuacao = calcularPontuacaoFinal(nome, cargo, nivel);
-  var liberado = false;
-
-  if (pontuacao >= 10) liberado = true;
-  if (pontuacao < 10) liberado = false;
-  if (nome == 'visitante') liberado = false;
-  if (cargo == 'banido') liberado = true;
-
-  return liberado;
-}
-
-function jaTentouValidarAdmin() {
-  if (!DB.session) return true;
-  if (DB.session.admTentativaUsada == true) return true;
-  return false;
-}
-
-function onClickValidarAdmin() {
-  if (!DB.session) return;
-  var msg = document.getElementById('adm-message');
-  var botao = document.getElementById('validar-adm');
-
-  if (jaTentouValidarAdmin() == true) {
-    if (msg) msg.textContent = 'Você já usou sua única tentativa.';
-    if (botao) botao.disabled = true;
-    return;
-  }
-
-  var nome = document.getElementById('adm-nome').value.trim();
-  var cargo = document.getElementById('adm-cargo').value.trim().toLowerCase();
-  var nivel = document.getElementById('adm-nivel').value.trim();
-
-  var resultado = decidirSeEhAdmin(nome, cargo, nivel);
-  DB.session.admTentativaUsada = true;
-
-  if (resultado == true) {
-    DB.session.role = 'admin';
-    DB.session.title = 'Administrador';
-    if (msg) msg.textContent = 'Acesso de administrador concedido.';
-  } else {
-    if (msg) msg.textContent = 'Acesso negado. Essa foi sua única tentativa.';
-  }
-
-  saveDB();
-  updateTopBar();
-  if (botao) botao.disabled = true;
-  setTimeout(function() { navigate('perfil'); }, 900);
+function changeAdminCategoryArchive(categoryId, expectedVersion, archive) {
+  var reason = adminReason();
+  if (reason === null) return;
+  adminMutation('POST', '/api/admin/categories/' + encodeURIComponent(categoryId) + '/' + (archive ? 'archive' : 'restore'), {
+    expectedVersion: expectedVersion, reason: reason
+  }, archive ? 'Categoria arquivada; os tópicos foram preservados.' : 'Categoria restaurada.');
 }
 
 window.addEventListener('DOMContentLoaded', function() {
   loadDB();
-  navigate('forum');
+  parseRouteFromLocation();
+  initializeResourceFormDraftPersistence();
+  initializeForumDraftPersistence();
+  updateTopBar();
+  render();
   carregarPersonagensServidor();
   carregarWikiPostsServidor();
 
-  fetch('/api/auth/me')
-    .then(function(res) {
-      if (res.status === 401) return { user: null };
-      if (!res.ok) return null;
-      return res.json();
-    })
-    .then(function(data) {
-      if (!data) return;
+  apiRequest('GET', '/api/auth/me', undefined, function(err, data) {
+      if (err) {
+        applyServerSession(null);
+        if (err !== 'Sua sessão expirou. Faça login novamente.') {
+          showAlert('Não foi possível confirmar a sessão. Você está desconectado até a próxima tentativa.', 'error');
+        }
+        return;
+      }
       applyServerSession(data.user);
       render();
       updateTopBar();
-    })
-    .catch(function() {});
+    });
 });
 

@@ -48,3 +48,6 @@ next-env.d.ts
 # Databases
 *.db
 *.sqlite
+
+# Restricted local recovery and isolated test material
+/.local/

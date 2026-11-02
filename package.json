@@ -5,9 +5,22 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "test:env:up": "node scripts/test-env.js up",
+    "test:env:down": "node scripts/test-env.js down",
+    "test:unit": "node scripts/test-runner.js unit",
+    "test:integration": "node scripts/test-runner.js integration",
+    "test:browser": "node scripts/test-runner.js browser",
+    "test:all": "node scripts/test-runner.js all",
+    "test": "node scripts/test-runner.js default",
+    "db:preflight": "node scripts/db-migrate.js preflight",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:migrate": "node scripts/db-migrate.js migrate",
+    "db:studio": "drizzle-kit studio",
+    "test:migration:populated": "node scripts/test-populated-migration.js --target=test",
+    "wiki:authoring:compile": "node scripts/wiki-authoring-compile.js",
+    "wiki:authoring:revision-plan": "node scripts/wiki-authoring-revision-plan.js",
+    "wiki:sources:stage": "node scripts/wiki-source-stage.js stage",
+    "wiki:sources:import": "node scripts/wiki-source-import.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -15,9 +28,11 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "sanitize-html": "2.18.1"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "drizzle-kit": "^0.31.10"
   }
 }

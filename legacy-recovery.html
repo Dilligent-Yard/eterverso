@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recuperação local — aetherverse vault</title>
+  <style>
+    :root { color-scheme: dark; font: 16px/1.55 system-ui, sans-serif; background: #101114; color: #ececf0; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { width: min(900px, calc(100% - 32px)); margin: 36px auto; }
+    h1, h2 { line-height: 1.2; }
+    h1 { font-size: clamp(1.65rem, 4vw, 2.2rem); }
+    h2 { margin-top: 0; font-size: 1.25rem; }
+    p { color: #c7c7cf; }
+    section { margin: 22px 0; padding: 22px; border: 1px solid #34353d; border-radius: 12px; background: #18191e; }
+    button, input, textarea { font: inherit; }
+    button { margin: 8px 8px 0 0; padding: 10px 14px; border: 1px solid #777986; border-radius: 7px; background: #292b33; color: inherit; cursor: pointer; }
+    button:hover, button:focus-visible { background: #393c47; }
+    button:disabled { opacity: .55; cursor: wait; }
+    label { display: block; margin-top: 12px; font-weight: 600; }
+    input, textarea { width: 100%; margin-top: 6px; padding: 10px; border: 1px solid #555762; border-radius: 6px; background: #101114; color: inherit; }
+    textarea { min-height: 230px; resize: vertical; font: 13px/1.45 ui-monospace, monospace; }
+    .notice { padding: 12px; border-left: 3px solid #d5a849; background: #211f1a; }
+    .status { min-height: 1.55em; margin: 12px 0 0; color: #b8d5ff; overflow-wrap: anywhere; }
+    .report { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 ui-monospace, monospace; color: #d4d5dc; }
+    .muted { color: #a9aab4; font-size: .92rem; }
+    .file-input { max-width: 100%; }
+    a { color: #aacbff; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Recuperação de dados locais</h1>
+    <p>Esta página lê o armazenamento deste navegador sem iniciar a aplicação antiga. Os arquivos são gerados aqui e baixados pelo navegador; nada é enviado ao servidor.</p>
+      <p class="notice">Guarde a cópia bruta em local privado. Ela pode conter dados pessoais ou credenciais antigas. A conversão abaixo cria um arquivo separado com conteúdo e associações mínimas de autoria; ela não altera nem substitui a cópia bruta. Revise também o texto do conteúdo para encontrar segredos que alguém possa ter escrito dentro de uma postagem.</p>
+
+    <section aria-labelledby="raw-title">
+      <h2 id="raw-title">1. Snapshot bruto, sem alterações</h2>
+      <p id="raw-status" class="status" role="status">Verificando o armazenamento local…</p>
+      <label for="export-label">Rótulo deste snapshot</label>
+      <input id="export-label" type="text" maxlength="120" value="Exportação local" autocomplete="off">
+      <button id="download-raw" type="button">Preparar e baixar JSON bruto</button>
+      <button id="download-metadata" type="button" disabled>Baixar sidecar de metadados</button>
+      <p class="muted">O JSON bruto é baixado exatamente como a string foi armazenada. O sidecar informa a origem, o rótulo e o SHA-256 do arquivo bruto.</p>
+    </section>
+
+    <section aria-labelledby="convert-title">
+      <h2 id="convert-title">2. Converter uma cópia em conteúdo</h2>
+      <p>Use a cópia deste navegador, cole um snapshot sintético ou escolha um arquivo JSON exportado. O conversor mantém IDs antigos e relações de autoria como rótulos; remove contas, credenciais, permissões, sessões, contadores e outros campos fora da lista de conteúdo. HTML legado é preservado como dado e não é executado nem sanitizado nesta etapa.</p>
+      <button id="load-local" type="button">Carregar o valor local no campo</button>
+      <label for="source-origin">Rótulo da origem da entrada</label>
+      <input id="source-origin" type="text" maxlength="200" placeholder="Informe a origem conhecida; deixe em branco se for desconhecida" autocomplete="off">
+      <label for="snapshot-file">Ou escolher um arquivo JSON</label>
+      <input id="snapshot-file" class="file-input" type="file" accept="application/json,.json">
+      <label for="snapshot-input">JSON de entrada (máximo 5 MB para conversão)</label>
+      <textarea id="snapshot-input" spellcheck="false" autocomplete="off" aria-describedby="convert-help"></textarea>
+      <p id="convert-help" class="muted">O campo é uma cópia editável. Alterá-lo não grava no armazenamento local.</p>
+      <button id="convert-download" type="button">Converter e baixar JSON de conteúdo</button>
+      <p id="convert-status" class="status" role="status"></p>
+      <pre id="conversion-report" class="report" aria-live="polite"></pre>
+    </section>
+  </main>
+  <script src="/legacy-recovery.js" defer></script>
+</body>
+</html>

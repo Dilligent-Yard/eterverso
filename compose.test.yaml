@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: eterverso_test
+      POSTGRES_USER: eterverso_test
+      POSTGRES_PASSWORD: ${ETERVERSO_TEST_DB_PASSWORD:?run npm run test:env:up first}
+    ports:
+      - "127.0.0.1:${ETERVERSO_TEST_DB_PORT:?run npm run test:env:up first}:5432"
+    volumes:
+      - test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eterverso_test -d eterverso_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    labels:
+      io.eterverso.purpose: isolated-test
+
+volumes:
+  test-data:
+    name: eterverso-test-data
