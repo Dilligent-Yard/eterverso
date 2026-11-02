@@ -347,3 +347,69 @@ test('delayed public publication invalidates the reader before rendering and ign
     } else assert.deepEqual(rendered, [null]);
   }
 });
+
+test('article file controls are staff-only and guide text cannot escape its textarea', () => {
+  const context = makeFrontend();
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'member' };
+  assert.equal(context.renderWikiArticleFilePanel(null), '');
+  context.DB.session.role = 'moderador';
+  context.wikiArticleFileState.resourceId = 'new';
+  context.wikiArticleFileState.guide = { brief: '</textarea><script>bad()</script>', example: { format: 'AetherverseWikiAuthoringV1' } };
+  const html = context.renderWikiArticleFilePanel(null);
+  assert.match(html, /wiki-article-file/);
+  assert.match(html, /&lt;\/textarea&gt;&lt;script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  context.applyServerSession({ id: USER_A, role: 'member' });
+  assert.equal(context.wikiArticleFileState.guide, null);
+});
+
+test('an article file preview from a previous account is discarded', async () => {
+  let resolve;
+  const context = makeFrontend({ apiRequest: () => new Promise(done => { resolve = done; }) });
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+  context.wikiArticleFileState.fileText = '{}';
+  context.render = () => {};
+  context.previewWikiArticleFile();
+  context.applyServerSession({ id: USER_B, role: 'member' });
+  resolve({ data: { snapshot: article(), previewToken: 'synthetic-not-a-session-token' } });
+  await new Promise(done => setImmediate(done));
+  assert.equal(context.wikiArticleFileState.preview, null);
+  assert.equal(context.wikiArticleFileState.fileText, '');
+});
+
+test('changing preview choices revokes the token and explicit section opt-out is sent as null', async () => {
+  const requests = [];
+  const context = makeFrontend({ apiRequest: (method, url, body) => { requests.push({ method, url, body }); return Promise.resolve({ data: { previewToken: 'next' } }); } });
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+  context.render = () => {};
+  context.wikiArticleFileState.fileText = '{}';
+  context.wikiArticleFileState.preview = { previewToken: 'old' };
+  context.changeWikiArticleFileChoice('section', PAGE_ID, '');
+  assert.equal(context.wikiArticleFileState.preview.previewToken, null);
+  await context.previewWikiArticleFile();
+  assert.equal(requests[0].body.sectionBindings[0].targetSectionId, null);
+});
+
+test('late article export never downloads a file after the viewer changes account', async () => {
+  let resolve;
+  const context = makeFrontend({ apiRequest: () => new Promise(done => { resolve = done; }) });
+  context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+  let downloaded = false;
+  context.downloadWikiArticleText = () => { downloaded = true; };
+  const pending = context.exportWikiArticleFile(PAGE_ID);
+  context.applyServerSession({ id: USER_B, role: 'member' });
+  resolve({ data: { file: { format: 'synthetic' }, filename: 'synthetic.json' } });
+  await pending;
+  assert.equal(downloaded, false);
+});
+
+test('permanent preview conflicts revoke the save token while transport failures retain it for replay', async () => {
+  for (const permanent of [false, true]) {
+    const context = makeFrontend({ apiRequest: () => Promise.reject(Object.assign(new Error('Synthetic failure'), permanent ? { status: 409, code: 'WIKI_ARTICLE_FILE_PREVIEW_STALE' } : {})) });
+    context.DB.session = { id: USER_A, serverId: USER_A, role: 'admin' };
+    context.render = () => {};
+    context.wikiArticleFileState.preview = { previewToken: 'same-import-token' };
+    await context.commitWikiArticleFile();
+    assert.equal(context.wikiArticleFileState.preview.previewToken, permanent ? null : 'same-import-token');
+  }
+});

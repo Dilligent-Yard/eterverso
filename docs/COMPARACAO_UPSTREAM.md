@@ -80,9 +80,16 @@ O original não tinha esse fluxo editorial de fontes e revisões.
 - Preparador offline de revisões existentes: vínculos explícitos de página,
   fonte e, opcionalmente, seções legadas; remapeia IDs e citações conjuntamente.
   A aplicação do plano continua sujeita à sessão staff e à versão atual.
+- Importação de um artigo JSON pelo menu de criação ou editor, para moderadores
+  e administradores: preview com comparação, destino e vínculos explícitos,
+  seguido de salvamento como rascunho. Usa fontes já cadastradas; não publica.
+- Exportação staff da revisão de trabalho nos leitores e no editor. Prefere o
+  formato de autoria editável e recorre ao bundle quando necessário para não
+  perder conteúdo. O painel inclui brief para IA, exemplo sintético e catálogo
+  dos caminhos de fontes disponíveis, sem seus textos.
 
 Os bundles podem carregar texto privado das fontes. O controle de acesso
-administrativo não os torna arquivos públicos: sua entrega é separada da PR.
+da equipe não os torna arquivos públicos: sua entrega é separada da PR.
 
 ## 3. Fórum compartilhado, em vez de dados só daquele navegador
 

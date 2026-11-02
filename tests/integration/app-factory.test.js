@@ -134,3 +134,29 @@ test('startup schema readiness accepts the exact isolated 0015 schema using read
   const readiness = await verifySchemaReadiness(sql);
   assert.deepEqual(readiness, { migration: '0015_wiki_sections', verifiedColumns: 33 });
 });
+
+test('signup maps the postgres constraint_name from a concurrent uniqueness violation', async (context) => {
+  const sql = async (parts) => {
+    const query = parts.join('?');
+    if (query.includes('SELECT username, email FROM users')) return [];
+    if (query.includes('INSERT INTO users')) throw Object.assign(new Error('synthetic uniqueness race'), { code: '23505', constraint_name: 'users_username_lower_key' });
+    throw new Error('Unexpected synthetic SQL.');
+  };
+  sql.json = JSON.stringify;
+  sql.begin = callback => callback(sql);
+  const { createApp } = require(APP_MODULE);
+  const app = createApp({ sql, config: { sessionSecret: 'synthetic-factory-secret', secureCookies: false } });
+  const server = app.listen(0, '127.0.0.1');
+  context.after(() => new Promise(resolve => server.close(resolve)));
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const response = await fetch(origin + '/api/auth/csrf');
+  const csrf = await response.json();
+  const cookie = response.headers.getSetCookie().map(value => value.split(';', 1)[0]).join('; ');
+  const signup = await fetch(origin + '/api/auth/signup', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, 'X-CSRF-Token': csrf.csrfToken },
+    body: JSON.stringify({ username: 'SyntheticRace', email: 'race@example.test', password: 'synthetic-password' }),
+  });
+  assert.equal(signup.status, 409);
+  assert.equal((await signup.json()).code, 'ACCOUNT_CONFLICT');
+});

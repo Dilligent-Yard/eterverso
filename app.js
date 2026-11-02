@@ -223,6 +223,7 @@ var pendingReplyKey = null;
 var pendingReplyPayload = null;
 var forumDraftRestoreSequence = 0;
 var FORUM_DRAFT_VERSION = 1;
+var wikiArticleFileState = createWikiArticleFileState();
 var wikiStaffState = { items: null, article: null, loading: false, error: null };
 var serverWikiPages = null;
 var serverWikiSections = null;
@@ -1999,7 +2000,7 @@ function renderWikiStaffArticle() {
   if (state.error) return '<div class="alert alert-error">' + h(state.error) + ' <button class="btn" onclick="navigate(\'wikiStaffArticle\',' + jsArg(currentWikiPageId) + ')">Tentar novamente</button></div>';
   if (!state.article || state.article.id !== currentWikiPageId) return '<p>Carregando artigo da equipe…</p>';
   var page = state.article, snapshot = page.head.snapshot;
-  return '<div class="breadcrumb"><a onclick="navigate(\'wikiStaff\')">Wiki da equipe</a> / ' + h(snapshot.title) + '</div><div class="cat-header"><span>' + h(snapshot.title) + '</span><button class="btn" onclick="navigate(\'wikiEditor\',' + jsArg(page.id) + ')">Editar artigo</button></div><p class="alert alert-info">Versão de trabalho compartilhada com a equipe. Esta tela não altera a publicação pública.</p><p>' + h(snapshot.summary || '') + '</p>' + renderWikiSnapshot(snapshot, { toc: true });
+  return '<div class="breadcrumb"><a onclick="navigate(\'wikiStaff\')">Wiki da equipe</a> / ' + h(snapshot.title) + '</div><div class="cat-header"><span>' + h(snapshot.title) + '</span><button class="btn" onclick="navigate(\'wikiEditor\',' + jsArg(page.id) + ')">Editar artigo</button><button class="btn btn-small" onclick="exportWikiArticleFile(' + jsArg(page.id) + ')">Exportar JSON da equipe</button></div><p class="alert alert-info">Versão de trabalho compartilhada com a equipe. Esta tela não altera a publicação pública.</p><p>' + h(snapshot.summary || '') + '</p>' + renderWikiSnapshot(snapshot, { toc: true });
 }
 
 function renderWikiArticle() {
@@ -2015,7 +2016,7 @@ function renderWikiArticle() {
   var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / ' + h(article.title) + '</div>'
     + '<div class="cat-header"><span>' + h(article.title) + '</span><div style="display:flex;gap:8px;flex-wrap:wrap;">'
     + '<a class="btn btn-small" onclick="navigate(\'wiki\')">Todos os artigos</a>';
-  if (isModOrAdmin()) html += '<button class="btn btn-small" onclick="navigate(\'wikiEditor\',' + jsArg(article.id) + ')">Editar artigo</button>';
+  if (isModOrAdmin()) html += '<button class="btn btn-small" onclick="navigate(\'wikiEditor\',' + jsArg(article.id) + ')">Editar artigo</button><button class="btn btn-small" title="Exportar a versão de trabalho mais recente" onclick="exportWikiArticleFile(' + jsArg(article.id) + ')">Exportar JSON da equipe</button>';
   if (DB.session) html += '<button class="btn btn-small" onclick="navigate(\'wikiProposals\')">Minhas propostas</button>';
   html += '</div></div>';
   html += '<div class="builder-panel">';
@@ -2171,6 +2172,7 @@ function clearWikiDraft(kind, resourceId, accountId) {
 }
 
 function clearWikiTransientState() {
+  wikiArticleFileState = createWikiArticleFileState();
   adminWikiTransferState = createAdminWikiTransferState();
   wikiStaffState = { items: null, article: null, loading: false, error: null };
   serverWikiPages = null;
@@ -2487,6 +2489,222 @@ function removeWikiEditorSection(index) {
   render();
 }
 
+function createWikiArticleFileState() {
+  return { resourceId: null, open: false, fileText: '', filename: '', preview: null, targetPageId: '',
+    sourceSets: {}, sectionBindings: {}, pending: false, reading: false, error: null,
+    guide: null, guideOpen: false, guideLoading: false, guideError: null, exportPending: false };
+}
+
+function wikiArticleFileContext(state) {
+  var account = wikiDraftAccountId();
+  return function() { return wikiArticleFileState === state && isModOrAdmin() && wikiDraftAccountId() === account; };
+}
+
+function downloadWikiArticleText(text, filename, mime) {
+  var url = window.URL.createObjectURL(new Blob([text], { type: mime || 'application/json;charset=utf-8' }));
+  var link = document.createElement('a');
+  link.href = url;
+  link.download = String(filename || 'artigo.json').replace(/[^a-z0-9._-]/gi, '-');
+  link.hidden = true;
+  document.body.appendChild(link);
+  link.click(); link.remove();
+  window.setTimeout(function() { window.URL.revokeObjectURL(url); }, 1000);
+}
+
+function loadWikiArticleGuide() {
+  if (!isModOrAdmin()) return;
+  var state = wikiArticleFileState;
+  if (state.guideLoading) return;
+  var valid = wikiArticleFileContext(state);
+  state.guideLoading = true; state.guideError = null;
+  wikiApi()('GET', '/api/staff/wiki/article-files/guide').then(function(response) {
+    if (!valid()) return;
+    var guide = wikiUnwrap(response);
+    if (!guide || typeof guide.brief !== 'string' || !guide.example) throw new Error('O modelo de autoria retornado é inválido.');
+    state.guide = guide;
+  }).catch(function(error) { if (valid()) state.guideError = error && error.message || 'Não foi possível carregar o brief.'; })
+    .finally(function() { if (valid()) { state.guideLoading = false; if (currentPage === 'wikiCreate' || currentPage === 'wikiEditor') render(); } });
+}
+
+function downloadWikiArticleGuide(kind) {
+  if (!isModOrAdmin() || !wikiArticleFileState.guide) return;
+  var guide = wikiArticleFileState.guide;
+  if (kind === 'example') downloadWikiArticleText(JSON.stringify(guide.example, null, 2) + '\n', 'modelo-artigo.authoring.json');
+  else downloadWikiArticleText(guide.brief + '\n\n## Catálogo de fontes disponíveis neste servidor\n\n'
+    + JSON.stringify(guide.sourceSets || [], null, 2) + '\n', 'brief-artigo-ia.md', 'text/markdown;charset=utf-8');
+}
+
+function readWikiArticleImportFile(input) {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var file = input && input.files && input.files[0];
+  if (!file) return Promise.resolve();
+  var state = wikiArticleFileState, valid = wikiArticleFileContext(state);
+  state.open = true; state.preview = null; state.error = null; state.sourceSets = {}; state.sectionBindings = {};
+  state.targetPageId = currentPage === 'wikiEditor' ? currentWikiPageId || '' : '';
+  state.fileText = ''; state.filename = file.name; state.reading = true;
+  if (file.size > 4 * 1024 * 1024) {
+    state.reading = false; state.error = 'O arquivo deve ter no máximo 4 MiB.'; render(); return Promise.resolve();
+  }
+  render();
+  return file.arrayBuffer().then(function(buffer) {
+    if (!valid()) return;
+    state.fileText = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    state.reading = false;
+    return previewWikiArticleFile();
+  }).catch(function(error) {
+    if (!valid()) return;
+    state.reading = false; state.fileText = '';
+    state.error = error && error.message || 'Não foi possível ler o arquivo JSON UTF-8.'; render();
+  });
+}
+
+function changeWikiArticleFileChoice(kind, key, value) {
+  if (!isModOrAdmin()) return;
+  var state = wikiArticleFileState;
+  if (state.pending || state.reading) return;
+  if (kind === 'target') { state.targetPageId = value; state.sectionBindings = {}; }
+  if (kind === 'source') state.sourceSets[key] = value;
+  if (kind === 'section') state.sectionBindings[key] = value;
+  if (state.preview) state.preview.previewToken = null;
+  state.error = null;
+  render();
+}
+
+function previewWikiArticleFile() {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var state = wikiArticleFileState;
+  if (!state.fileText || state.pending || state.reading) return Promise.resolve();
+  var valid = wikiArticleFileContext(state);
+  var body = { fileText: state.fileText };
+  var sets = Object.keys(state.sourceSets).filter(function(key) { return state.sourceSets[key]; });
+  if (sets.length) body.sourceSets = sets.map(function(key) { return { set: key, archiveSha256: state.sourceSets[key] }; });
+  if (state.targetPageId) body.targetPageId = state.targetPageId;
+  var bindings = Object.keys(state.sectionBindings);
+  if (bindings.length) body.sectionBindings = bindings.map(function(key) { return { sourceSectionId: key, targetSectionId: state.sectionBindings[key] || null }; });
+  state.pending = true; state.error = null; state.preview = null;
+  render();
+  return wikiApi()('POST', '/api/staff/wiki/article-files/preview', body).then(function(response) {
+    if (!valid()) return;
+    var preview = wikiUnwrap(response);
+    if (!preview || typeof preview !== 'object') throw new Error('A prévia retornada é inválida.');
+    state.preview = preview;
+  }).catch(function(error) { if (valid()) state.error = error && error.message || 'Não foi possível validar o artigo.'; })
+    .finally(function() { if (valid()) { state.pending = false; render(); } });
+}
+
+function commitWikiArticleFile() {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var state = wikiArticleFileState;
+  if (state.pending || !state.preview || !state.preview.previewToken) return Promise.resolve();
+  var valid = wikiArticleFileContext(state);
+  var token = state.preview.previewToken;
+  state.pending = true; state.error = null;
+  render();
+  return wikiApi()('POST', '/api/staff/wiki/article-files/commit', { previewToken: token }).then(function(response) {
+    if (!valid()) return;
+    var result = wikiUnwrap(response);
+    if (!result || !result.page || !result.page.id) throw new Error('Não foi possível confirmar o rascunho. Confira o estado antes de repetir.');
+    state.pending = false;
+    wikiStaffState = { items: null, article: null, loading: false, error: null };
+    wikiEditorLoadedId = null;
+    wikiArticleFileState = createWikiArticleFileState();
+    navigate('wikiStaffArticle', result.page.id);
+    showAlert(result.replay ? 'Esta importação já havia sido salva; nenhuma revisão foi duplicada.' : 'Arquivo salvo como rascunho compartilhado. A publicação permanece inalterada.', 'success');
+  }).catch(function(error) {
+    if (!valid()) return;
+    state.error = error && error.message || 'Não foi possível confirmar o rascunho. Confira o estado antes de repetir.';
+    // Keep the same signed token on transport failure: replay is idempotent.
+    if (error && ((error.status >= 400 && error.status < 500) || ['STALE_VERSION', 'STALE_HEAD', 'WIKI_NAME_CONFLICT', 'WIKI_ARTICLE_FILE_PREVIEW_STALE', 'WIKI_ARTICLE_PREVIEW_EXPIRED'].includes(error.code))) {
+      if (state.preview) state.preview.previewToken = null;
+    }
+  }).finally(function() { if (valid()) { state.pending = false; render(); } });
+}
+
+function exportWikiArticleFile(pageId) {
+  if (!isModOrAdmin()) return Promise.resolve();
+  var state = wikiArticleFileState;
+  if (state.exportPending) return Promise.resolve();
+  var valid = wikiArticleFileContext(state);
+  state.exportPending = true;
+  return wikiApi()('GET', '/api/staff/wiki/pages/' + encodeURIComponent(pageId) + '/article-file').then(function(response) {
+    if (!valid()) return;
+    var result = wikiUnwrap(response);
+    if (!result || !result.file || !result.filename) throw new Error('O arquivo exportado é inválido.');
+    downloadWikiArticleText(JSON.stringify(result.file, null, 2) + '\n', result.filename);
+    showAlert('Versão de trabalho exportada. ' + (result.notes || []).join(' '), 'success');
+  }).catch(function(error) { if (valid()) showAlert(error && error.message || 'Não foi possível exportar o artigo.', 'error'); })
+    .finally(function() { if (valid()) state.exportPending = false; });
+}
+
+function renderWikiArticleFileMetadata(snapshot) {
+  return '<dl class="wiki-file-metadata"><dt>Endereço</dt><dd>' + h(snapshot.slug || '') + '</dd><dt>Tipo</dt><dd>' + h(snapshot.type || '') + '</dd><dt>Nomes alternativos</dt><dd>' + h((snapshot.aliases || []).join(', ') || 'Nenhum') + '</dd><dt>Categorias</dt><dd>' + h((snapshot.categories || []).join(', ') || 'Nenhuma') + '</dd><dt>Público-alvo</dt><dd>' + h(snapshot.audience || '') + '</dd></dl>';
+}
+
+function renderWikiArticleFilePanel(pageId) {
+  if (!isModOrAdmin()) return '';
+  var state = wikiArticleFileState;
+  var resourceId = pageId || 'new';
+  if (state.resourceId !== resourceId) {
+    var guide = state.guide;
+    wikiArticleFileState = createWikiArticleFileState(); state = wikiArticleFileState;
+    state.resourceId = resourceId; state.guide = guide;
+  }
+  var preview = state.preview;
+  var disabled = state.pending || state.reading;
+  var html = '<details class="builder-panel wiki-article-file-panel"' + (state.open ? ' open' : '')
+    + ' ontoggle="wikiArticleFileState.open=this.open"><summary>Importar artigo JSON e modelo para IA</summary>'
+    + '<p>Envie um artigo por arquivo: AetherverseWikiAuthoringV1 (autoria do Work) ou AetherverseWikiBundleV1 (exportação portátil). A prévia não grava nem publica.</p>'
+    + '<label for="wiki-article-file">Arquivo JSON UTF-8, até 4 MiB</label><input id="wiki-article-file" type="file" accept=".json,application/json" onchange="readWikiArticleImportFile(this)"' + (disabled ? ' disabled' : '') + '>';
+  if (state.filename) html += '<p>Arquivo: ' + h(state.filename) + '</p>';
+  if (state.reading) html += '<p>Lendo arquivo…</p>';
+  if (state.pending) html += '<p role="status">Processando…</p>';
+  if (state.error) html += '<div class="alert alert-error" role="alert">' + h(state.error) + '</div>';
+  if (preview) {
+    (preview.needsBindings || []).forEach(function(binding) {
+      html += '<label>Conjunto de fontes: ' + h(binding.set) + '<select aria-label="Conjunto ' + ha(binding.set) + '" onchange="changeWikiArticleFileChoice(\'source\',' + jsArg(binding.set) + ',this.value)"' + (disabled ? ' disabled' : '') + '><option value="">Selecione o arquivo de origem</option>';
+      (binding.choices || []).forEach(function(hash) { html += '<option value="' + ha(hash) + '"' + (state.sourceSets[binding.set] === hash ? ' selected' : '') + '>' + h(hash) + '</option>'; });
+      html += '</select></label>';
+    });
+    if (preview.candidates && preview.candidates.length) {
+      html += '<label for="wiki-article-file-target">Artigo existente: importar como revisão</label><select id="wiki-article-file-target" onchange="changeWikiArticleFileChoice(\'target\',\'\',this.value)"' + (disabled ? ' disabled' : '') + '><option value="">Escolha o artigo a revisar</option>';
+      preview.candidates.forEach(function(candidate) { html += '<option value="' + ha(candidate.id) + '"' + (state.targetPageId === candidate.id ? ' selected' : '') + '>' + h(candidate.title) + ' · versão ' + Number(candidate.workVersion) + '</option>'; });
+      html += '</select>';
+    }
+    (preview.sectionOptions || []).forEach(function(section) {
+      var choice = Object.hasOwn(state.sectionBindings, section.sourceSectionId) ? state.sectionBindings[section.sourceSectionId] : section.selectedTargetId || '';
+      html += '<label>Identidade: ' + h(section.heading) + '<select aria-label="Identidade ' + ha(section.heading) + '" onchange="changeWikiArticleFileChoice(\'section\',' + jsArg(section.sourceSectionId) + ',this.value)"' + (disabled ? ' disabled' : '') + '><option value="">Usar identidade gerada do arquivo</option>';
+      (section.choices || []).forEach(function(target) { html += '<option value="' + ha(target.id) + '"' + (choice === target.id ? ' selected' : '') + '>' + h(target.heading) + '</option>'; });
+      html += '</select></label>';
+    });
+    (preview.warnings || []).forEach(function(warning) { html += '<p class="alert alert-info">' + h(warning) + '</p>'; });
+    if (preview.snapshot) {
+      if (preview.beforeSnapshot) html += '<details class="wiki-file-before"><summary>Comparar com a versão atual do artigo</summary><h2>' + h(preview.beforeSnapshot.title) + '</h2><p>' + h(preview.beforeSnapshot.summary || '') + '</p>' + renderWikiArticleFileMetadata(preview.beforeSnapshot) + renderWikiSnapshot(preview.beforeSnapshot) + '</details>';
+      html += '<div class="wiki-file-preview"><h2>Prévia: ' + h(preview.snapshot.title) + '</h2>'
+        + '<p>' + h(preview.snapshot.summary || '') + '</p>' + renderWikiArticleFileMetadata(preview.snapshot) + '<p>' + (preview.targetPageId ? 'Nova revisão do artigo existente, versão de base ' + Number(preview.expectedVersion) + '.' : (preview.candidates && preview.candidates.length ? 'Artigo existente encontrado: selecione o destino e valide novamente.' : 'Novo artigo.'))
+        + ' Somente equipe; nenhuma publicação será alterada.</p>' + renderWikiSnapshot(preview.snapshot) + '</div>';
+      html += '<details><summary>Fontes e citações (' + Number((preview.citations || []).length) + ')</summary><ul>';
+      (preview.sourceMatches || []).forEach(function(source) { html += '<li>' + h(source.set || '') + ' · ' + h(source.path || '') + '<br>SHA-256: ' + h(source.fileSha256 || '') + '</li>'; });
+      (preview.citations || []).forEach(function(citation) {
+        var section = (preview.snapshot.body.sections || []).find(function(item) { return item.id === citation.sectionId; });
+        var source = (preview.sourceMatches || []).find(function(item) { return (item.sourceId || item.id) === citation.sourceId; });
+        html += '<li>' + h(section ? section.heading : citation.sectionId) + ' · ' + h(source ? source.path : citation.sourceId) + ' · ' + h(citation.locator) + '</li>';
+      });
+      (preview.snapshot.body.sections || []).forEach(function(section) {
+        html += '<li>' + h(section.heading) + ' — Camada: ' + h(section.knowledgeLayer) + '; autoridade: ' + h((section.authority || []).join(', ') || 'sem marca agregada') + '</li>';
+      });
+      html += '</ul></details>';
+    }
+    if (preview.targetPageId && readWikiDraft('editor', preview.targetPageId)) html += '<p class="alert alert-info">Há um rascunho neste navegador para o artigo. Ele será preservado e poderá ficar desatualizado após a importação.</p>';
+  }
+  if (state.fileText) html += '<button type="button" class="btn" onclick="previewWikiArticleFile()"' + (disabled ? ' disabled' : '') + '>Validar arquivo / atualizar prévia</button> ';
+  if (preview && preview.previewToken) html += '<button type="button" class="btn btn-primary" id="wiki-article-file-commit" onclick="commitWikiArticleFile()"' + (disabled ? ' disabled' : '') + '>Salvar prévia como rascunho</button>';
+  html += '<details class="wiki-file-guide"' + (state.guideOpen ? ' open' : '') + ' ontoggle="wikiArticleFileState.guideOpen=this.open"><summary>Como pedir a uma IA que formate o artigo</summary>';
+  if (!state.guide) html += '<p><button type="button" class="btn" onclick="loadWikiArticleGuide()"' + (state.guideLoading ? ' disabled' : '') + '>' + (state.guideLoading ? 'Carregando…' : 'Carregar brief e modelo') + '</button></p>';
+  if (state.guideError) html += '<p class="alert alert-error">' + h(state.guideError) + '</p>';
+  if (state.guide) html += '<p><button type="button" class="btn" onclick="downloadWikiArticleGuide(\'example\')">Baixar exemplo JSON</button> <button type="button" class="btn" onclick="downloadWikiArticleGuide(\'brief\')">Baixar brief para IA</button></p><label for="wiki-article-ai-brief">Instruções de formatação</label><textarea id="wiki-article-ai-brief" readonly rows="12">' + h(state.guide.brief) + '</textarea><p>O brief baixado inclui caminhos e identidades das fontes disponíveis, sem seus textos. Forneça à IA as fontes que ela não tiver. Arquivos exportados podem conter material privado.</p>';
+  return html + '</details></details>';
+}
+
 function renderWikiEditor() {
   if (!isModOrAdmin()) return '<div class="alert alert-error">A edição de artigos é restrita à equipe.</div>';
   var id = currentPage === 'wikiCreate' ? null : currentWikiPageId;
@@ -2514,6 +2732,8 @@ function renderWikiEditor() {
     + '<div class="cat-header"><span>' + (id ? 'Rascunho do artigo' : 'Novo artigo da wiki') + '</span>'
     + '<button class="btn btn-small" onclick="navigate(\'wikiStaff\')">Wiki da equipe</button>'
     + (id ? '<button class="btn btn-small" onclick="navigate(\'wikiStaffArticle\',' + jsArg(id) + ')">Ler artigo</button>' : '') + '</div>';
+  html += renderWikiArticleFilePanel(id);
+  if (id) html += '<p><button type="button" class="btn" onclick="exportWikiArticleFile(' + jsArg(id) + ')">Exportar JSON da equipe</button></p>';
   if (staleDraft) html += '<div class="alert alert-error">Este rascunho local foi iniciado na versão '
     + localDraft.baseWorkVersion + ', mas o artigo agora está na versão ' + wikiEditorPage.workVersion
     + '. Atualize a página ou descarte o rascunho local antes de salvar.</div>';

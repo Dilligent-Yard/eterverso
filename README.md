@@ -226,6 +226,16 @@ transfer to Render has been performed as part of local development.
 
 ### Wiki articles authored in ChatGPT Work
 
+Staff can import a single article JSON directly in **Novo artigo** or its editor,
+under **Importar artigo JSON e modelo para IA**. Validate the preview, explicitly
+select any existing target/source/section bindings, then save an unpublished
+staff draft. Sources must already be registered on that server. The same panel
+provides an AI brief, a synthetic JSON example and the available source-path
+catalogue. Staff-only export buttons in article readers and the editor download
+the latest working revision: AuthoringV1 when lossless, otherwise BundleV1.
+See [the interface guide](docs/wiki-authoring/SITE_FILES.md) for limits and
+privacy considerations. Importing never publishes or installs source documents.
+
 Work can plan and write pt-BR articles from the sources available in its task,
 then return `AetherverseWikiAuthoringV1` files. The format uses stable human
 keys and exact source paths; Work does not invent UUIDs, hashes or local
@@ -262,6 +272,7 @@ the local rendered articles. The eventual PR/changelog process is recorded in
 | `server/forum.js`, `server/admin.js` | Shared forum and administrator routes |
 | `server/wiki.js`, `server/proposals.js`, `server/sources.js` | Reference wiki, member proposals, and restricted source routes |
 | `server/wiki-transfers.js` | Admin-only, versioned wiki bundle export, preview, refresh, and commit |
+| `server/wiki-article-files.js` | Staff article-file preview/commit, latest-revision export and AI guide/template |
 | `scripts/wiki-authoring-compile.js`, `scripts/wiki-authoring-revision-plan.js` | Offline conversion of Work authoring JSON and preparation of citation-aware staff revision requests |
 | `server/legacy-import.js`, `server/scene-turn-normalizer.js` | Controlled legacy content import and scene-turn migration logic |
 | `db/schema.ts`, `db/relations.ts`, `drizzle/` | Drizzle schema definitions and versioned PostgreSQL migrations |

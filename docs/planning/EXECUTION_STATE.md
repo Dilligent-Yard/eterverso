@@ -376,3 +376,53 @@ changes described below are in the working tree, not yet committed or pushed.
 - Live smoke checks: `/api/wiki/sections` returns 16 entries (four roots), and
   `/wiki?categoria=percepcao` serves the shell successfully. Acceptance complete
   for this request; taxonomy editing controls remain a separate future feature.
+
+## Article file interface — in progress, 2 November 2026
+
+- Arthur requested staff import from the article creation menu, a built-in AI
+  brief/template and staff-only export on articles. Principal prepared UI;
+  one bounded Luna worker `/root/public_publish` owns the server file router,
+  narrow existing helper exports, app mount/parser limits and backend tests.
+- Contracts: single-page AuthoringV1 or lossless BundleV1 import; read-only
+  preview with explicit source/target/section choices; signed actor-bound
+  expiring commit, idempotency and version/source rechecks; draft-only writes.
+  Sources must already exist. Export prefers authoring when lossless and uses
+  bundle fallback for arbitrary existing pages. No account/session credentials
+  are included. Guide/example are staff-authenticated server-maintained content.
+- Parent owns app.js/style.css, browser regressions and docs; do not race the
+  backend worker. Pending: stable backend integration, guarded suites, independent
+  scoped Sol review and local restart. No schema migration or real lore import
+  is intended. `SITE_FILES.md` records the intended interface; it is not evidence
+  that implementation or tests have completed.
+
+## Article file interface — completed, 2 November 2026
+
+- Staff import controls are available in creation and existing-page editors;
+  public/staff readers and editor show staff-only latest-working-revision export.
+  AI brief, synthetic example and source metadata catalogue can be downloaded.
+  `docs/wiki-authoring/SITE_FILES.md` records exact behavior and limits.
+- Preview resolves registered sources, checks exact bytes/metadata, displays
+  current/proposed snapshots and source/target/section bindings. Only an explicit
+  commit writes an unpublished staff draft/revision. Historical/public revisions
+  remain intact; signed previews recheck actor, sources and versions, and retries
+  use an idempotency key. No schema change or real article import was needed.
+- AuthoringV1 exports round-trip sections/citations where lossless. BundleV1
+  fallback preserves otherwise unrepresentable blocks/references, including
+  private cited source text; its existing four-MiB limit remains unchanged.
+  DB-backed authoring validates source closure without embedding it into a bundle.
+- Scoped independent Sol review found inconsistent concurrent fallback reads and
+  a large-source representability bug. Fixed with repeatable-read export and a
+  content-only compiler helper; deterministic concurrency/large-source regressions
+  cover both. Follow-up closed all consequential findings. Client API now retains
+  bounded public status/code so permanent errors invalidate previews while
+  transport failures permit idempotent retry. Also fixed the registration race's
+  postgres constraint_name error mapping exposed by integration verification.
+- Final gates: 149 unit, 61 integration and 19 browser tests passed. Integration
+  and browser runners confirmed the development sentinel unchanged. Inspected
+  desktop/mobile screenshots; changed production JavaScript syntax and whitespace
+  checks passed. Logs/report remain private under the existing compiled directory
+  (`article-files-*.log`, `article-files-sol-review.md`).
+- Restarted only this checkout's local server on port 3000 with Node 24. Live
+  smoke: /wiki/novo serves 200; guide/export endpoints return 401 when signed out.
+  No credentials, sources, database dumps or real page JSON added to versioned
+  files. No deployment, PR opening, upstream merge or lore publication performed.

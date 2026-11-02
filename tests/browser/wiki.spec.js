@@ -248,7 +248,7 @@ async function assertRequiredSchema() {
 async function makeFixture() {
   const suffix = randomUUID().slice(0, 8);
   const f = {
-    users: {}, pageId: null, revisionIds: [], proposalIds: [],
+    users: {}, pageId: null, revisionIds: [], proposalIds: [], extraPageIds: [], sourceIds: [],
     title: `Synthetic wiki article ${suffix}`,
     slug: `synthetic-wiki-article-${suffix}`,
     initialText: `Synthetic published snapshot ${suffix}`,
@@ -317,18 +317,20 @@ async function cleanFixture(f) {
       await tx`DELETE FROM audit_events WHERE target_id = ${proposalId}`;
       await tx`DELETE FROM wiki_proposals WHERE id = ${proposalId}`;
     }
-    if (f.pageId) {
-      await tx`DELETE FROM audit_events WHERE target_id = ${f.pageId}`;
-      await tx`DELETE FROM wiki_revision_categories WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${f.pageId})`;
-      await tx`DELETE FROM wiki_revision_links WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${f.pageId})`;
-      await tx`UPDATE wiki_revisions SET accepted_proposal_id = NULL WHERE page_id = ${f.pageId}`;
-      await tx`UPDATE wiki_pages SET head_revision_id = NULL, published_revision_id = NULL WHERE id = ${f.pageId}`;
-      const revisions = await tx`SELECT id FROM wiki_revisions WHERE page_id = ${f.pageId} ORDER BY sequence DESC`;
+    for (const pageId of [f.pageId, ...(f.extraPageIds || [])].filter(Boolean)) {
+      await tx`DELETE FROM audit_events WHERE target_id = ${pageId}`;
+      await tx`DELETE FROM wiki_revision_citations WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${pageId})`;
+      await tx`DELETE FROM wiki_revision_categories WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${pageId})`;
+      await tx`DELETE FROM wiki_revision_links WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${pageId})`;
+      await tx`UPDATE wiki_revisions SET accepted_proposal_id = NULL WHERE page_id = ${pageId}`;
+      await tx`UPDATE wiki_pages SET head_revision_id = NULL, published_revision_id = NULL WHERE id = ${pageId}`;
+      const revisions = await tx`SELECT id FROM wiki_revisions WHERE page_id = ${pageId} ORDER BY sequence DESC`;
       for (const revision of revisions) await tx`DELETE FROM wiki_revisions WHERE id = ${revision.id}`;
-      await tx`DELETE FROM wiki_names WHERE page_id = ${f.pageId}`;
-      await tx`DELETE FROM wiki_pages WHERE id = ${f.pageId}`;
+      await tx`DELETE FROM wiki_names WHERE page_id = ${pageId}`;
+      await tx`DELETE FROM wiki_pages WHERE id = ${pageId}`;
     }
     await tx`ALTER TABLE wiki_revisions ENABLE TRIGGER wiki_revisions_immutable`;
+    for (const sourceId of f.sourceIds || []) await tx`DELETE FROM wiki_sources WHERE id = ${sourceId}`;
     for (const user of Object.values(f.users || {})) await tx`DELETE FROM users WHERE id = ${user.id}`;
   });
 }
@@ -504,4 +506,117 @@ test('wiki sections remain visible without articles and navigate as forum-style 
     const forbidden = await context.request.get(`${origin}/api/staff/wiki/pages`);
     expect(forbidden.status()).toBe(401);
   } finally { await context.close(); }
+});
+
+test('staff imports Work JSON through preview, exports and revises it without publishing', async ({ browser }) => {
+  const staffContext = await isolatedContext(browser);
+  const guestContext = await isolatedContext(browser);
+  const memberContext = await isolatedContext(browser);
+  const staff = await staffContext.newPage(), guest = await guestContext.newPage(), member = await memberContext.newPage();
+  const suffix = randomUUID().slice(0, 8);
+  const content = 'Synthetic article-file source.\nSecond source line.\n';
+  const archive = createHash('sha256').update('browser-source-' + suffix).digest('hex');
+  const [source] = await sql`INSERT INTO wiki_sources(archive_sha256,relative_path,file_sha256,family,language,declared_version,declared_date,content,imported_by)
+    VALUES(${archive},'browser-source.md',${createHash('sha256').update(content).digest('hex')},'Synthetic','pt-BR',NULL,NULL,${content},${fixture.users.staff.id}) RETURNING id`;
+  fixture.sourceIds.push(source.id);
+  const file = {
+    format: 'AetherverseWikiAuthoringV1', workspace: 'browser-file-workspace',
+    sources: [{ key: 'source-one', set: 'browser-sources', path: 'browser-source.md' }],
+    pages: [{ key: 'file-' + suffix, title: 'Imported file ' + suffix, slug: 'imported-file-' + suffix,
+      aliases: [], type: 'concept', summary: 'Synthetic imported article', categories: ['Percepção'], audience: 'author', infobox: [],
+      sections: [{ key: 'overview', heading: 'Visão geral', html: '<p>Imported synthetic prose.</p><h3>Detalhes</h3><p>Source-backed detail.</p>', authority: [], knowledgeLayer: 'mixed', citations: [{ source: 'source-one', locator: 'linhas 1–2' }] }],
+    }],
+  };
+  const upload = data => ({ name: 'artigo.authoring.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(data)) });
+  try {
+    await login(staff, fixture.users.staff);
+    await staff.goto(`${origin}/wiki/novo`);
+    const panel = staff.locator('.wiki-article-file-panel');
+    await panel.locator(':scope > summary').click();
+    await panel.getByText('Como pedir a uma IA que formate o artigo', { exact: true }).click();
+    await panel.getByRole('button', { name: 'Carregar brief e modelo', exact: true }).click();
+    await expect(panel.locator('#wiki-article-ai-brief')).toContainText('AetherverseWikiAuthoringV1');
+    const exampleDownload = staff.waitForEvent('download');
+    await panel.getByRole('button', { name: 'Baixar exemplo JSON', exact: true }).click();
+    const example = JSON.parse(fs.readFileSync(await (await exampleDownload).path(), 'utf8'));
+    expect(example.format).toBe('AetherverseWikiAuthoringV1');
+    const briefDownload = staff.waitForEvent('download');
+    await panel.getByRole('button', { name: 'Baixar brief para IA', exact: true }).click();
+    expect(fs.readFileSync(await (await briefDownload).path(), 'utf8')).toContain('browser-source.md');
+    await panel.locator('#wiki-article-file').setInputFiles(upload(file));
+    await expect(panel.locator('.wiki-file-preview')).toContainText(file.pages[0].title);
+    await expect(panel.getByRole('button', { name: 'Salvar prévia como rascunho', exact: true })).toBeVisible();
+    const [uncommitted] = await sql`SELECT count(*)::int AS count FROM wiki_revisions WHERE snapshot->>'slug'=${file.pages[0].slug}`;
+    expect(uncommitted.count).toBe(0);
+    await staff.screenshot({ path: path.join(ROOT, '.local/test/wiki-article-file-preview-desktop.png'), fullPage: true });
+    const savedPromise = staff.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/staff/wiki/article-files/commit');
+    await panel.getByRole('button', { name: 'Salvar prévia como rascunho', exact: true }).click();
+    const savedResponse = await savedPromise;
+    expect(savedResponse.status()).toBe(201);
+    const created = (await savedResponse.json()).data.page;
+    fixture.extraPageIds.push(created.id);
+    expect(created.publishedRevisionId).toBeNull();
+    await expect(staff).toHaveURL(`${origin}/wiki/rascunhos/${created.id}`);
+    await expect(staff.locator('#main')).toContainText('Imported synthetic prose.');
+    const exportedDownload = staff.waitForEvent('download');
+    await staff.getByRole('button', { name: 'Exportar JSON da equipe', exact: true }).click();
+    const exported = JSON.parse(fs.readFileSync(await (await exportedDownload).path(), 'utf8'));
+    expect(exported.format).toBe('AetherverseWikiAuthoringV1');
+    expect(JSON.stringify(exported)).not.toMatch(/password|session|actorId|importedBy/);
+    exported.pages[0].summary = 'Edited externally with AI';
+    exported.pages[0].sections[0].html = '<p>Revised external synthetic prose.</p>';
+    await staff.getByRole('button', { name: 'Editar artigo', exact: true }).click();
+    await staff.locator('.wiki-article-file-panel > summary').click();
+    await staff.locator('#wiki-article-file').setInputFiles(upload(exported));
+    await expect(staff.locator('.wiki-file-preview')).toContainText('Edited externally with AI');
+    await expect(staff.locator('.wiki-file-preview')).toContainText('Nova revisão do artigo existente');
+    const revisedPromise = staff.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/staff/wiki/article-files/commit');
+    await staff.getByRole('button', { name: 'Salvar prévia como rascunho', exact: true }).click();
+    expect((await revisedPromise).status()).toBe(200);
+    await expect(staff.locator('#main')).toContainText('Revised external synthetic prose.');
+    const [current] = await sql`SELECT p.published_revision_id,r.snapshot FROM wiki_pages p JOIN wiki_revisions r ON r.id=p.head_revision_id WHERE p.id=${created.id}`;
+    expect(current.published_revision_id).toBeNull();
+    expect(current.snapshot.body.sections[0].id).toBe(created.head.snapshot.body.sections[0].id);
+    await staff.goto(`${origin}/wiki/novo`);
+    await staff.locator('.wiki-article-file-panel > summary').click();
+    await staff.locator('#wiki-article-file').setInputFiles(upload(exported));
+    await expect(staff.locator('#wiki-article-file-target')).toBeVisible();
+    await expect(staff.getByRole('button', { name: 'Salvar prévia como rascunho', exact: true })).toHaveCount(0);
+    await staff.locator('#wiki-article-file-target').selectOption(created.id);
+    await staff.getByRole('button', { name: 'Validar arquivo / atualizar prévia', exact: true }).click();
+    await expect(staff.getByRole('button', { name: 'Salvar prévia como rascunho', exact: true })).toBeVisible();
+    await expect(staff.locator('.wiki-file-before')).toContainText('Revised external synthetic prose.');
+
+    await guest.goto(`${origin}/wiki/${fixture.slug}`);
+    await expect(guest.getByRole('button', { name: 'Exportar JSON da equipe', exact: true })).toHaveCount(0);
+    expect((await guestContext.request.get(`${origin}/api/staff/wiki/pages/${created.id}/article-file`)).status()).toBe(401);
+    await login(member, fixture.users.member);
+    await member.goto(`${origin}/wiki/${fixture.slug}`);
+    await expect(member.getByRole('button', { name: 'Exportar JSON da equipe', exact: true })).toHaveCount(0);
+    expect((await memberContext.request.get(`${origin}/api/staff/wiki/pages/${created.id}/article-file`)).status()).toBe(403);
+    await member.goto(`${origin}/wiki/novo`);
+    await expect(member.locator('#wiki-article-file')).toHaveCount(0);
+    await staff.goto(`${origin}/wiki/${fixture.slug}`);
+    const fallbackDownload = staff.waitForEvent('download');
+    await staff.getByRole('button', { name: 'Exportar JSON da equipe', exact: true }).click();
+    const fallback = JSON.parse(fs.readFileSync(await (await fallbackDownload).path(), 'utf8'));
+    expect(fallback.format).toBe('AetherverseWikiBundleV1');
+    expect(fallback.pages[0].snapshot.body.sections[0].html).toContain(fixture.initialText);
+    expect(fallback.sources).toEqual([]);
+    await staff.goto(`${origin}/wiki/novo`);
+    await staff.locator('.wiki-article-file-panel > summary').click();
+    await staff.locator('#wiki-article-file').setInputFiles(upload(fallback));
+    await expect(staff.locator('.wiki-file-preview')).toContainText(fixture.initialText);
+    await expect(staff.locator('#wiki-article-file-target')).toBeVisible();
+    await staff.locator('#wiki-article-file').setInputFiles({ name: 'invalid.json', mimeType: 'application/json', buffer: Buffer.from('{"format":1,"format":2}') });
+    await expect(staff.locator('.wiki-article-file-panel [role="alert"]')).toBeVisible();
+    await expect(staff.getByRole('button', { name: 'Salvar prévia como rascunho', exact: true })).toHaveCount(0);
+    await staff.setViewportSize({ width: 390, height: 844 });
+    expect(await staff.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await staff.screenshot({ path: path.join(ROOT, '.local/test/wiki-article-file-mobile.png'), fullPage: true });
+  } finally {
+    const pages = await sql`SELECT id FROM wiki_pages WHERE created_by=${fixture.users.staff.id} AND id<>${fixture.pageId}`;
+    fixture.extraPageIds = pages.map(p => p.id);
+    await Promise.all([staffContext.close(), guestContext.close(), memberContext.close()]);
+  }
 });

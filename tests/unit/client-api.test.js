@@ -216,3 +216,13 @@ test('only the Aetherverse namespace receives the public API exports', () => {
     ['apiRequest', 'clearSessionUser', 'getSessionUser', 'setSessionUser'],
   );
 });
+
+test('API errors preserve bounded public status/code for conflict handling without changing callback messages', async () => {
+  const api = loadApi(async () => response(409, { error: 'A prévia mudou.', code: 'WIKI_ARTICLE_FILE_PREVIEW_STALE', privateDetail: 'must stay private' }));
+  await assert.rejects(api.apiRequest('GET', '/api/staff/wiki/pages'), error => error.status === 409 && error.code === 'WIKI_ARTICLE_FILE_PREVIEW_STALE' && !JSON.stringify(error).includes('must stay private'));
+  const callback = callbackRecorder();
+  await assert.rejects(api.apiRequest('GET', '/api/staff/wiki/pages', undefined, callback.callback), error => error.code === 'WIKI_ARTICLE_FILE_PREVIEW_STALE');
+  assert.deepEqual(callback.calls, [['A prévia mudou.', undefined]]);
+  const unsafe = loadApi(async () => response(400, { error: 'Erro público.', code: 'invalid\nprivate' }));
+  await assert.rejects(unsafe.apiRequest('GET', '/api/wiki/pages'), error => error.status === 400 && error.code === undefined);
+});

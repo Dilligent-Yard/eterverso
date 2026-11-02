@@ -24,9 +24,11 @@
   var CSRF_ERROR = 'Não foi possível validar a sessão. Atualize a página e tente novamente.';
   var REQUEST_ERROR = 'Não foi possível concluir a solicitação.';
 
-  function requestError(message) {
+  function requestError(message, metadata) {
     var error = new Error(message);
     error.publicMessage = message;
+    if (metadata && Number.isInteger(metadata.status) && metadata.status >= 400 && metadata.status <= 599) error.status = metadata.status;
+    if (metadata && typeof metadata.code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(metadata.code)) error.code = metadata.code;
     return error;
   }
 
@@ -137,7 +139,7 @@
       throw requestError(NETWORK_ERROR);
     }).then(function (response) {
       return parseJson(response).then(function (data) {
-        if (!response.ok) throw requestError(responseErrorMessage(data, response.status));
+        if (!response.ok) throw requestError(responseErrorMessage(data, response.status), { status: response.status, code: data && data.code });
         var value = data && (data.csrfToken || (data.data && data.data.csrfToken));
         if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value)) {
           throw requestError(CSRF_ERROR);
@@ -210,7 +212,7 @@
       throw requestError(NETWORK_ERROR);
     }).then(function (response) {
       return parseJson(response).then(function (data) {
-        if (!response.ok) throw requestError(responseErrorMessage(data, response.status));
+        if (!response.ok) throw requestError(responseErrorMessage(data, response.status), { status: response.status, code: data && data.code });
         if (authEndpoint(verb, parsedUrl.pathname)) {
           invalidateCsrf();
           if (verb === 'POST' && parsedUrl.pathname === '/api/auth/logout') clearSessionUser();
@@ -229,7 +231,7 @@
     var promise = performRequest(method, url, body, options);
     if (typeof callback !== 'function') {
       return promise.catch(function (error) {
-        throw requestError(safeErrorMessage(error));
+        throw requestError(safeErrorMessage(error), error);
       });
     }
 
@@ -246,7 +248,7 @@
     }, function (error) {
       var message = safeErrorMessage(error);
       notify(message, undefined);
-      throw requestError(message);
+      throw requestError(message, error);
     });
   }
 

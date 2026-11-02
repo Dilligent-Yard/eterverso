@@ -2566,3 +2566,14 @@ label {
 @media (max-width: 600px) { .wiki-section-row { grid-template-columns: 1fr; gap: 8px; padding: 16px; } .wiki-section-group header { padding: 16px; } }
 
 #wiki-page-search { flex: 1; min-width: 0; width: 100%; }
+
+.wiki-article-file-panel > summary, .wiki-file-guide > summary { cursor: pointer; font-weight: 600; margin-bottom: 12px; }
+.wiki-article-file-panel label { display: block; margin: 12px 0 6px; }
+.wiki-article-file-panel input[type="file"], .wiki-article-file-panel select, .wiki-article-file-panel textarea { width: 100%; min-width: 0; max-width: 100%; }
+.wiki-article-file-panel { overflow-wrap: anywhere; }
+.wiki-article-file-panel .btn { margin: 8px 4px 8px 0; }
+.wiki-file-preview { padding: 16px 0; }
+.wiki-file-guide { margin-top: 18px; }
+
+.wiki-file-metadata dt { font-weight: 600; margin-top: 8px; }
+.wiki-file-metadata dd { margin: 0 0 6px; }

@@ -12,6 +12,7 @@ const { createForumRouter } = require('./forum');
 const { createAdminRouter } = require('./admin');
 const { createWikiRouter } = require('./wiki');
 const { createWikiSectionsRouter } = require('./wiki-sections');
+const { createWikiArticleFilesRouter } = require('./wiki-article-files');
 const { createProposalRouter } = require('./proposals');
 const { createSourceRouter } = require('./sources');
 const { createLegacyImportRouter } = require('./legacy-import');
@@ -37,6 +38,11 @@ function createApp(options) {
     publicOrigin: config.publicOrigin || null,
   };
   app.set('trust proxy', 1);
+  // Article files are JSON strings inside a JSON request. Give these two
+  // staff endpoints their own bounded parser so a four-MiB file plus escaping
+  // and the signed preview can fit without raising limits for other routes.
+  app.use('/api/staff/wiki/article-files/preview', express.json({ limit: '10mb' }));
+  app.use('/api/staff/wiki/article-files/commit', express.json({ limit: '10mb' }));
   app.use(express.json({ limit: '5mb' }));
   app.use(function (req, res, next) {
     if (!req.body) req.body = {};
@@ -142,7 +148,7 @@ function createApp(options) {
       const csrfToken = auth.issueSession(req, rows[0]);
       res.status(201).json({ user: selfUser(rows[0]), csrfToken });
     } catch (err) {
-      if (err && err.code === '23505' && ['users_username_lower_key', 'users_username_key', 'users_email_key'].includes(err.constraint)) {
+      if (err && err.code === '23505' && ['users_username_lower_key', 'users_username_key', 'users_email_key'].includes(err.constraint_name || err.constraint)) {
         return next(new ApiError(409, 'ACCOUNT_CONFLICT', 'Esse nome de usuário ou email já está em uso.'));
       }
       return next(err);
@@ -1049,6 +1055,7 @@ function createApp(options) {
   app.use('/api/admin', createLegacyImportRouter({ sql, auth }));
   app.use('/api/admin/wiki-transfers', createWikiTransfersRouter({ sql, auth }));
   app.use('/api/admin', createAdminRouter({ sql, auth }));
+  app.use('/api', createWikiArticleFilesRouter({ sql, auth, sessionSecret: config.sessionSecret }));
   app.use('/api', createWikiSectionsRouter({ sql }));
   app.use('/api', createWikiRouter({ sql, auth }));
   app.use('/api', createProposalRouter({ sql, auth }));

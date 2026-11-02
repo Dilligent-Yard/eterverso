@@ -975,6 +975,7 @@ module.exports = {
   FORMAT,
   buildPreview,
   canonicalJson,
+  createWikiArticleBundle: (tx, pageId) => createBundle(tx, [validateUuid(pageId, 'pageId')]),
   createWikiTransfersRouter,
   digestJson,
   validateBundle,

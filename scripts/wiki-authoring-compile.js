@@ -15,6 +15,9 @@ const MAX_BUNDLE_BYTES = 4 * 1024 * 1024;
 const MAX_PAGES = 100;
 const MAX_SOURCES = 500;
 const MAX_CITATIONS = 10_000;
+const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
+const MAX_TOTAL_SOURCE_BYTES = 100 * 1024 * 1024;
+const HASH_RE = /^[a-f0-9]{64}$/u;
 const KEY_RE = /^[a-z][a-z0-9-]{0,79}$/u;
 const CANONICAL_CREATED_AT = '1970-01-01T00:00:00.000Z';
 
@@ -418,10 +421,33 @@ function bundleHashPayload(bundle) {
   };
 }
 
-function compileAuthoring(authoring, sourceSets) {
+function compileAuthoringContent(authoring, sourceSets) {
   const validated = validateAuthoring(authoring);
   const boundSets = sourceSetMap(sourceSets);
   const { byKey: sourceByKey, sources } = resolveSourceDeclarations(validated.sources, boundSets);
+  let totalSourceBytes = 0;
+  for (const source of sources) {
+    if (!HASH_RE.test(source.archiveSha256) || !HASH_RE.test(source.fileSha256)
+        || typeof source.relativePath !== 'string' || !source.relativePath
+        || typeof source.family !== 'string' || Array.from(source.family).length > 80
+        || typeof source.language !== 'string' || Array.from(source.language).length > 20
+        || (source.declaredVersion !== null && (typeof source.declaredVersion !== 'string'
+          || Array.from(source.declaredVersion).length > 120))
+        || (source.declaredDate !== null && (typeof source.declaredDate !== 'string'
+          || Array.from(source.declaredDate).length > 40))
+        || typeof source.content !== 'string') {
+      throw safeError('A declared source has invalid stored metadata.');
+    }
+    const sourceBytes = Buffer.from(source.content, 'utf8');
+    if (sourceBytes.length > MAX_SOURCE_BYTES
+        || crypto.createHash('sha256').update(sourceBytes).digest('hex') !== source.fileSha256) {
+      throw safeError('A declared source exceeds its limit or its content hash does not match.');
+    }
+    totalSourceBytes += sourceBytes.length;
+    if (!Number.isSafeInteger(totalSourceBytes) || totalSourceBytes > MAX_TOTAL_SOURCE_BYTES) {
+      throw safeError('The cited sources exceed the 100 MiB validation limit.');
+    }
+  }
   const pages = validated.pages.map((page) => cleanPage(page, validated.workspace, sourceByKey))
     .sort((left, right) => compareOrdinal(left.sourcePageId, right.sourcePageId));
   if (new Set(pages.map((page) => page.sourcePageId)).size !== pages.length
@@ -445,25 +471,10 @@ function compileAuthoring(authoring, sourceSets) {
   const totalCitations = pages.reduce((total, page) => total + page.citations.length, 0);
   if (totalCitations > MAX_CITATIONS) throw safeError('The batch exceeds its citation limit.');
 
-  const bundle = {
-    format: FORMAT,
-    manifest: {
-      version: 1,
-      createdAt: CANONICAL_CREATED_AT,
-      pageCount: pages.length,
-      sourceCount: sources.length,
-      bundleSha256: '',
-    },
-    origin: {
-      instanceId: canonicalUuid('workspace', validated.workspace),
-      siteName: 'aetherverse vault',
-    },
-    pages,
-    sources,
-  };
+  const workspaceId = canonicalUuid('workspace', validated.workspace);
   const identityOwners = new Map();
   const identities = [
-    ['workspace', bundle.origin.instanceId],
+    ['workspace', workspaceId],
     ...sources.map((source) => ['source', source.sourceId]),
     ...pages.flatMap((page) => [
       ['article', page.sourcePageId],
@@ -475,6 +486,33 @@ function compileAuthoring(authoring, sourceSets) {
     if (identityOwners.has(id)) throw safeError('Generated UUID identities collide within the batch.');
     identityOwners.set(id, kind);
   }
+
+  return {
+    pages,
+    sources,
+    workspaceId,
+    counts: { pages: pages.length, sources: sources.length, citations: totalCitations },
+  };
+}
+
+function compileAuthoring(authoring, sourceSets) {
+  const content = compileAuthoringContent(authoring, sourceSets);
+  const bundle = {
+    format: FORMAT,
+    manifest: {
+      version: 1,
+      createdAt: CANONICAL_CREATED_AT,
+      pageCount: content.pages.length,
+      sourceCount: content.sources.length,
+      bundleSha256: '',
+    },
+    origin: {
+      instanceId: content.workspaceId,
+      siteName: 'aetherverse vault',
+    },
+    pages: content.pages,
+    sources: content.sources,
+  };
   bundle.manifest.bundleSha256 = digestJson(bundleHashPayload(bundle));
 
   let cleanBundle;
@@ -488,7 +526,7 @@ function compileAuthoring(authoring, sourceSets) {
   return {
     bundle: cleanBundle,
     outputBytes,
-    counts: { pages: pages.length, sources: sources.length, citations: totalCitations },
+    counts: content.counts,
   };
 }
 
@@ -692,9 +730,11 @@ module.exports = {
   AUTHORING_FORMAT,
   MAX_BUNDLE_BYTES,
   MAX_INPUT_BYTES,
+  assertNoDuplicateJsonKeys,
   canonicalUuid,
   compareOrdinal,
   compileAuthoring,
+  compileAuthoringContent,
   main,
   normalizeLocator,
   parseArgs,

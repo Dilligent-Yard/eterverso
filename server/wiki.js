@@ -505,11 +505,11 @@ function createWikiRouter({ sql, auth } = {}) {
   return router;
 }
 
-async function withStaffTransaction(auth, req, callback) {
+async function withStaffTransaction(auth, req, callback, transactionOptions = {}) {
   return auth.withActorTransaction(req, async (tx, actor) => {
     auth.assertRole(actor, ...STAFF_ROLES);
     return callback(tx, actor);
-  });
+  }, transactionOptions);
 }
 
 function normalizeSlug(value, field = 'slug') {
@@ -1133,10 +1133,20 @@ function isoTimestamp(value) {
 }
 
 module.exports = {
+  assertCitationSourcesExist,
   createWikiRouter,
   extractWikiLinks,
+  findReplay,
+  insertRequestKey,
+  insertRevision,
+  insertRevisionCitations,
+  loadReplayPage,
+  loadStaffPageDto,
+  lockPage,
   normalizeSlug,
   publicPageDto,
   revisionDiff,
+  saveRevisionIndexes,
   validateWikiSnapshot,
+  withStaffTransaction,
 };
