@@ -57,8 +57,8 @@ function expectedMigrationPrefix(rootDirectory) {
   if (requiredIndex < 0) throw new Error(`Required migration ${REQUIRED_MIGRATION} is missing from the journal.`);
   return journal.entries.slice(0, requiredIndex + 1).map((entry) => {
     const filename = path.join(rootDirectory, 'drizzle', `${entry.tag}.sql`);
-    if (!fs.existsSync(filename)) throw new Error(`Required migration ${entry.tag} has no SQL file.`);
-    const hash = crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
+    const content = fs.readFileSync(filename, 'utf8').replace(/\r\n/g, '\n');
+    const hash = crypto.createHash('sha256').update(content).digest('hex');
     return { id: entry.idx + 1, tag: entry.tag, hash };
   });
 }
