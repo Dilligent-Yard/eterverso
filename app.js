@@ -99,11 +99,11 @@ var DB = {
   nextPersonagemId: 5,
 
   equipe: [
-    { nome: 'Rick', cargo: 'Dono e Moderador', foto: 'https://i.pinimg.com/736x/02/bc/1d/02bc1ddfb478c7069ac1db5017955648.jpg' },
-    { nome: 'Mand Raiden', cargo: 'Criador, Escritor e Dono da Obra', foto: '' },
-    { nome: 'Ghostmaker', cargo: 'Criador, Escritor e Vice-Dono da Obra', foto: '' },
-    { nome: 'Scautz', cargo: 'Criador e Escritor', foto: 'https://i.pinimg.com/736x/55/86/5a/55865a10f994f2379e4a4ac484def034.jpg' },
-    { nome: 'Lucas Kabii', cargo: 'Criador e Colaborador', foto: 'https://i.pinimg.com/control1/736x/94/b1/6b/94b16b73301e10ea0b4f5a63500cc619.jpg' }
+    { nome: 'Rick', cargo: 'Dono e Moderador' },
+    { nome: 'Mand Raiden', cargo: 'Criador, Escritor e Dono da Obra' },
+    { nome: 'Ghostmaker', cargo: 'Criador, Escritor e Vice-Dono da Obra' },
+    { nome: 'Scautz', cargo: 'Criador e Escritor' },
+    { nome: 'Lucas Kabii', cargo: 'Criador e Colaborador' }
   ],
 
   wikiPosts: [],
@@ -162,6 +162,58 @@ function roleBadgeFromRole(role) {
   if (role === 'admin') return '<span class="admin-badge">ADMIN</span>';
   if (role === 'moderador') return '<span class="mod-badge">MODERADOR</span>';
   return '<span class="member-badge">MEMBRO</span>';
+}
+
+var USER_AVATAR_PATH_PATTERN = /^\/api\/users\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/avatar(?:\?v=[1-9]\d{0,9})?$/i;
+var DATA_AVATAR_PREVIEW_PATTERN = /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/;
+var pendingProfileAvatarUpload = null;
+var pendingProfileAvatarCleared = false;
+var profileAvatarPreparing = false;
+
+function safeAvatarSrc(url) {
+  if (typeof url !== 'string') return '';
+  var trimmed = url.trim();
+  if (!trimmed || trimmed.length > 2048 || /[\u0000-\u001F\u007F\s]/.test(trimmed)) return '';
+  if (USER_AVATAR_PATH_PATTERN.test(trimmed)) return trimmed;
+  if (trimmed.slice(0, 8).toLowerCase() !== 'https://') return '';
+  try {
+    var parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return '';
+    return parsed.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+function safeProfilePreviewSrc(url) {
+  if (typeof url === 'string' && url.length <= 720000 && DATA_AVATAR_PREVIEW_PATTERN.test(url)) {
+    return url;
+  }
+  return safeAvatarSrc(url);
+}
+
+function userInitials(name, maxChars) {
+  var clean = String(name || '').trim();
+  var count = maxChars || 1;
+  if (!clean) return '?';
+  return clean.substring(0, count).toUpperCase();
+}
+
+function renderMiniAvatar(name, avatarUrl, extraClass) {
+  var cls = extraClass ? (' ' + ha(extraClass)) : '';
+  var safeUrl = safeAvatarSrc(avatarUrl);
+  if (safeUrl) {
+    return '<img class="inline-user-avatar' + cls + '" src="' + ha(safeUrl) + '" alt="' + ha(name || 'Avatar') + '">';
+  }
+  return '<span class="inline-user-avatar-ph' + cls + '" aria-hidden="true">' + h(userInitials(name, 1)) + '</span>';
+}
+
+function renderAuthorChip(author, fallbackLabel, prefixText) {
+  if (!author && !fallbackLabel) return '';
+  var username = (author && author.username) ? author.username : (fallbackLabel || 'Membro');
+  var avatar = author ? author.avatar : '';
+  var prefix = prefixText ? '<span class="inline-user-prefix">' + h(prefixText) + '</span>' : '';
+  return '<span class="inline-user-chip">' + prefix + renderMiniAvatar(username, avatar) + '<span class="inline-user-name">' + h(username) + '</span></span>';
 }
 
 function podeEditarThread(authorId) {
@@ -417,7 +469,7 @@ function updateTopBar() {
   var actions = document.getElementById('top-btn-area');
   var adminBtn = document.getElementById('nav-admin-btn');
   if (DB.session) {
-    info.innerHTML = '<span class="online-dot"></span><a onclick="navigate(\'perfil\')" style="font-weight:600;color:#fff;">' + h(DB.session.username) + '</a> ' + badgeHtml(DB.session);
+    info.innerHTML = '<span class="online-dot"></span>' + renderMiniAvatar(DB.session.username, DB.session.avatar, 'top-user-avatar') + '<a onclick="navigate(\'perfil\')" style="font-weight:600;color:#fff;">' + h(DB.session.username) + '</a> ' + badgeHtml(DB.session);
     actions.innerHTML = '<a onclick="navigate(\'perfil\')">Perfil</a><a onclick="doLogout()">Sair</a>';
     if (isAdmin()) {
       adminBtn.innerHTML = '<button onclick="navigate(\'admin\')" class="' + (currentPage === 'admin' ? 'active' : '') + '">Admin</button>';
@@ -693,11 +745,17 @@ function resourceFormDraftKey(descriptor, accountId) {
 function captureResourceFormDraft(descriptor) {
   try {
     if (descriptor.kind === 'profile') {
-      return {
+      var profileValues = {
         title: (document.getElementById('prof-title') || {}).value || '',
         avatar: (document.getElementById('prof-avatar') || {}).value || '',
         bio: (document.getElementById('prof-bio') || {}).value || ''
       };
+      if (typeof pendingProfileAvatarUpload === 'string' && safeProfilePreviewSrc(pendingProfileAvatarUpload)) {
+        profileValues.avatarUpload = pendingProfileAvatarUpload;
+      } else if (pendingProfileAvatarCleared === true) {
+        profileValues.avatarCleared = true;
+      }
+      return profileValues;
     }
     if (descriptor.kind === 'character') return lerFormPersonagem();
     if (descriptor.kind === 'scene') return lerFormularioCena();
@@ -823,6 +881,14 @@ function restoreResourceFields(values, fields) {
 function applyResourceFormDraft(descriptor, values, safe) {
   if (descriptor.kind === 'profile') {
     restoreResourceFields(values, { title: 'prof-title', avatar: 'prof-avatar', bio: 'prof-bio' });
+    if (typeof values.avatarUpload === 'string' && DATA_AVATAR_PREVIEW_PATTERN.test(values.avatarUpload)) {
+      pendingProfileAvatarUpload = values.avatarUpload;
+      pendingProfileAvatarCleared = false;
+    } else if (values.avatarCleared === true) {
+      pendingProfileAvatarUpload = null;
+      pendingProfileAvatarCleared = true;
+    }
+    refreshProfileAvatarPreview();
   } else if (descriptor.kind === 'character') {
     restoreResourceFields(values, {
       nome: 'p-nome', categoria: 'p-categoria', titulo: 'p-titulo', raca: 'p-raca',
@@ -977,6 +1043,10 @@ function discardActiveResourceFormDraft() {
   var kind = descriptor.kind;
   var resourceId = descriptor.resourceId;
   clearResourceFormDraft(descriptor);
+  if (kind === 'profile') {
+    pendingProfileAvatarUpload = null;
+    pendingProfileAvatarCleared = false;
+  }
   if (kind === 'turn-edit') {
     closeModal();
     abrirModalEditarTurno(resourceId.slice(resourceId.indexOf(':') + 1));
@@ -1566,6 +1636,9 @@ function renderCharCard(p) {
   html += '</p>';
   var descTexto = (p.descricao || '').replace(/<[^>]+>/g, '').substring(0, 125);
   html += '<p>' + h(descTexto) + '...</p>';
+  if (p.author) {
+    html += '<div class="card-author-row">' + renderAuthorChip(p.author, '', 'Ficha por') + '</div>';
+  }
   html += '</div></div>';
   return html;
 }
@@ -1720,6 +1793,9 @@ function renderWiki() {
             var key = wikiCategoryKey(category);
             return '<button type="button" class="tag" onclick="selectWikiCategory(' + jsArg(key) + ')">' + h(category) + '</button>';
           }).join('') + '</p>';
+      }
+      if (page.author) {
+        html += '<div class="card-author-row">' + renderAuthorChip(page.author, '', 'Por') + '</div>';
       }
       html += '</div></article>';
     });
@@ -1988,7 +2064,8 @@ function renderWikiStaff() {
     if (!page.head) return;
     var snapshot = page.head.snapshot;
     var published = page.accessLevel === 'public' && !!page.publishedRevisionId;
-    html += '<article class="builder-panel"><h2><a href="/wiki/rascunhos/' + ha(page.id) + '" onclick="navigate(\'wikiStaffArticle\',' + jsArg(page.id) + ');return false;">' + h(snapshot.title) + '</a></h2><p>' + h(snapshot.summary || '') + '</p><p class="field-desc">' + (published ? 'Publicado para todos' + (page.headRevisionId !== page.publishedRevisionId ? ' · Com alterações de trabalho' : '') : 'Rascunho · Somente equipe') + '</p></article>';
+    var actorChip = page.head.actor ? renderAuthorChip(page.head.actor, '', 'Revisão por') : '';
+    html += '<article class="builder-panel"><h2><a href="/wiki/rascunhos/' + ha(page.id) + '" onclick="navigate(\'wikiStaffArticle\',' + jsArg(page.id) + ');return false;">' + h(snapshot.title) + '</a></h2><p>' + h(snapshot.summary || '') + '</p><div class="card-author-row" style="gap:10px;"><span class="field-desc" style="margin:0;">' + (published ? 'Publicado para todos' + (page.headRevisionId !== page.publishedRevisionId ? ' · Com alterações de trabalho' : '') : 'Rascunho · Somente equipe') + '</span>' + actorChip + '</div></article>';
   });
   return html;
 }
@@ -2000,7 +2077,8 @@ function renderWikiStaffArticle() {
   if (state.error) return '<div class="alert alert-error">' + h(state.error) + ' <button class="btn" onclick="navigate(\'wikiStaffArticle\',' + jsArg(currentWikiPageId) + ')">Tentar novamente</button></div>';
   if (!state.article || state.article.id !== currentWikiPageId) return '<p>Carregando artigo da equipe…</p>';
   var page = state.article, snapshot = page.head.snapshot;
-  return '<div class="breadcrumb"><a onclick="navigate(\'wikiStaff\')">Wiki da equipe</a> / ' + h(snapshot.title) + '</div><div class="cat-header"><span>' + h(snapshot.title) + '</span><button class="btn" onclick="navigate(\'wikiEditor\',' + jsArg(page.id) + ')">Editar artigo</button><button class="btn btn-small" onclick="exportWikiArticleFile(' + jsArg(page.id) + ')">Exportar JSON da equipe</button></div><p class="alert alert-info">Versão de trabalho compartilhada com a equipe. Esta tela não altera a publicação pública.</p><p>' + h(snapshot.summary || '') + '</p>' + renderWikiSnapshot(snapshot, { toc: true });
+  var actorRow = page.head && page.head.actor ? '<div class="card-author-row" style="margin-bottom:12px;">' + renderAuthorChip(page.head.actor, '', 'Última revisão por') + '</div>' : '';
+  return '<div class="breadcrumb"><a onclick="navigate(\'wikiStaff\')">Wiki da equipe</a> / ' + h(snapshot.title) + '</div><div class="cat-header"><span>' + h(snapshot.title) + '</span><button class="btn" onclick="navigate(\'wikiEditor\',' + jsArg(page.id) + ')">Editar artigo</button><button class="btn btn-small" onclick="exportWikiArticleFile(' + jsArg(page.id) + ')">Exportar JSON da equipe</button></div><p class="alert alert-info">Versão de trabalho compartilhada com a equipe. Esta tela não altera a publicação pública.</p>' + actorRow + '<p>' + h(snapshot.summary || '') + '</p>' + renderWikiSnapshot(snapshot, { toc: true });
 }
 
 function renderWikiArticle() {
@@ -2029,6 +2107,12 @@ function renderWikiArticle() {
   }
   if (article.aliases && article.aliases.length) {
     html += '<p class="field-desc" style="margin-top:8px;">Também conhecido como: ' + article.aliases.map(h).join(', ') + '</p>';
+  }
+  if (article.author || article.publishedAt) {
+    html += '<div class="card-author-row" style="margin-top:10px;">';
+    if (article.author) html += renderAuthorChip(article.author, '', 'Publicado por') + ' ' + roleBadgeFromRole(article.author.role);
+    if (article.publishedAt) html += '<span class="field-desc" style="margin:0;">' + (article.author ? '&middot; ' : 'Publicado em ') + h(formatJoinDate(article.publishedAt)) + '</span>';
+    html += '</div>';
   }
   html += '</div>';
   html += renderWikiSnapshot(article, { public: true, toc: true });
@@ -2804,7 +2888,7 @@ function renderWikiEditorHistory(pageId) {
   html += '<ol>';
   wikiEditorHistory.items.forEach(function(revision) {
     html += '<li style="margin:10px 0;"><b>Revisão ' + Number(revision.sequence) + '</b> — ' + h(revision.editSummary || '')
-      + ' <span class="field-desc">' + h(revision.actor && revision.actor.username || 'Equipe') + ' · ' + h(formatJoinDate(revision.createdAt)) + '</span>';
+      + ' <span class="field-desc" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">' + renderAuthorChip(revision.actor, 'Equipe') + ' · ' + h(formatJoinDate(revision.createdAt)) + '</span>';
     if (!readWikiDraft('editor', pageId)) html += ' <button class="btn btn-small" onclick="restoreWikiRevision(' + jsArg(pageId) + ',' + jsArg(revision.id) + ')">Restaurar como rascunho</button>';
     html += '</li>';
   });
@@ -3443,7 +3527,7 @@ function renderWikiProposalList(items, staffQueue) {
   items.forEach(function(proposal) {
     html += '<li style="margin:10px 0;"><a onclick="navigate(\'wikiProposal\',' + jsArg(proposal.id) + ')">'
       + h(proposal.page && proposal.page.title || 'Artigo') + '</a> — ' + h(proposal.state)
-      + (staffQueue && proposal.proposer && proposal.proposer.username ? ' · ' + h(proposal.proposer.username) : '')
+      + (staffQueue && proposal.proposer && proposal.proposer.username ? ' · ' + renderAuthorChip(proposal.proposer) : '')
       + (proposal.stale ? ' · base desatualizada' : '') + '</li>';
   });
   return html + '</ul></div>';
@@ -3495,7 +3579,7 @@ function renderWikiProposal() {
   var html = '<div class="breadcrumb"><a onclick="navigate(\'wikiProposals\')">Propostas</a> / ' + h(proposal.page.title) + '</div>'
     + '<div class="cat-header"><span>' + h(proposal.page.title) + '</span><span class="tag">' + h(proposal.state) + '</span></div>'
     + '<div class="builder-panel"><p><b>Resumo:</b> ' + h(proposal.summary || '') + '</p>'
-    + '<p><b>Proponente:</b> ' + h(proposal.proposer && proposal.proposer.username || 'Membro') + '</p>'
+    + '<p style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><b>Proponente:</b> ' + renderAuthorChip(proposal.proposer, 'Membro') + '</p>'
     + '<p><b>Enviada:</b> ' + h(formatJoinDate(proposal.createdAt)) + '</p>';
   if (proposal.stale) html += '<p class="alert alert-error">A proposta usa uma publicação anterior e precisa ser revisada manualmente.</p>';
   if (proposal.reviewReason) html += '<p><b>Resposta da equipe:</b> ' + h(proposal.reviewReason) + '</p>';
@@ -3574,7 +3658,11 @@ function renderPersonagemView() {
   html += '<div class="custom-wiki-page' + (theme.fontFamily ? ' font-' + ha(theme.fontFamily) : '') + (theme.bgEffect ? ' bg-' + ha(theme.bgEffect) : '') + '" style="--page-accent:' + ha(pageAccent) + ';--page-accent-light:' + ha(pageAccent) + ';">';
 
   html += '<div class="char-sheet-head">';
-  html += '<h2>' + h(p.nome) + (p.titulo ? ' <em>&mdash; ' + h(p.titulo) + '</em>' : '') + '</h2>';
+  html += '<div><h2>' + h(p.nome) + (p.titulo ? ' <em>&mdash; ' + h(p.titulo) + '</em>' : '') + '</h2>';
+  if (p.author) {
+    html += '<div class="card-author-row" style="margin-top:6px;">' + renderAuthorChip(p.author, '', 'Ficha publicada por') + ' ' + roleBadgeFromRole(p.author.role) + '</div>';
+  }
+  html += '</div>';
   if (isModOrAdmin()) {
     html += '<div style="display:flex;gap:8px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button></div>';
   }
@@ -3903,7 +3991,10 @@ function renderCenas() {
       html += '</div>';
     }
     html += '<div class="cena-card-footer">';
+    html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
+    if (w.author) html += renderAuthorChip(w.author);
     html += '<span><b>' + turnsCount + '</b> ' + (turnsCount === 1 ? 'turno' : 'turnos') + '</span>';
+    html += '</div>';
     html += '<span style="color:#ffffff;font-weight:600;">Abrir &rarr;</span>';
     html += '</div></div></div>';
   });
@@ -4107,6 +4198,7 @@ function renderCenaView() {
     html += '</div>';
     html += '<h1>' + h(w.titulo) + '</h1>';
     if (w.subtitulo) html += '<div class="wiki-hero-subtitle">' + h(w.subtitulo) + '</div>';
+    if (w.author) html += '<div class="card-author-row" style="margin-top:8px;">' + renderAuthorChip(w.author, '', 'Cena por') + '</div>';
     html += '</div>';
     html += '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;">';
     if (theme.bgm) {
@@ -4124,7 +4216,7 @@ function renderCenaView() {
     html += '</div></div></div>';
   } else {
     html += '<div class="char-sheet-head">';
-    html += '<div><h2>' + h(w.titulo) + '</h2>' + (w.subtitulo ? '<div style="color:var(--text-secondary);font-size:14px;">' + h(w.subtitulo) + '</div>' : '') + '</div>';
+    html += '<div><h2>' + h(w.titulo) + '</h2>' + (w.subtitulo ? '<div style="color:var(--text-secondary);font-size:14px;">' + h(w.subtitulo) + '</div>' : '') + (w.author ? '<div class="card-author-row" style="margin-top:6px;">' + renderAuthorChip(w.author, '', 'Cena por') + '</div>' : '') + '</div>';
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
     if (isModOrAdmin()) {
@@ -4222,11 +4314,13 @@ function renderCenaView() {
     var bStyle = t.bannerStyle || 'panoramic';
     var fontCls = t.fontFamily ? (' font-' + ha(t.fontFamily)) : '';
 
+    var turnAvatarUrl = safeAvatarSrc(t.characterAvatar) || safeAvatarSrc(t.authorAvatar);
+
     html += '<article class="turn-card" style="--turn-accent:' + ha(tAccent) + ';">';
     html += '<div class="turn-top-bar">';
     html += '<div class="turn-identity">';
-    if (t.characterAvatar) {
-      html += '<img class="turn-avatar" src="' + ha(t.characterAvatar) + '" alt="' + ha(displayName) + '" onclick="openLightbox(' + jsArg(t.characterAvatar) + ',' + jsArg(displayName) + ')" style="cursor:zoom-in;">';
+    if (turnAvatarUrl) {
+      html += '<img class="turn-avatar" src="' + ha(turnAvatarUrl) + '" alt="' + ha(displayName) + '" onclick="openLightbox(' + jsArg(turnAvatarUrl) + ',' + jsArg(displayName) + ')" style="cursor:zoom-in;">';
     } else {
       html += '<div class="turn-avatar">' + h(initials) + '</div>';
     }
@@ -4234,7 +4328,7 @@ function renderCenaView() {
     html += '<div class="turn-char-name">' + h(displayName);
     if (t.characterTitle) html += ' <span class="turn-char-title">&middot; ' + h(t.characterTitle) + '</span>';
     html += '</div>';
-    html += '<div style="font-size:11.5px;color:var(--text-muted);">Jogador(a): <b style="color:var(--text-secondary);">' + h(t.authorName || 'Membro') + '</b> ' + roleBadgeFromRole(t.authorRole) + '</div>';
+    html += '<div class="turn-player-line">Jogador(a): ' + renderMiniAvatar(t.authorName || 'Membro', t.authorAvatar) + '<b style="color:var(--text-secondary);">' + h(t.authorName || 'Membro') + '</b> ' + roleBadgeFromRole(t.authorRole) + '</div>';
     html += '</div></div>';
 
     html += '<div class="turn-meta-right">';
@@ -4296,7 +4390,7 @@ function renderCenaView() {
   if (DB.session && !w.turnsReadOnly) {
     var chars = listaPersonagens();
     html += '<div class="builder-panel" id="new-turn-form" style="border-top:2px solid ' + ha(accent) + ';margin-top:26px;">';
-    html += '<div class="builder-panel-title"><span>Escrever Novo Turno na Cena</span><span style="font-size:12px;color:var(--text-secondary);">Postando como <b>' + h(DB.session.username) + '</b></span></div>';
+    html += '<div class="builder-panel-title"><span>Escrever Novo Turno na Cena</span><span style="font-size:12px;color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;">Postando como ' + renderMiniAvatar(DB.session.username, DB.session.avatar) + '<b>' + h(DB.session.username) + '</b></span></div>';
 
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:12px;">';
     html += '<div class="form-row" style="margin-bottom:0"><label>Preencher com Personagem da Wiki (Opcional)</label><select id="turn-char-preset" onchange="aplicarPresetPersonagemTurno(this.value)"><option value="">— Escolher personagem cadastrado ou digitar livremente —</option>';
@@ -4306,7 +4400,7 @@ function renderCenaView() {
     html += '</select></div>';
     html += '<div class="form-row" style="margin-bottom:0"><label>Nome do Personagem no Turno</label><input type="text" id="turn-char-name" placeholder="Ex: Shidō Akane (ou deixe em branco)"></div>';
     html += '<div class="form-row" style="margin-bottom:0"><label>Título / Epíteto do Personagem</label><input type="text" id="turn-char-title" placeholder="Ex: Filha da Tempestade"></div>';
-    html += '<div class="form-row" style="margin-bottom:0"><label>URL do Avatar no Turno</label><input type="text" id="turn-char-avatar" value="' + ha(DB.session.avatar || '') + '" placeholder="https://..."></div>';
+    html += '<div class="form-row" style="margin-bottom:0"><label>URL do Avatar no Turno (Opcional)</label><input type="text" id="turn-char-avatar" value="" placeholder="https://... (vazio usa sua foto de perfil)"></div>';
     html += '</div>';
 
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px;">';
@@ -5265,22 +5359,278 @@ function deletarCena(id) {
 
 // ==================== PERFIL, REGISTRO, SOBRE & ADMIN ====================
 
+function estimateBase64DecodedBytes(dataUrl) {
+  var idx = String(dataUrl || '').indexOf(',');
+  if (idx === -1) return Infinity;
+  var b64 = dataUrl.slice(idx + 1);
+  var padding = b64.slice(-2) === '==' ? 2 : (b64.slice(-1) === '=' ? 1 : 0);
+  return Math.floor((b64.length * 3) / 4) - padding;
+}
+
+function currentProfilePreviewSrc() {
+  var u = DB.session;
+  if (!u) return '';
+  if (pendingProfileAvatarUpload && safeProfilePreviewSrc(pendingProfileAvatarUpload)) {
+    return pendingProfileAvatarUpload;
+  }
+  if (pendingProfileAvatarCleared) return '';
+  var inputEl = document.getElementById('prof-avatar');
+  if (inputEl && typeof inputEl.value === 'string' && inputEl.value.trim()) {
+    return safeAvatarSrc(inputEl.value.trim());
+  }
+  return safeAvatarSrc(u.avatar || '');
+}
+
+function renderProfileAvatarPreviewMarkup(username, previewSrc) {
+  var safeSrc = safeProfilePreviewSrc(previewSrc);
+  if (safeSrc) {
+    return '<img class="avatar-preview" src="' + ha(safeSrc) + '" alt="' + ha(username || 'Avatar') + '">';
+  }
+  return '<div class="avatar-preview-ph">' + h(userInitials(username, 1)) + '</div>';
+}
+
+function profileAvatarStatusText() {
+  if (profileAvatarPreparing) return 'Processando imagem selecionada…';
+  if (pendingProfileAvatarUpload) return 'Nova foto pronta. Clique em "Salvar Alterações do Perfil" para confirmar.';
+  if (pendingProfileAvatarCleared) return 'A foto será removida ao salvar o perfil.';
+  var inputEl = document.getElementById('prof-avatar');
+  var typed = inputEl && typeof inputEl.value === 'string' ? inputEl.value.trim() : '';
+  if (typed) {
+    return safeAvatarSrc(typed)
+      ? 'Usando URL externa (HTTPS).'
+      : 'Informe uma URL iniciada por https:// ou envie uma imagem do dispositivo.';
+  }
+  if (DB.session && DB.session.avatar && DB.session.avatar.indexOf('/api/users/') === 0) {
+    return 'Foto enviada do seu dispositivo ativa.';
+  }
+  if (DB.session && safeAvatarSrc(DB.session.avatar)) {
+    return 'Foto de perfil ativa.';
+  }
+  return 'Formatos aceitos: PNG, JPG, WebP ou GIF (redimensionado automaticamente até 512 KB).';
+}
+
+function refreshProfileAvatarPreview() {
+  if (!DB.session) return;
+  var box = document.getElementById('prof-avatar-preview-box');
+  if (box) {
+    box.innerHTML = renderProfileAvatarPreviewMarkup(DB.session.username, currentProfilePreviewSrc());
+  }
+  var statusEl = document.getElementById('prof-avatar-status');
+  if (statusEl) {
+    statusEl.textContent = profileAvatarStatusText();
+  }
+}
+
+function onProfileAvatarUrlInput() {
+  var inputEl = document.getElementById('prof-avatar');
+  var val = inputEl && typeof inputEl.value === 'string' ? inputEl.value.trim() : '';
+  if (val) {
+    pendingProfileAvatarUpload = null;
+    pendingProfileAvatarCleared = false;
+  } else if (DB.session && DB.session.avatar && DB.session.avatar.indexOf('https://') === 0) {
+    pendingProfileAvatarCleared = true;
+  }
+  refreshProfileAvatarPreview();
+}
+
+function removerFotoPerfil() {
+  if (!DB.session) return;
+  pendingProfileAvatarUpload = null;
+  pendingProfileAvatarCleared = true;
+  var urlInput = document.getElementById('prof-avatar');
+  if (urlInput) urlInput.value = '';
+  var fileInput = document.getElementById('prof-avatar-file');
+  if (fileInput) fileInput.value = '';
+  refreshProfileAvatarPreview();
+  saveActiveResourceFormDraft();
+}
+
+function readDataUrlFromFile(file) {
+  return new Promise(function(resolve, reject) {
+    if (typeof window.FileReader !== 'function') {
+      reject(new Error('Seu navegador não suporta leitura de arquivos locais.'));
+      return;
+    }
+    var reader = new window.FileReader();
+    reader.onload = function() {
+      resolve(typeof reader.result === 'string' ? reader.result : '');
+    };
+    reader.onerror = function() {
+      reject(new Error('Não foi possível ler o arquivo selecionado.'));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function rasterizeAvatarDataUrl(sourceDataUrl) {
+  return new Promise(function(resolve, reject) {
+    if (typeof window.Image !== 'function' || typeof document.createElement !== 'function') {
+      if (DATA_AVATAR_PREVIEW_PATTERN.test(sourceDataUrl) && estimateBase64DecodedBytes(sourceDataUrl) <= 524288) {
+        resolve(sourceDataUrl);
+        return;
+      }
+      reject(new Error('Não foi possível processar a imagem neste ambiente.'));
+      return;
+    }
+    var img = new window.Image();
+    img.onload = function() {
+      var srcW = img.naturalWidth || img.width || 0;
+      var srcH = img.naturalHeight || img.height || 0;
+      if (!srcW || !srcH) {
+        reject(new Error('A imagem selecionada é inválida.'));
+        return;
+      }
+      var side = Math.min(srcW, srcH);
+      var sx = Math.floor((srcW - side) / 2);
+      var sy = Math.floor((srcH - side) / 2);
+      var targetSize = Math.min(256, side);
+      var canvas = document.createElement('canvas');
+      canvas.width = targetSize;
+      canvas.height = targetSize;
+      var ctx = canvas.getContext && canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Não foi possível preparar o recorte da foto.'));
+        return;
+      }
+      ctx.clearRect(0, 0, targetSize, targetSize);
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, targetSize, targetSize);
+
+      var candidates = [
+        function() { return canvas.toDataURL('image/webp', 0.86); },
+        function() { return canvas.toDataURL('image/webp', 0.72); },
+        function() {
+          ctx.globalCompositeOperation = 'destination-over';
+          ctx.fillStyle = '#0b0b0b';
+          ctx.fillRect(0, 0, targetSize, targetSize);
+          ctx.globalCompositeOperation = 'source-over';
+          return canvas.toDataURL('image/jpeg', 0.84);
+        },
+        function() { return canvas.toDataURL('image/jpeg', 0.68); },
+        function() { return canvas.toDataURL('image/png'); }
+      ];
+      for (var i = 0; i < candidates.length; i++) {
+        try {
+          var out = candidates[i]();
+          if (typeof out === 'string' && DATA_AVATAR_PREVIEW_PATTERN.test(out) && estimateBase64DecodedBytes(out) <= 524288) {
+            resolve(out);
+            return;
+          }
+        } catch (_) { /* Try next encoder candidate. */ }
+      }
+      reject(new Error('A imagem ficou acima do limite de 512 KB mesmo após compressão. Escolha outra imagem.'));
+    };
+    img.onerror = function() {
+      reject(new Error('Arquivo de imagem inválido ou corrompido.'));
+    };
+    img.src = sourceDataUrl;
+  });
+}
+
+function prepareProfileAvatarFile(file) {
+  if (!file) return Promise.reject(new Error('Nenhum arquivo selecionado.'));
+  var mime = String(file.type || '').toLowerCase();
+  var name = String(file.name || '').toLowerCase();
+  var allowedMime = mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/webp' || mime === 'image/gif';
+  var allowedExt = /\.(png|jpe?g|webp|gif)$/i.test(name);
+  if (!allowedMime && !allowedExt) {
+    return Promise.reject(new Error('Formato não suportado. Envie PNG, JPG, WebP ou GIF.'));
+  }
+  if (typeof file.size === 'number' && file.size > 8 * 1024 * 1024) {
+    return Promise.reject(new Error('Escolha uma imagem de até 8 MB.'));
+  }
+  return readDataUrlFromFile(file).then(function(rawDataUrl) {
+    if ((mime === 'image/gif' || /\.gif$/i.test(name))
+        && DATA_AVATAR_PREVIEW_PATTERN.test(rawDataUrl)
+        && estimateBase64DecodedBytes(rawDataUrl) <= 524288) {
+      return rawDataUrl;
+    }
+    return rasterizeAvatarDataUrl(rawDataUrl);
+  });
+}
+
+function onProfileAvatarFileChange(inputEl) {
+  var file = inputEl && inputEl.files && inputEl.files[0];
+  if (!file) return Promise.resolve();
+  profileAvatarPreparing = true;
+  refreshProfileAvatarPreview();
+  return prepareProfileAvatarFile(file).then(function(dataUrl) {
+    profileAvatarPreparing = false;
+    pendingProfileAvatarUpload = dataUrl;
+    pendingProfileAvatarCleared = false;
+    var urlInput = document.getElementById('prof-avatar');
+    if (urlInput) urlInput.value = '';
+    if (inputEl) inputEl.value = '';
+    refreshProfileAvatarPreview();
+    saveActiveResourceFormDraft();
+  }).catch(function(err) {
+    profileAvatarPreparing = false;
+    if (inputEl) inputEl.value = '';
+    refreshProfileAvatarPreview();
+    showAlert((err && err.message) ? err.message : 'Não foi possível carregar a foto selecionada.', 'error');
+  });
+}
+
+function syncCachedAuthorData(updatedUser) {
+  if (!updatedUser || !updatedUser.id) return;
+  var uid = String(updatedUser.id);
+  var nextAuthor = {
+    id: uid,
+    username: updatedUser.username,
+    avatar: updatedUser.avatar || '',
+    title: updatedUser.title || 'Membro',
+    role: updatedUser.role || 'member'
+  };
+  if (Array.isArray(serverPersonagens)) {
+    serverPersonagens.forEach(function(p) {
+      if (p && (String(p.authorId || '') === uid || (p.author && String(p.author.id) === uid))) {
+        p.author = Object.assign({}, nextAuthor);
+      }
+    });
+  }
+  if (Array.isArray(serverWikiPosts)) {
+    serverWikiPosts.forEach(function(w) {
+      if (!w) return;
+      if (String(w.authorId || '') === uid || (w.author && String(w.author.id) === uid)) {
+        w.author = Object.assign({}, nextAuthor);
+      }
+      if (Array.isArray(w.turns)) {
+        w.turns.forEach(function(t) {
+          if (t && String(t.authorId || '') === uid) {
+            t.authorAvatar = updatedUser.avatar || '';
+            t.authorRole = updatedUser.role || t.authorRole;
+            t.authorName = updatedUser.username || t.authorName;
+          }
+        });
+      }
+    });
+  }
+  serverWikiPages = null;
+  currentWikiArticle = null;
+  wikiStaffState = { items: null, article: null, loading: false, error: null };
+  wikiProposalState.loaded = false;
+  wikiProposalDetail = null;
+  serverForumThread = null;
+  serverForumPosts = null;
+}
+
 function renderPerfil() {
   if (!DB.session) {
     return '<div class="alert alert-info"><span>Você não está logado.</span><div><a class="btn btn-small btn-primary" onclick="showLoginModal()">Entrar</a> <a class="btn btn-small" onclick="navigate(\'registro\')">Cadastrar</a></div></div>';
   }
   var u = DB.session;
+  var initialExternalAvatar = (!pendingProfileAvatarUpload && !pendingProfileAvatarCleared && u.avatar && u.avatar.indexOf('https://') === 0)
+    ? u.avatar
+    : '';
+  var previewSrc = pendingProfileAvatarUpload
+    ? pendingProfileAvatarUpload
+    : (pendingProfileAvatarCleared ? '' : safeAvatarSrc(u.avatar || ''));
 
   var html = '<div class="breadcrumb">Início / Perfil</div>';
   html += '<div class="cat-header"><span>Perfil de ' + h(u.username) + '</span><button class="btn btn-danger btn-small" onclick="doLogout()">Sair da conta</button></div>';
 
   html += '<div class="profile-grid">';
   html += '<div class="profile-avatar-card">';
-  if (u.avatar) {
-    html += '<img class="avatar-preview" src="' + ha(u.avatar) + '" alt="' + ha(u.username) + '">';
-  } else {
-    html += '<div class="avatar-preview-ph">' + h(u.username.substring(0, 1)) + '</div>';
-  }
+  html += '<div id="prof-avatar-preview-box">' + renderProfileAvatarPreviewMarkup(u.username, previewSrc) + '</div>';
   html += '<div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">' + h(u.username) + '</div>';
   html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">' + h(u.title || 'Membro') + '</div>';
   html += '<div style="margin-bottom:14px;">' + badgeHtml(u) + '</div>';
@@ -5296,9 +5646,17 @@ function renderPerfil() {
   html += '<div>';
   html += '<div class="builder-panel">';
   html += '<div class="builder-panel-title"><span>Editar Identidade &amp; Credenciais</span></div>';
+  html += '<div class="form-row"><label>Foto de Perfil</label>';
+  html += '<div class="avatar-upload-actions">';
+  html += '<label class="btn btn-small" for="prof-avatar-file" style="margin:0;cursor:pointer;">Enviar foto do dispositivo</label>';
+  html += '<input type="file" id="prof-avatar-file" class="sr-only" accept="image/png,image/jpeg,image/webp,image/gif" onchange="onProfileAvatarFileChange(this)">';
+  html += '<button type="button" class="btn btn-small" onclick="removerFotoPerfil()">Remover foto</button>';
+  html += '</div>';
+  html += '<div id="prof-avatar-status" class="field-desc" style="margin-top:6px;">' + h(profileAvatarStatusText()) + '</div>';
+  html += '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
   html += '<div class="form-row"><label>Título Pessoal / Epíteto</label><input type="text" id="prof-title" value="' + ha(u.title || '') + '" placeholder="Ex: Cronista do Vazio"></div>';
-  html += '<div class="form-row"><label>URL do Avatar (Imagem)</label><input type="text" id="prof-avatar" value="' + ha(u.avatar || '') + '" placeholder="https://..."></div>';
+  html += '<div class="form-row"><label>Ou URL Externa do Avatar (HTTPS)</label><input type="text" id="prof-avatar" value="' + ha(initialExternalAvatar) + '" placeholder="https://..." oninput="onProfileAvatarUrlInput()"></div>';
   html += '</div>';
   html += '<div class="form-row"><label>Biografia / Assinatura de Perfil</label><textarea id="prof-bio" rows="3" placeholder="Escreva uma breve apresentação ou citação do seu perfil...">' + h(u.bio || '') + '</textarea></div>';
   html += '<div class="form-row"><label>Senha atual (obrigatória para trocar a senha)</label><input type="password" id="prof-current-password" autocomplete="current-password"></div>';
@@ -5314,18 +5672,34 @@ function renderPerfil() {
 
 function salvarEdicaoPerfil() {
   if (!DB.session) return;
-  var title = (document.getElementById('prof-title') || {}).value.trim();
-  var avatar = (document.getElementById('prof-avatar') || {}).value.trim();
-  var bio = (document.getElementById('prof-bio') || {}).value.trim();
-  var currentPassword = (document.getElementById('prof-current-password') || {}).value;
-  var newPassword = (document.getElementById('prof-password') || {}).value;
+  if (profileAvatarPreparing) {
+    showAlert('Aguarde o processamento da imagem antes de salvar.', 'error');
+    return;
+  }
+  var title = ((document.getElementById('prof-title') || {}).value || '').trim();
+  var typedAvatar = ((document.getElementById('prof-avatar') || {}).value || '').trim();
+  var bio = ((document.getElementById('prof-bio') || {}).value || '').trim();
+  var currentPassword = (document.getElementById('prof-current-password') || {}).value || '';
+  var newPassword = (document.getElementById('prof-password') || {}).value || '';
+
+  var resolvedAvatar = '';
+  if (!pendingProfileAvatarUpload) {
+    if (typedAvatar) {
+      resolvedAvatar = typedAvatar;
+    } else if (!pendingProfileAvatarCleared && DB.session.avatar && DB.session.avatar.indexOf('/api/users/') === 0) {
+      resolvedAvatar = DB.session.avatar;
+    }
+  }
 
   var payload = {
     title: title || 'Membro',
-    avatar: avatar,
+    avatar: resolvedAvatar,
     bio: bio,
     expectedVersion: DB.session.version
   };
+  if (pendingProfileAvatarUpload) {
+    payload.avatarUpload = pendingProfileAvatarUpload;
+  }
   if (newPassword && newPassword.trim()) {
     payload.currentPassword = currentPassword;
     payload.newPassword = newPassword;
@@ -5341,10 +5715,16 @@ function salvarEdicaoPerfil() {
       showAlert(err, 'error');
       return;
     }
+    pendingProfileAvatarUpload = null;
+    pendingProfileAvatarCleared = false;
     clearResourceFormDraft(descriptor);
     applyServerSession(data.user);
-    document.getElementById('prof-current-password').value = '';
-    document.getElementById('prof-password').value = '';
+    syncCachedAuthorData(data.user);
+    updateTopBar();
+    var curPwdEl = document.getElementById('prof-current-password');
+    var newPwdEl = document.getElementById('prof-password');
+    if (curPwdEl) curPwdEl.value = '';
+    if (newPwdEl) newPwdEl.value = '';
     render();
     showAlert('Perfil atualizado com sucesso.', 'success');
   });
@@ -5376,12 +5756,7 @@ function renderSobre() {
   html += '<div class="cat-header"><span>Equipe Atual</span></div>';
   html += '<div class="char-grid">';
   DB.equipe.forEach(function(m) {
-    html += '<div class="char-card" style="cursor:default;">';
-    if (m.foto) {
-      html += '<img class="thumb" src="' + ha(m.foto) + '" alt="' + ha(m.nome) + '">';
-    } else {
-      html += '<div class="thumb-ph">' + h(m.nome.substring(0, 1)) + '</div>';
-    }
+    html += '<div class="char-card team-card" style="cursor:default;">';
     html += '<div class="char-card-info"><h4>' + h(m.nome) + '</h4><p>' + h(m.cargo) + '</p></div>';
     html += '</div>';
   });
@@ -6021,6 +6396,9 @@ function applyServerSession(serverUser) {
   var previousId = DB.session && (DB.session.serverId || DB.session.id);
   var previousRole = DB.session && DB.session.role;
   if (!serverUser) {
+    pendingProfileAvatarUpload = null;
+    pendingProfileAvatarCleared = false;
+    profileAvatarPreparing = false;
     if (previousId) {
       clearForumDraftEditors();
       clearWikiTransientState();
@@ -6031,6 +6409,9 @@ function applyServerSession(serverUser) {
   }
   var safeUser = window.Aetherverse.setSessionUser(serverUser);
   if (!safeUser || typeof safeUser.id !== 'string') {
+    pendingProfileAvatarUpload = null;
+    pendingProfileAvatarCleared = false;
+    profileAvatarPreparing = false;
     if (previousId) {
       clearForumDraftEditors();
       clearWikiTransientState();
@@ -6039,6 +6420,9 @@ function applyServerSession(serverUser) {
     return;
   }
   if (previousId && String(previousId) !== safeUser.id) {
+    pendingProfileAvatarUpload = null;
+    pendingProfileAvatarCleared = false;
+    profileAvatarPreparing = false;
     clearForumDraftEditors();
     clearWikiTransientState();
   } else if (['admin', 'moderador'].includes(previousRole) && !['admin', 'moderador'].includes(safeUser.role)) {

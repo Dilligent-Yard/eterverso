@@ -1,6 +1,7 @@
 'use strict';
 
 const sanitize = require('sanitize-html');
+const { isUserAvatarPath } = require('./avatar');
 
 const MAX_HTML_BYTES = 500_000;
 const MAX_URL_LENGTH = 2_048;
@@ -265,6 +266,9 @@ function sanitizeUrl(value, options = {}) {
   if (!isLocal || parsed.protocol !== 'https:') return null;
   if (options.image) {
     const allowedPaths = normalizeAllowedImagePaths(options.allowedImagePaths);
+    if (!parsed.hash && isUserAvatarPath(parsed.pathname, parsed.search)) {
+      return `${parsed.pathname.toLowerCase()}${parsed.search}`;
+    }
     if (!allowedPaths.includes(parsed.pathname) || parsed.hash) return null;
     return `${parsed.pathname}${parsed.search}`;
   }

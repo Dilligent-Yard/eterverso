@@ -3,6 +3,7 @@
 const express = require('express');
 const { createHash } = require('node:crypto');
 const { sanitizeUrl } = require('./content');
+const { userAvatarPath } = require('./avatar');
 const { publicAuthor } = require('./dto');
 const { ApiError } = require('./errors');
 const {
@@ -23,7 +24,8 @@ const PROPOSAL_COLUMNS = `
   proposal.previous_proposal_id, proposal.review_reason,
   proposal.created_at AS proposal_created_at,
   proposal.updated_at AS proposal_updated_at,
-  proposer.username AS proposer_username, proposer.avatar AS proposer_avatar,
+  proposer.username AS proposer_username,
+  CASE WHEN proposer.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(proposer.id::text) || '/avatar?v=' || proposer.version::text ELSE proposer.avatar END AS proposer_avatar,
   proposer.title AS proposer_title, proposer.role AS proposer_role,
   base.snapshot AS base_snapshot,
   page.published_revision_id AS current_published_revision_id,
@@ -374,7 +376,9 @@ function revisionDto(row, { actor, proposer } = {}) {
     actor: actor ? publicAuthor({
       id: actor.id,
       username: actor.username,
-      avatar: sanitizeUrl(actor.avatar || '', { image: true }) || '',
+      avatar: typeof actor.avatar === 'string' && actor.avatar.startsWith('data:image/')
+        ? userAvatarPath(actor.id, actor.version)
+        : (sanitizeUrl(actor.avatar || '', { image: true }) || ''),
       title: actor.title || '',
       role: actor.role,
     }) : null,

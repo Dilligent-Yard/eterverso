@@ -4,6 +4,7 @@ const express = require('express');
 const cookieSession = require('cookie-session');
 const bcrypt = require('bcryptjs');
 const { createAuth, createCookieSessionOptions, selfUser } = require('./auth');
+const { isOwnAvatarUrl, isUserAvatarPath, parseStoredAvatarData } = require('./avatar');
 const { publicAuthor } = require('./dto');
 const { ApiError, errorMiddleware, sendError } = require('./errors');
 const { assertObjectShape, expectedVersion, normalizeString, validateUuid } = require('./validation');
@@ -165,7 +166,9 @@ function createApp(options) {
       }
 
       const rows = await sql`
-        SELECT id, username, email, password_hash, avatar, title, bio, role, posts_count,
+        SELECT id, username, email, password_hash,
+               CASE WHEN avatar LIKE 'data:image/%' THEN '/api/users/' || lower(id::text) || '/avatar?v=' || version::text ELSE avatar END AS avatar,
+               title, bio, role, posts_count,
                (SELECT count(*)::integer FROM posts p WHERE p.author_id = users.id AND p.deleted_at IS NULL) AS forum_posts_count,
                join_date,
                disabled_at, auth_version, version
@@ -205,11 +208,44 @@ function createApp(options) {
     }
   });
 
+  app.get('/api/users/:id/avatar', async function (req, res, next) {
+    try {
+      const id = validateUuid(req.params.id, 'id');
+      const rows = await sql`
+        SELECT avatar, version, disabled_at
+        FROM users WHERE id = ${id} LIMIT 1`;
+      if (!rows.length || rows[0].disabled_at !== null) {
+        throw new ApiError(404, 'NOT_FOUND', 'A imagem de perfil solicitada não foi encontrada.');
+      }
+      const parsed = parseStoredAvatarData(rows[0].avatar);
+      if (!parsed) {
+        throw new ApiError(404, 'NOT_FOUND', 'A imagem de perfil solicitada não foi encontrada.');
+      }
+      const etag = `"avatar-${id}-${rows[0].version}"`;
+      const ifNoneMatch = req.get('If-None-Match');
+      if (typeof ifNoneMatch === 'string' && ifNoneMatch.split(',').some((item) => item.trim().replace(/^W\//, '') === etag)) {
+        return res.status(304).set('ETag', etag).end();
+      }
+      return res.status(200)
+        .set('Content-Type', parsed.mimeType)
+        .set('Content-Length', String(parsed.buffer.length))
+        .set('ETag', etag)
+        .set('X-Content-Type-Options', 'nosniff')
+        .set('Content-Security-Policy', "default-src 'none'; sandbox")
+        .set('Cache-Control', 'public, max-age=86400')
+        .send(parsed.buffer);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get('/api/users/:id', async function (req, res, next) {
     try {
       const id = validateUuid(req.params.id, 'id');
       const rows = await sql`
-        SELECT u.id, u.username, u.avatar, u.title, u.role,
+        SELECT u.id, u.username,
+          CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS avatar,
+          u.title, u.role,
           (SELECT count(*)::integer FROM posts p
            WHERE p.author_id = u.id AND p.deleted_at IS NULL) AS forum_posts_count
         FROM users u WHERE u.id = ${id} LIMIT 1`;
@@ -223,9 +259,23 @@ function createApp(options) {
   app.put('/api/auth/profile', async function (req, res, next) {
     try {
       assertObjectShape(req.body, {
-        allowedKeys: ['avatar', 'title', 'bio', 'currentPassword', 'newPassword', 'expectedVersion'],
+        allowedKeys: ['avatar', 'avatarUpload', 'title', 'bio', 'currentPassword', 'newPassword', 'expectedVersion'],
       });
       const version = expectedVersion(req.body.expectedVersion);
+      const hasAvatarUpload = Object.hasOwn(req.body, 'avatarUpload')
+        && req.body.avatarUpload !== null
+        && req.body.avatarUpload !== '';
+      let parsedUpload = null;
+      if (hasAvatarUpload) {
+        parsedUpload = parseStoredAvatarData(req.body.avatarUpload);
+        if (!parsedUpload) {
+          throw new ApiError(400, 'INVALID_AVATAR_UPLOAD', 'Envie uma imagem PNG, JPEG, WebP ou GIF válida de até 512 KB.');
+        }
+      } else if (Object.hasOwn(req.body, 'avatarUpload')
+          && req.body.avatarUpload !== null
+          && typeof req.body.avatarUpload !== 'string') {
+        throw new ApiError(400, 'INVALID_AVATAR_UPLOAD', 'Envie uma imagem PNG, JPEG, WebP ou GIF válida de até 512 KB.');
+      }
       const changePassword = Object.hasOwn(req.body, 'newPassword') && req.body.newPassword !== '';
       if (changePassword && (typeof req.body.currentPassword !== 'string' || !req.body.currentPassword)) {
         throw new ApiError(400, 'CURRENT_PASSWORD_REQUIRED', 'Informe a senha atual para alterá-la.');
@@ -250,11 +300,32 @@ function createApp(options) {
         if (changePassword && !(await bcrypt.compare(req.body.currentPassword, current.password_hash))) {
           throw new ApiError(403, 'CURRENT_PASSWORD_INVALID', 'A senha atual está incorreta.');
         }
-        const avatarInput = Object.hasOwn(req.body, 'avatar')
-          ? normalizeString(req.body.avatar, { field: 'avatar', min: 0, max: 500 })
-          : (current.avatar || '');
-        const avatar = avatarInput === '' ? '' : sanitizeUrl(avatarInput, { image: true });
-        if (avatarInput && !avatar) throw new ApiError(400, 'INVALID_AVATAR', 'A imagem do perfil deve usar uma URL HTTPS permitida.');
+        let avatar;
+        if (parsedUpload) {
+          avatar = parsedUpload.dataUrl;
+        } else if (Object.hasOwn(req.body, 'avatar')) {
+          const avatarInput = normalizeString(req.body.avatar, { field: 'avatar', min: 0, max: 500 });
+          if (avatarInput === '') {
+            avatar = '';
+          } else if (isOwnAvatarUrl(avatarInput, actor.id)
+              && typeof current.avatar === 'string'
+              && current.avatar.startsWith('data:image/')) {
+            avatar = current.avatar;
+          } else {
+            let parsedUrl = null;
+            try { parsedUrl = new URL(avatarInput, 'https://aetherverse.invalid'); } catch {}
+            const isLocalAvatar = parsedUrl
+              && parsedUrl.origin === 'https://aetherverse.invalid'
+              && isUserAvatarPath(parsedUrl.pathname, parsedUrl.search);
+            const safeAvatar = isLocalAvatar ? null : sanitizeUrl(avatarInput, { image: true });
+            if (!safeAvatar) {
+              throw new ApiError(400, 'INVALID_AVATAR', 'A imagem do perfil deve usar uma URL HTTPS permitida.');
+            }
+            avatar = safeAvatar;
+          }
+        } else {
+          avatar = current.avatar || '';
+        }
         const title = Object.hasOwn(req.body, 'title')
           ? (normalizeString(req.body.title, { field: 'title', min: 0, max: 80 }) || 'Membro')
           : current.title;
@@ -307,6 +378,14 @@ function createApp(options) {
     return {
       id: p.id,
       version: Number(p.version) || 1,
+      authorId: p.author_id ? validateUuid(p.author_id) : null,
+      author: p.author_id && p.author_username ? publicAuthor({
+        id: p.author_id,
+        username: p.author_username,
+        avatar: safeStoredImage(p.author_avatar),
+        title: p.author_title || '',
+        role: p.author_role,
+      }) : null,
       createdAt: p.created_at,
       updatedAt: p.updated_at,
       nome: p.nome,
@@ -323,6 +402,18 @@ function createApp(options) {
       blocks: safeStoredBlocks(p.blocks),
       theme: safeStoredTheme(p.theme),
     };
+  }
+
+  async function loadPersonagemWithAuthor(executor, id) {
+    const rows = await executor`
+      SELECT p.*, u.username AS author_username,
+        CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
+        u.title AS author_title, u.role AS author_role
+      FROM personagens p
+      LEFT JOIN users u ON u.id = p.author_id
+      WHERE p.id = ${id}
+      LIMIT 1`;
+    return rows[0] || null;
   }
 
   function sanitizeStats(raw) {
@@ -470,7 +561,14 @@ function createApp(options) {
 
   app.get('/api/personagens', async function (req, res) {
     try {
-      const rows = await sql`SELECT * FROM personagens WHERE hidden_at IS NULL ORDER BY created_at ASC`;
+      const rows = await sql`
+        SELECT p.*, u.username AS author_username,
+          CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
+          u.title AS author_title, u.role AS author_role
+        FROM personagens p
+        LEFT JOIN users u ON u.id = p.author_id
+        WHERE p.hidden_at IS NULL
+        ORDER BY p.created_at ASC`;
       res.json({ personagens: rows.map(publicPersonagem) });
     } catch (err) {
       return sendError(res, err);
@@ -479,7 +577,15 @@ function createApp(options) {
 
   app.get('/api/staff/personagens/hidden', auth.requireIdentity, auth.requireRole('admin', 'moderador'), async function (_req, res) {
     try {
-      const rows = await sql`SELECT * FROM personagens WHERE hidden_at IS NOT NULL ORDER BY hidden_at DESC LIMIT 100`;
+      const rows = await sql`
+        SELECT p.*, u.username AS author_username,
+          CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
+          u.title AS author_title, u.role AS author_role
+        FROM personagens p
+        LEFT JOIN users u ON u.id = p.author_id
+        WHERE p.hidden_at IS NOT NULL
+        ORDER BY p.hidden_at DESC
+        LIMIT 100`;
       res.json({ data: rows.map(publicPersonagem) });
     } catch (err) {
       return sendError(res, err);
@@ -489,11 +595,14 @@ function createApp(options) {
   app.post('/api/personagens', async function (req, res) {
     try {
       const v = lerPersonagemBody(req.body);
-      const rows = await withStaffTransaction(req, (tx, user) => tx`
-        INSERT INTO personagens (author_id, nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, skills, mascara_tier, blocks, theme)
-        VALUES (${user.id}, ${v.nome}, ${v.categoria}, ${v.titulo}, ${v.raca}, ${v.faccao}, ${v.status}, ${v.imagem}, ${v.descricao}, ${tx.json(v.stats)}, ${tx.json(v.skills)}, ${v.mascaraTier}, ${tx.json(v.blocks)}, ${tx.json(v.theme)})
-        RETURNING *`);
-      res.status(201).json({ personagem: publicPersonagem(rows[0]) });
+      const row = await withStaffTransaction(req, async (tx, user) => {
+        const inserted = await tx`
+          INSERT INTO personagens (author_id, nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, skills, mascara_tier, blocks, theme)
+          VALUES (${user.id}, ${v.nome}, ${v.categoria}, ${v.titulo}, ${v.raca}, ${v.faccao}, ${v.status}, ${v.imagem}, ${v.descricao}, ${tx.json(v.stats)}, ${tx.json(v.skills)}, ${v.mascaraTier}, ${tx.json(v.blocks)}, ${tx.json(v.theme)})
+          RETURNING id`;
+        return loadPersonagemWithAuthor(tx, inserted[0].id);
+      });
+      res.status(201).json({ personagem: publicPersonagem(row) });
     } catch (err) {
       return sendError(res, err);
     }
@@ -509,22 +618,24 @@ function createApp(options) {
       const body = { ...req.body };
       delete body.expectedVersion;
       const v = lerPersonagemBody(body);
-      const rows = await withStaffTransaction(req, async (tx) => {
+      const row = await withStaffTransaction(req, async (tx) => {
         const current = await tx`SELECT id, version, hidden_at FROM personagens WHERE id = ${id} FOR UPDATE`;
         if (!current.length || current[0].hidden_at) throw new ApiError(404, 'NOT_FOUND', 'Personagem não encontrado.');
         if (Number(current[0].version) !== version) throw new ApiError(409, 'STALE_VERSION', 'A ficha mudou. Atualize e tente novamente.');
         if (version >= 2147483647) throw new ApiError(409, 'VERSION_EXHAUSTED', 'A ficha atingiu o limite de versões.');
-        return tx`
+        const updated = await tx`
         UPDATE personagens SET
           nome = ${v.nome}, categoria = ${v.categoria}, titulo = ${v.titulo}, raca = ${v.raca},
           faccao = ${v.faccao}, status = ${v.status}, imagem = ${v.imagem}, descricao = ${v.descricao},
           stats = ${tx.json(v.stats)}, skills = ${tx.json(v.skills)}, mascara_tier = ${v.mascaraTier},
           blocks = ${tx.json(v.blocks)}, theme = ${tx.json(v.theme)}, version = version + 1, updated_at = now()
         WHERE id = ${id} AND version = ${version} AND hidden_at IS NULL
-        RETURNING *`;
+        RETURNING id`;
+        if (!updated.length) return null;
+        return loadPersonagemWithAuthor(tx, updated[0].id);
       });
-      if (rows.length === 0) return res.status(404).json({ error: 'Personagem não encontrado.' });
-      res.json({ personagem: publicPersonagem(rows[0]) });
+      if (!row) return res.status(404).json({ error: 'Personagem não encontrado.' });
+      res.json({ personagem: publicPersonagem(row) });
     } catch (err) {
       return sendError(res, err);
     }
@@ -555,16 +666,18 @@ function createApp(options) {
       const id = validateUuid(req.params.id);
       assertObjectShape(req.body, { allowedKeys: ['expectedVersion'] });
       const version = expectedVersion(req.body.expectedVersion);
-      const rows = await withStaffTransaction(req, async (tx) => {
+      const row = await withStaffTransaction(req, async (tx) => {
         const current = await tx`SELECT version, hidden_at FROM personagens WHERE id = ${id} FOR UPDATE`;
-        if (!current.length || !current[0].hidden_at) return [];
+        if (!current.length || !current[0].hidden_at) return null;
         if (Number(current[0].version) !== version) throw new ApiError(409, 'STALE_VERSION', 'A ficha mudou. Atualize e tente novamente.');
         if (version >= 2147483647) throw new ApiError(409, 'VERSION_EXHAUSTED', 'A ficha atingiu o limite de versões.');
-        return tx`UPDATE personagens SET hidden_at = NULL, version = version + 1, updated_at = now()
-          WHERE id = ${id} AND version = ${version} RETURNING *`;
+        const updated = await tx`UPDATE personagens SET hidden_at = NULL, version = version + 1, updated_at = now()
+          WHERE id = ${id} AND version = ${version} RETURNING id`;
+        if (!updated.length) return null;
+        return loadPersonagemWithAuthor(tx, updated[0].id);
       });
-      if (!rows.length) return res.status(404).json({ error: 'Personagem oculto não encontrado.' });
-      res.json({ data: publicPersonagem(rows[0]) });
+      if (!row) return res.status(404).json({ error: 'Personagem oculto não encontrado.' });
+      res.json({ data: publicPersonagem(row) });
     } catch (err) {
       return sendError(res, err);
     }
@@ -578,6 +691,7 @@ function createApp(options) {
       version: Number(w.version) || 1,
       turnsReadOnly: w.turns_read_only === true,
       authorId: w.author_id,
+      author: w.public_author || null,
       titulo: w.titulo,
       subtitulo: w.subtitulo || '',
       categoria: w.categoria || 'Cena de RPG',
@@ -603,6 +717,7 @@ function createApp(options) {
       return { url: safeUrl, caption: String((image && image.caption) || '').slice(0, 240) };
     }).filter(Boolean) : [];
     const authorId = typeof turn.authorId === 'string' && UUID_RE.test(turn.authorId) ? turn.authorId : null;
+    const authorRole = ['member', 'moderador', 'admin'].includes(turn.authorRole) ? turn.authorRole : 'member';
     const bannerStyle = ['panoramic', 'full', 'side'].includes(turn.bannerStyle) ? turn.bannerStyle : 'panoramic';
     const fontFamily = ['serif', 'sans', 'mono'].includes(turn.fontFamily) ? turn.fontFamily : 'serif';
     const accentColor = /^#(?:[\da-f]{3}|[\da-f]{6})$/i.test(turn.accentColor || '') ? turn.accentColor : '';
@@ -610,7 +725,8 @@ function createApp(options) {
       id: typeof turn.id === 'string' || typeof turn.id === 'number' ? String(turn.id).slice(0, 80) : '',
       authorId,
       authorName: String(turn.authorName || 'Autoria não identificada').slice(0, 60),
-      authorRole: 'member',
+      authorRole,
+      authorAvatar: safeStoredImage(turn.authorAvatar),
       characterName: String(turn.characterName || '').slice(0, 100),
       characterTitle: String(turn.characterTitle || '').slice(0, 120),
       characterAvatar: safeStoredImage(turn.characterAvatar),
@@ -631,12 +747,33 @@ function createApp(options) {
   async function publicWikiPostsWithTurns(executor, scenes) {
     if (!scenes.length) return [];
     const ids = scenes.map((scene) => scene.id);
+    const authorIds = [...new Set(scenes.map((scene) => scene.author_id).filter((value) => typeof value === 'string' && UUID_RE.test(value)))];
+    const authorRows = authorIds.length
+      ? await executor`
+          SELECT u.id, u.username,
+            CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS avatar,
+            u.title, u.role
+          FROM users u
+          WHERE u.id = ANY(${executor.array(authorIds, 2950)})`
+      : [];
+    const authorsById = new Map();
+    authorRows.forEach((row) => {
+      if (!row.id || !row.username) return;
+      authorsById.set(String(row.id).toLowerCase(), publicAuthor({
+        id: row.id,
+        username: row.username,
+        avatar: safeStoredImage(row.avatar),
+        title: row.title || '',
+        role: row.role,
+      }));
+    });
     const markers = await executor`
       SELECT scene_id FROM scene_turn_migrations
       WHERE scene_id = ANY(${executor.array(ids, 2950)})`;
     const normalized = new Set(markers.map((row) => String(row.scene_id)));
     const childTurns = await executor`
-      SELECT st.*, u.username AS author_username
+      SELECT st.*, u.username AS author_username, u.role AS author_role,
+        CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar
       FROM scene_turns st LEFT JOIN users u ON u.id = st.author_id
       WHERE st.scene_id = ANY(${executor.array(ids, 2950)}) AND st.deleted_at IS NULL
       ORDER BY st.scene_id ASC, st.ordinal ASC`;
@@ -647,6 +784,8 @@ function createApp(options) {
         id: row.legacy_id || row.id,
         authorId: row.author_id,
         authorName: row.author_username || row.legacy_author_label || 'Autoria não identificada',
+        authorRole: row.author_role,
+        authorAvatar: row.author_avatar,
         content: row.content,
         date: presentation.date || (row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at || '')),
       }));
@@ -659,9 +798,10 @@ function createApp(options) {
         ? grouped.get(String(scene.id))
         : (Array.isArray(scene.turns) ? scene.turns.map((item) => {
           const turn = safeStoredTurn(item);
-          return turn ? Object.assign(turn, { authorId: null, version: 1, legacyReadOnly: true }) : null;
+          return turn ? Object.assign(turn, { authorId: null, authorAvatar: '', version: 1, legacyReadOnly: true }) : null;
         }).filter(Boolean) : []);
       return publicWikiPost(Object.assign({}, scene, {
+        public_author: scene.author_id ? (authorsById.get(String(scene.author_id).toLowerCase()) || null) : null,
         public_turns: publicTurns,
         turns_read_only: !isNormalized,
       }));
@@ -730,6 +870,7 @@ function createApp(options) {
     delete presentation.authorId;
     delete presentation.authorName;
     delete presentation.authorRole;
+    delete presentation.authorAvatar;
     delete presentation.content;
     return presentation;
   }

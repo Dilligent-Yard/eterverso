@@ -74,9 +74,13 @@ function createWikiRouter({ sql, auth } = {}) {
     // or pagination can reveal anything about drafts or staff-only articles.
     const rows = await sql`
       SELECT ${sql.unsafe(PAGE_COLUMNS)}, r.id AS revision_id, r.snapshot,
-             r.created_at AS revision_created_at
+             r.created_at AS revision_created_at, r.actor_id,
+             u.username AS author_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
+             u.title AS author_title, u.role AS author_role, u.version AS author_version
       FROM wiki_pages p
       JOIN wiki_revisions r ON r.id = p.published_revision_id AND r.page_id = p.id
+      LEFT JOIN users u ON u.id = r.actor_id
       WHERE p.published_revision_id IS NOT NULL
         AND p.archived_at IS NULL AND p.access_level = 'public'
         AND r.snapshot->>'accessLevel' = 'public'
@@ -120,7 +124,7 @@ function createWikiRouter({ sql, auth } = {}) {
     const rows = await loadPublicPage(sql, id);
     if (!rows.length) throw notFound();
     const article = publicArticle(rows[0]);
-    const etag = wikiEtag(article.id, article.publicVersion);
+    const etag = wikiEtag(article.id, article.publicVersion, article.authorVersion);
     if (ifNoneMatchMatches(req.get('If-None-Match'), etag)) {
       return res.status(304).set('ETag', etag).end();
     }
@@ -169,10 +173,14 @@ function createWikiRouter({ sql, auth } = {}) {
           AND current_revision.snapshot->>'accessLevel' = 'public'
       )
       SELECT ${sql.unsafe(PAGE_COLUMNS)}, r.id AS revision_id, r.snapshot,
-             r.created_at AS revision_created_at
+             r.created_at AS revision_created_at, r.actor_id,
+             u.username AS author_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
+             u.title AS author_title, u.role AS author_role, u.version AS author_version
       FROM visible_sources v
       JOIN wiki_pages p ON p.id = v.id
       JOIN wiki_revisions r ON r.id = p.published_revision_id AND r.page_id = p.id
+      LEFT JOIN users u ON u.id = r.actor_id
       ORDER BY lower(r.snapshot->>'title') ASC, p.id ASC`;
     const articles = rows.map(publicArticle);
     return res.json(collection(articles, limit, offset, pageListDto));
@@ -188,7 +196,8 @@ function createWikiRouter({ sql, auth } = {}) {
              head.sequence AS revision_sequence, head.parent_revision_id,
              head.base_published_revision_id, head.actor_id,
              head.edit_summary, head.snapshot, head.created_at AS revision_created_at,
-             u.username AS actor_username, u.avatar AS actor_avatar,
+             u.username AS actor_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS actor_avatar,
              u.title AS actor_title, u.role AS actor_role
       FROM wiki_pages p
       LEFT JOIN wiki_revisions head ON head.id = p.head_revision_id AND head.page_id = p.id
@@ -403,7 +412,8 @@ function createWikiRouter({ sql, auth } = {}) {
       SELECT r.id, r.page_id, r.sequence, r.parent_revision_id,
              r.base_published_revision_id, r.actor_id, r.edit_summary, r.snapshot,
              r.restores_id, r.accepted_proposal_id, r.created_at,
-             u.username AS actor_username, u.avatar AS actor_avatar,
+             u.username AS actor_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS actor_avatar,
              u.title AS actor_title, u.role AS actor_role
       FROM wiki_revisions r LEFT JOIN users u ON u.id = r.actor_id
       WHERE r.page_id = ${id}
@@ -719,6 +729,16 @@ function publicArticle(row) {
   const id = validateUuid(row.id);
   const publishedAt = isoTimestamp(row.published_at || row.revision_created_at);
   const publicVersion = intValue(row.public_version, 'publicVersion');
+  const author = row.actor_id && row.author_username ? publicAuthor({
+    id: row.actor_id,
+    username: row.author_username,
+    avatar: sanitizeUrl(row.author_avatar || '', { image: true }) || '',
+    title: row.author_title || '',
+    role: row.author_role,
+  }) : null;
+  const authorVersion = row.author_version !== undefined && row.author_version !== null
+    ? (Number.isInteger(Number(row.author_version)) && Number(row.author_version) > 0 ? Number(row.author_version) : null)
+    : null;
   return {
     id,
     publishedRevisionId: validateUuid(row.revision_id, 'publishedRevisionId'),
@@ -731,6 +751,8 @@ function publicArticle(row) {
     accessLevel: 'public',
     discussionThreadId: row.discussion_thread_id ? validateUuid(row.discussion_thread_id, 'discussionThreadId') : null,
     audience: snapshot.audience,
+    author,
+    authorVersion,
     body: snapshot.body,
     publicVersion,
     createdAt: isoTimestamp(row.created_at),
@@ -753,6 +775,7 @@ function pageListDto(article) {
     accessLevel: article.accessLevel,
     discussionThreadId: article.discussionThreadId,
     audience: article.audience,
+    author: article.author ?? null,
     publicVersion: article.publicVersion,
     createdAt: article.createdAt,
     publishedAt: article.publishedAt,
@@ -772,6 +795,7 @@ function publicPageDto(article) {
     accessLevel: article.accessLevel,
     discussionThreadId: article.discussionThreadId,
     audience: article.audience,
+    author: article.author ?? null,
     body: article.body,
     publicVersion: article.publicVersion,
     createdAt: article.createdAt,
@@ -800,8 +824,10 @@ function setEtag(res, id, version) {
   res.set('ETag', wikiEtag(id, version));
 }
 
-function wikiEtag(id, version) {
-  return `"wiki-${id}-${version}"`;
+function wikiEtag(id, version, authorVersion) {
+  return Number.isInteger(authorVersion) && authorVersion > 0
+    ? `"wiki-${id}-${version}-${authorVersion}"`
+    : `"wiki-${id}-${version}"`;
 }
 
 function ifNoneMatchMatches(header, etag) {
@@ -816,9 +842,13 @@ function ifNoneMatchMatches(header, etag) {
 async function loadPublicPage(executor, id) {
   return executor`
     SELECT ${executor.unsafe(PAGE_COLUMNS)}, r.id AS revision_id, r.snapshot,
-           r.created_at AS revision_created_at
+           r.created_at AS revision_created_at, r.actor_id,
+           u.username AS author_username,
+           CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
+           u.title AS author_title, u.role AS author_role, u.version AS author_version
     FROM wiki_pages p
     JOIN wiki_revisions r ON r.id = p.published_revision_id AND r.page_id = p.id
+    LEFT JOIN users u ON u.id = r.actor_id
     WHERE p.id = ${id} AND p.published_revision_id IS NOT NULL
       AND p.archived_at IS NULL AND p.access_level = 'public'
       AND r.snapshot->>'accessLevel' = 'public'
@@ -832,7 +862,8 @@ async function loadStaffPage(executor, id) {
            head.base_published_revision_id, head.actor_id,
            head.edit_summary, head.restores_id, head.accepted_proposal_id,
            head.snapshot, head.created_at AS revision_created_at,
-           u.username AS actor_username, u.avatar AS actor_avatar,
+           u.username AS actor_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS actor_avatar,
            u.title AS actor_title, u.role AS actor_role,
            COALESCE((
              SELECT json_agg(json_build_object(
@@ -1035,7 +1066,8 @@ async function getRevision(executor, pageId, revisionId) {
     SELECT r.id, r.page_id, r.sequence, r.parent_revision_id,
            r.base_published_revision_id, r.actor_id, r.edit_summary, r.snapshot,
            r.restores_id, r.accepted_proposal_id, r.created_at,
-           u.username AS actor_username, u.avatar AS actor_avatar,
+           u.username AS actor_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS actor_avatar,
            u.title AS actor_title, u.role AS actor_role
     FROM wiki_revisions r LEFT JOIN users u ON u.id = r.actor_id
     WHERE r.page_id = ${pageId} AND r.id = ${revisionId} LIMIT 1`;
