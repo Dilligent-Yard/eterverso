@@ -1,6 +1,7 @@
 'use strict';
 
 const { validateUuid } = require('./validation');
+const { userAvatarPath } = require('./avatar');
 
 const ROLES = new Set(['member', 'moderador', 'admin']);
 
@@ -13,6 +14,13 @@ function userId(user) {
   return validateUuid(user.id, 'id');
 }
 
+function serializedAvatar(user, id) {
+  if (typeof user.avatar === 'string' && user.avatar.startsWith('data:image/')) {
+    return userAvatarPath(id, user.version);
+  }
+  return user.avatar;
+}
+
 function userRole(user) {
   const role = user.role;
   if (!ROLES.has(role)) {
@@ -23,11 +31,12 @@ function userRole(user) {
 
 /** Serialize the authenticated user's own safe profile, including their email. */
 function selfUser(user) {
+  const id = userId(user);
   return {
-    id: userId(user),
+    id,
     username: user.username,
     email: user.email,
-    avatar: user.avatar,
+    avatar: serializedAvatar(user, id),
     title: user.title,
     bio: user.bio,
     role: userRole(user),
@@ -40,10 +49,11 @@ function selfUser(user) {
 
 /** Serialize the exact public author fields; email and account data stay private. */
 function publicAuthor(user) {
+  const id = userId(user);
   return {
-    id: userId(user),
+    id,
     username: user.username,
-    avatar: user.avatar,
+    avatar: serializedAvatar(user, id),
     title: user.title,
     role: userRole(user),
   };

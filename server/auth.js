@@ -129,7 +129,9 @@ function createAuth(options = {}) {
     const identity = sessionIdentity(req);
     if (!identity) return null;
     const rows = await sql`
-      SELECT id, username, email, avatar, title, bio, role, posts_count,
+      SELECT id, username, email,
+             CASE WHEN avatar LIKE 'data:image/%' THEN '/api/users/' || lower(id::text) || '/avatar?v=' || version::text ELSE avatar END AS avatar,
+             title, bio, role, posts_count,
              (SELECT count(*)::integer FROM posts p WHERE p.author_id = users.id AND p.deleted_at IS NULL) AS forum_posts_count,
              join_date,
              disabled_at, auth_version, version
@@ -206,7 +208,9 @@ function createAuth(options = {}) {
     return sql.begin(async (tx) => {
       if (transactionOptions.beforeActorLock) await transactionOptions.beforeActorLock(tx);
       const rows = await tx`
-        SELECT id, username, role, disabled_at, auth_version, version
+        SELECT id, username,
+               CASE WHEN avatar LIKE 'data:image/%' THEN '/api/users/' || lower(id::text) || '/avatar?v=' || version::text ELSE avatar END AS avatar,
+               title, role, disabled_at, auth_version, version
         FROM users WHERE id = ${identity.userId} FOR UPDATE`;
       const actor = rows[0];
       if (!validActiveUser(actor, identity)) {

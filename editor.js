@@ -182,6 +182,11 @@ function editorSafeContentUrl(value, options) {
   }
   if (parsed.origin !== page.origin) return null;
   if (options.image) {
+    if (!parsed.hash
+        && /^\/api\/users\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/avatar$/i.test(parsed.pathname)
+        && /^(?:\?v=[1-9]\d{0,9})?$/.test(parsed.search || '')) {
+      return parsed.pathname.toLowerCase() + (parsed.search || '');
+    }
     var allowed = window.Aetherverse && Array.isArray(window.Aetherverse.allowedImagePaths)
       ? window.Aetherverse.allowedImagePaths
       : [];

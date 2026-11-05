@@ -74,7 +74,8 @@ function createForumRouter(options = {}) {
 
     const rows = await sql`
       SELECT t.id, t.category_id, t.author_id, t.author_label,
-             u.username AS author_username, u.avatar AS author_avatar,
+             u.username AS author_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
              u.title AS author_title, u.role AS author_role,
              c.name AS category_name, t.title, t.tag, t.pinned, t.locked,
              t.archived_at, t.version, t.last_activity_at, t.created_at,
@@ -113,7 +114,8 @@ function createForumRouter(options = {}) {
 
     const rows = await sql`
       SELECT p.id, p.thread_id, p.post_no, p.author_id, p.author_label,
-             u.username AS author_username, u.avatar AS author_avatar,
+             u.username AS author_username,
+             CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
              u.title AS author_title, u.role AS author_role,
              p.content, p.edited, p.deleted_at, p.version,
              p.created_at, p.updated_at
@@ -522,7 +524,8 @@ async function loadCreatedTopic(tx, threadId, postId) {
 async function loadThreadDto(sql, threadId) {
   return sql`
     SELECT t.id, t.category_id, t.author_id, t.author_label,
-           u.username AS author_username, u.avatar AS author_avatar,
+           u.username AS author_username,
+           CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
            u.title AS author_title, u.role AS author_role,
            c.name AS category_name, t.title, t.tag, t.pinned, t.locked,
            t.archived_at, t.version, t.last_activity_at, t.created_at,
@@ -539,7 +542,8 @@ async function loadThreadDto(sql, threadId) {
 async function loadPostDto(sql, threadId, postId, options = {}) {
   const rows = await sql`
     SELECT p.id, p.thread_id, p.post_no, p.author_id, p.author_label,
-           u.username AS author_username, u.avatar AS author_avatar,
+           u.username AS author_username,
+           CASE WHEN u.avatar LIKE 'data:image/%' THEN '/api/users/' || lower(u.id::text) || '/avatar?v=' || u.version::text ELSE u.avatar END AS author_avatar,
            u.title AS author_title, u.role AS author_role,
            p.content, p.edited, p.deleted_at, p.version,
            p.created_at, p.updated_at

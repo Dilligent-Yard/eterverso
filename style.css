@@ -2053,6 +2053,135 @@ label {
   align-items: start;
 }
 
+.profile-avatar-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 22px 18px;
+  text-align: center;
+}
+
+.avatar-preview {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-medium);
+  background: #111111;
+  display: block;
+  margin: 0 auto 14px;
+}
+
+.avatar-preview-ph {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 1px solid var(--border-medium);
+  background: #111111;
+  color: #ffffff;
+  font-size: 36px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 14px;
+}
+
+.avatar-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inline-user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  vertical-align: middle;
+  max-width: 100%;
+}
+
+.inline-user-prefix {
+  color: var(--text-muted);
+}
+
+.inline-user-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.inline-user-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border-medium);
+  background: #111111;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.inline-user-avatar-ph {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border-medium);
+  background: #141414;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.top-user-avatar {
+  width: 22px;
+  height: 22px;
+}
+
+.card-author-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.char-sheet-head .card-author-row,
+.wiki-hero-title-wrap .card-author-row {
+  border-top: none;
+  padding-top: 0;
+}
+
+.turn-player-line {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.char-card.team-card {
+  padding: 16px 18px;
+}
+
+.char-card.team-card:hover {
+  transform: none;
+}
+
 /* ---------- Modals & Lightbox ---------- */
 
 .modal-overlay {
