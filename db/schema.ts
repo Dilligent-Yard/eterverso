@@ -650,3 +650,45 @@ export const legacyImportSourceMappings = pgTable("legacy_import_source_mappings
 	check("legacy_import_source_mappings_type_check", sql`resource_type IN ('category', 'thread', 'post', 'character', 'scene', 'turn')`),
 ]);
 
+export const notifications = pgTable("notifications", {
+	id: uuid().primaryKey().notNull().defaultRandom(),
+	userId: uuid("user_id").notNull(),
+	actorId: uuid("actor_id"),
+	type: varchar({ length: 40 }).notNull(),
+	referenceId: varchar("reference_id", { length: 200 }),
+	referenceType: varchar("reference_type", { length: 40 }),
+	title: varchar({ length: 200 }).notNull(),
+	message: text().default(''),
+	read: boolean().default(false).notNull(),
+	createdAt: timestamp("created_at", { mode: 'string', withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_notifications_user_id").using("btree", table.userId.asc().nullsLast()),
+	index("idx_notifications_user_read").using("btree", table.userId.asc().nullsLast(), table.read.asc().nullsLast()),
+	foreignKey({
+		columns: [table.userId],
+		foreignColumns: [users.id],
+		name: "notifications_user_id_fkey"
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.actorId],
+		foreignColumns: [users.id],
+		name: "notifications_actor_id_fkey"
+	}).onDelete("set null"),
+]);
+
+export const likes = pgTable("likes", {
+	id: uuid().primaryKey().notNull().defaultRandom(),
+	userId: uuid("user_id").notNull(),
+	targetType: varchar("target_type", { length: 40 }).notNull(),
+	targetId: varchar("target_id", { length: 200 }).notNull(),
+	createdAt: timestamp("created_at", { mode: 'string', withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+	unique("likes_unique").on(table.userId, table.targetType, table.targetId),
+	index("idx_likes_target").using("btree", table.targetType.asc().nullsLast(), table.targetId.asc().nullsLast()),
+	foreignKey({
+		columns: [table.userId],
+		foreignColumns: [users.id],
+		name: "likes_user_id_fkey"
+	}).onDelete("cascade"),
+]);
+

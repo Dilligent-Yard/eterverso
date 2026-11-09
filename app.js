@@ -109,6 +109,9 @@ var DB = {
   wikiPosts: [],
   nextWikiPostId: 1,
 
+  notifications: [],
+  unreadCount: 0,
+
   session: null
 };
 
@@ -470,7 +473,7 @@ function updateTopBar() {
   var adminBtn = document.getElementById('nav-admin-btn');
   if (DB.session) {
     info.innerHTML = '<span class="online-dot"></span>' + renderMiniAvatar(DB.session.username, DB.session.avatar, 'top-user-avatar') + '<a onclick="navigate(\'perfil\')" style="font-weight:600;color:#fff;">' + h(DB.session.username) + '</a> ' + badgeHtml(DB.session);
-    actions.innerHTML = '<a onclick="navigate(\'perfil\')">Perfil</a><a onclick="doLogout()">Sair</a>';
+    actions.innerHTML = '<a onclick="navigate(\'perfil\')">Perfil</a>' + renderSinoNotificacoes() + '<a onclick="doLogout()">Sair</a>';
     if (isAdmin()) {
       adminBtn.innerHTML = '<button onclick="navigate(\'admin\')" class="' + (currentPage === 'admin' ? 'active' : '') + '">Admin</button>';
     } else {
@@ -551,6 +554,231 @@ function render() {
       } catch (_error) {}
     }, 0);
   }
+
+  // Carregar contagens de curtidas após o DOM ser atualizado
+  setTimeout(function () {
+    if (currentPage === 'personagemView' && currentPersonagem && DB.session) {
+      carregarLikesPersonagem(currentPersonagem, function (err, data) {
+        if (!err && data) aplicarLikeBtn('like-char-', currentPersonagem, data);
+      });
+    }
+    if (currentPage === 'cenaView' && currentCena && DB.session) {
+      var w = listaWikiPosts().find(function (x) { return String(x.id) === String(currentCena); });
+      if (w) {
+        carregarLikesCena(currentCena, function (err, data) {
+          if (!err && data) aplicarLikeBtn('like-cena-', currentCena, data);
+        });
+        (Array.isArray(w.turns) ? w.turns : []).forEach(function (t) {
+          carregarLikesTurno(currentCena, t.id, function (err, data) {
+            if (!err && data) aplicarLikeBtn('like-turn-', t.id, data);
+          });
+        });
+      }
+    }
+  }, 0);
+}
+
+// ==================== NOTIFICAÇÕES ====================
+
+function carregarNotificacoesServidor() {
+  if (!DB.session) return;
+  fetch('/api/notifications?limit=50')
+    .then(function(res) { return res.ok ? res.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      DB.notifications = Array.isArray(data.notifications) ? data.notifications : [];
+      DB.unreadCount = typeof data.unread === 'number' ? data.unread : DB.notifications.filter(function(n) { return !n.read; }).length;
+      updateTopBar();
+    })
+    .catch(function() {});
+}
+
+function sincronizarNotificacoes(data) {
+  if (!data) return;
+  DB.notifications = Array.isArray(data.notifications) ? data.notifications : [];
+  DB.unreadCount = typeof data.unread === 'number' ? data.unread : DB.notifications.filter(function(n) { return !n.read; }).length;
+  render();
+  updateTopBar();
+}
+
+function marcarNotificacaoLida(id) {
+  apiPost('/api/notifications/' + id + '/read', {}, function(err) {
+    if (err) { showAlert(err, 'error'); return; }
+    var n = DB.notifications.find(function(x) { return String(x.id) === String(id); });
+    if (n && !n.read) {
+      n.read = true;
+      DB.unreadCount = Math.max(0, DB.unreadCount - 1);
+      updateTopBar();
+      var itemEl = document.getElementById('notif-item-' + String(id).replace(/[^a-zA-Z0-9_-]/g, '_'));
+      if (itemEl) {
+        itemEl.classList.remove('unread');
+        itemEl.classList.add('read');
+      }
+    }
+  });
+}
+
+function marcarTodasNotificacoesLidas() {
+  apiPost('/api/notifications/read-all', {}, function(err) {
+    if (err) { showAlert(err, 'error'); return; }
+    DB.notifications.forEach(function(n) { n.read = true; });
+    DB.unreadCount = 0;
+    updateTopBar();
+    showModal('Notificações', renderNotificacoesDropdown());
+  });
+}
+
+function excluirNotificacao(id) {
+  apiRequest('DELETE', '/api/notifications/' + id, undefined, function(err) {
+    if (err) { showAlert(err, 'error'); return; }
+    var idx = DB.notifications.findIndex(function(x) { return String(x.id) === String(id); });
+    if (idx !== -1) {
+      var wasUnread = !DB.notifications[idx].read;
+      DB.notifications.splice(idx, 1);
+      if (wasUnread) DB.unreadCount = Math.max(0, DB.unreadCount - 1);
+      updateTopBar();
+      showModal('Notificações', renderNotificacoesDropdown());
+    }
+  });
+}
+
+function tipoNotificacaoLabel(type) {
+  if (type === 'turn_replied') return 'Novo turno na sua cena';
+  if (type === 'like_personagem') return 'Sua ficha foi curtida';
+  if (type === 'like_turn') return 'Seu turno foi curtido';
+  if (type === 'like_wiki_post') return 'Sua cena foi curtida';
+  return 'Notificação';
+}
+
+function tipoNotificacaoIcon(type) {
+  if (type === 'turn_replied') return '📜';
+  if (type === 'like_personagem') return '❤️';
+  if (type === 'like_turn') return '❤️';
+  if (type === 'like_wiki_post') return '❤️';
+  return '🔔';
+}
+
+function renderNotificacoesDropdown() {
+  if (!DB.session) return '';
+  var lista = DB.notifications.slice().sort(function(a, b) {
+    return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+  });
+  var html = '<div class="notifications-panel">';
+  html += '<div class="notifications-header">';
+  html += '<h3 style="font-size:14px;margin:0;color:#fff;">Notificações</h3>';
+  html += '<button class="btn btn-small" onclick="marcarTodasNotificacoesLidas()" style="padding:4px 8px;font-size:11px;">Marcar todas como lidas</button>';
+  html += '</div>';
+  if (!lista.length) {
+    html += '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px;">Nenhuma notificação por enquanto.</div>';
+  } else {
+    lista.forEach(function(n) {
+      var cssId = String(n.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      html += '<div id="notif-item-' + cssId + '" class="notification-item' + (n.read ? ' read' : ' unread') + '" style="display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border-subtle);' + (n.read ? 'opacity:0.75;' : 'background:rgba(255,255,255,0.03);') + '">';
+      html += '<div style="font-size:18px;">' + tipoNotificacaoIcon(n.type) + '</div>';
+      html += '<div style="flex:1;">';
+      html += '<div style="font-weight:600;font-size:12.5px;color:#fff;">' + h(tipoNotificacaoLabel(n.type)) + '</div>';
+      html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + h(n.message || '') + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + h(n.createdAt ? new Date(n.createdAt).toLocaleString('pt-BR') : '') + '</div>';
+      html += '</div>';
+      html += '<div style="display:flex;gap:6px;align-items:center;font-size:11px;">';
+      if (!n.read) {
+        html += '<button class="btn btn-small" onclick="marcarNotificacaoLida(' + jsArg(n.id) + ')" style="padding:3px 6px;">Ler</button>';
+      }
+      html += '<button class="btn btn-small btn-danger" onclick="excluirNotificacao(' + jsArg(n.id) + ')" style="padding:3px 6px;">Excluir</button>';
+      html += '</div>';
+      html += '</div>';
+    });
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderSinoNotificacoes() {
+  if (!DB.session) return '';
+  var badge = DB.unreadCount > 0 ? '<span class="notification-badge">' + (DB.unreadCount > 99 ? '99+' : DB.unreadCount) + '</span>' : '';
+  return '<div class="notifications-bell-wrap" onclick="abrirNotificacoes()" title="Notificações" style="cursor:pointer;position:relative;display:inline-flex;align-items:center;padding:0 6px;">' +
+    '<span style="font-size:18px;">🔔</span>' + badge +
+    '</div>';
+}
+
+function abrirNotificacoes() {
+  if (!DB.session) { showLoginModal(); return; }
+  carregarNotificacoesServidor();
+  showModal('Notificações', renderNotificacoesDropdown());
+}
+
+// ==================== CURTIDAS (LIKES) ====================
+
+function carregarLikesPersonagem(id, cb) {
+  apiRequest('GET', '/api/personagens/' + id + '/likes', undefined, function(err, data) {
+    if (cb) cb(err, data);
+  });
+}
+
+function carregarLikesCena(id, cb) {
+  apiRequest('GET', '/api/wiki-posts/' + id + '/likes', undefined, function(err, data) {
+    if (cb) cb(err, data);
+  });
+}
+
+function carregarLikesTurno(wikiPostId, turnId, cb) {
+  apiRequest('GET', '/api/wiki-posts/' + wikiPostId + '/turns/' + turnId + '/likes', undefined, function(err, data) {
+    if (cb) cb(err, data);
+  });
+}
+
+function toggleLikePersonagem(id, btnEl) {
+  if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
+  apiPost('/api/personagens/' + id + '/like', {}, function(err, data) {
+    if (err) { showAlert(err, 'error'); return; }
+    if (btnEl) {
+      btnEl.classList.toggle('liked', !!data.liked);
+      btnEl.innerHTML = (data.liked ? '❤️' : '🤍') + ' <span class="like-count">' + data.likeCount + '</span>';
+    }
+    showAlert(data.liked ? 'Ficha curtida!' : 'Curtida removida.', data.liked ? 'success' : 'info');
+  });
+}
+
+function toggleLikeCena(id, btnEl) {
+  if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
+  apiPost('/api/wiki-posts/' + id + '/like', {}, function(err, data) {
+    if (err) { showAlert(err, 'error'); return; }
+    if (btnEl) {
+      btnEl.classList.toggle('liked', !!data.liked);
+      btnEl.innerHTML = (data.liked ? '❤️' : '🤍') + ' <span class="like-count">' + data.likeCount + '</span>';
+    }
+    showAlert(data.liked ? 'Cena curtida!' : 'Curtida removida.', data.liked ? 'success' : 'info');
+  });
+}
+
+function toggleLikeTurno(wikiPostId, turnId, btnEl) {
+  if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
+  apiPost('/api/wiki-posts/' + wikiPostId + '/turns/' + turnId + '/like', {}, function(err, data) {
+    if (err) { showAlert(err, 'error'); return; }
+    if (btnEl) {
+      btnEl.classList.toggle('liked', !!data.liked);
+      btnEl.innerHTML = (data.liked ? '❤️' : '🤍') + ' <span class="like-count">' + data.likeCount + '</span>';
+    }
+    showAlert(data.liked ? 'Turno curtido!' : 'Curtida removida.', data.liked ? 'success' : 'info');
+  });
+}
+
+function aplicarLikeBtn(prefix, targetId, data) {
+  var cssId = String(targetId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  var btn = document.getElementById(prefix + cssId);
+  var span = document.getElementById(prefix + 'count-' + cssId);
+  if (!btn && !span) return;
+  var filled = data.userLiked ? '❤️' : '🤍';
+  if (btn) {
+    btn.classList.toggle('liked', !!data.userLiked);
+    btn.onclick = function () {
+      if (prefix === 'like-char-') toggleLikePersonagem(targetId, this);
+      if (prefix === 'like-cena-') toggleLikeCena(targetId, this);
+      if (prefix === 'like-turn-') toggleLikeTurno(String(currentCena), targetId, this);
+    };
+  }
+  if (span) span.textContent = data.likeCount;
+  if (btn && !span) btn.innerHTML = filled + ' <span class="like-count">' + data.likeCount + '</span>';
 }
 
 // ==================== FÓRUM ====================
@@ -3666,6 +3894,13 @@ function renderPersonagemView() {
   if (isModOrAdmin()) {
     html += '<div style="display:flex;gap:8px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button></div>';
   }
+  if (DB.session) {
+    var pidCss = String(p.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    html += '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;">';
+    html += '<button type="button" id="like-char-' + pidCss + '" class="like-btn" onclick="toggleLikePersonagem(' + idJs(p.id) + ', this)" style="background:none;border:none;color:#fff;cursor:pointer;font-size:16px;padding:6px 10px;border-radius:4px;display:flex;align-items:center;gap:6px;">🤍 <span id="like-count-char-' + pidCss + '">--</span></button>';
+    html += '<span style="font-size:11px;color:var(--text-muted);">Curtidas</span>';
+    html += '</div>';
+  }
   html += '</div>';
 
   html += '<div class="char-sheet-grid">';
@@ -4206,6 +4441,10 @@ function renderCenaView() {
     }
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
+    if (DB.session) {
+      var widCss = String(w.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      html += '<button type="button" id="like-cena-' + widCss + '" class="btn btn-small" onclick="toggleLikeCena(' + idJs(w.id) + ', this)" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;">🤍 <span id="like-count-cena-' + widCss + '">--</span></button>';
+    }
     if (isModOrAdmin()) {
       if (!w.turnsReadOnly) {
         html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
@@ -4219,6 +4458,10 @@ function renderCenaView() {
     html += '<div><h2>' + h(w.titulo) + '</h2>' + (w.subtitulo ? '<div style="color:var(--text-secondary);font-size:14px;">' + h(w.subtitulo) + '</div>' : '') + (w.author ? '<div class="card-author-row" style="margin-top:6px;">' + renderAuthorChip(w.author, '', 'Cena por') + '</div>' : '') + '</div>';
     html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
+    if (DB.session) {
+      var widCss2 = String(w.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      html += '<button type="button" id="like-cena-' + widCss2 + '" class="btn btn-small" onclick="toggleLikeCena(' + idJs(w.id) + ', this)" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;">🤍 <span id="like-count-cena-' + widCss2 + '">--</span></button>';
+    }
     if (isModOrAdmin()) {
       if (!w.turnsReadOnly) html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
       html += '<button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Ocultar</button>';
@@ -4376,9 +4619,11 @@ function renderCenaView() {
     html += '<div class="turn-footer-bar">';
     html += '<span>Turno #' + num + ' &middot; ' + h(displayName) + '</span>';
     html += '<div class="post-actions">';
-    if (DB.session && !w.turnsReadOnly) {
-      html += '<a onclick="citarTurno(' + idJs(t.id) + ')">Citar Turno</a>';
-      if (podeEditarTurno(t)) {
+    if (DB.session) {
+      var tidCss = String(t.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      if (!w.turnsReadOnly) html += '<a onclick="citarTurno(' + idJs(t.id) + ')">Citar Turno</a>';
+      html += '<button type="button" id="like-turn-' + tidCss + '" class="like-btn-turn" onclick="toggleLikeTurno(' + idJs(w.id) + ', ' + idJs(t.id) + ', this)" style="background:none;border:none;color:#fff;cursor:pointer;font-size:13px;padding:2px 6px;border-radius:3px;margin-left:8px;">🤍 <span id="like-count-turn-' + tidCss + '">--</span></button>';
+      if (!w.turnsReadOnly && podeEditarTurno(t)) {
         html += '<a onclick="abrirModalEditarTurno(' + idJs(t.id) + ')">Editar</a>';
         html += '<a class="danger-link" onclick="excluirTurnoCena(' + idJs(t.id) + ')">Excluir</a>';
       }
@@ -6451,6 +6696,7 @@ function doLogin() {
   apiPost('/api/auth/login', { username: username, password: password }, function(err, data) {
     if (err) { showAlert(err, 'error'); return; }
     applyServerSession(data.user);
+    carregarNotificacoesServidor();
     closeModal();
     navigate('forum');
     showAlert('Login realizado com sucesso.', 'success');
@@ -6461,6 +6707,8 @@ function doLogout() {
   apiPost('/api/auth/logout', {}, function(err) {
     if (err) { showAlert(err, 'error'); return; }
     applyServerSession(null);
+    DB.notifications = [];
+    DB.unreadCount = 0;
     navigate('forum');
   });
 }
@@ -6483,6 +6731,7 @@ function submitRegistro() {
   apiPost('/api/auth/signup', { username: username, email: email, password: password }, function(err, data) {
     if (err) { showAlert(err, 'error'); return; }
     applyServerSession(data.user);
+    carregarNotificacoesServidor();
     navigate('forum');
     showAlert('Cadastro realizado. Bem-vindo(a)!', 'success');
   });
@@ -6927,6 +7176,7 @@ window.addEventListener('DOMContentLoaded', function() {
         return;
       }
       applyServerSession(data.user);
+      carregarNotificacoesServidor();
       render();
       updateTopBar();
     });

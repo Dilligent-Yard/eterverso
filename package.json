@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
+    "start:ts": "ts-node src/server.ts",
     "dev": "node server.js",
+    "dev:ts": "ts-node src/server.ts",
+    "build": "tsc",
     "test:env:up": "node scripts/test-env.js up",
     "test:env:down": "node scripts/test-env.js down",
     "test:unit": "node scripts/test-runner.js unit",
@@ -33,6 +36,12 @@
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
-    "drizzle-kit": "^0.31.10"
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-session": "^2.0.4",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "drizzle-kit": "^0.31.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
   }
 }

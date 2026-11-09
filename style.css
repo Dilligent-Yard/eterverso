@@ -2706,3 +2706,102 @@ label {
 
 .wiki-file-metadata dt { font-weight: 600; margin-top: 8px; }
 .wiki-file-metadata dd { margin: 0 0 6px; }
+
+/* ---------- Notificações ---------- */
+
+.notifications-bell-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.notification-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #ff4444;
+  color: #000;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 99px;
+  min-width: 18px;
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notifications-panel {
+  background: #0b0b0b;
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  width: 380px;
+  max-width: 90vw;
+  max-height: 60vh;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+.notifications-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.notification-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  transition: background 0.15s ease;
+}
+
+.notification-item.unread {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.notification-item.read {
+  opacity: 0.75;
+}
+
+.notification-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ---------- Curtidas (Likes) ---------- */
+
+.like-btn,
+.like-btn-turn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: color 0.2s ease, transform 0.1s ease;
+}
+
+.like-btn:hover,
+.like-btn-turn:hover {
+  transform: translateY(-1px);
+}
+
+.like-btn.liked,
+.like-btn-turn.liked {
+  color: #ff6b6b;
+}
+
+.like-btn.liked .like-count,
+.like-btn-turn.liked .like-count {
+  color: #ff6b6b;
+}
+
+.like-count {
+  font-size: 0.85em;
+  font-weight: 600;
+}

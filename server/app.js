@@ -18,6 +18,7 @@ const { createProposalRouter } = require('./proposals');
 const { createSourceRouter } = require('./sources');
 const { createLegacyImportRouter } = require('./legacy-import');
 const { createWikiTransfersRouter } = require('./wiki-transfers');
+const { createInteractionsRouter, createNotification } = require('./interactions');
 
 function createApp(options) {
   if (!options || typeof options.sql !== 'function' || typeof options.sql.json !== 'function') {
@@ -1100,6 +1101,19 @@ function createApp(options) {
         nextResourceVersion(existing.version, 'cena');
         const wikiPost = await publicSceneForWrite(tx, sceneRows[0]);
         const createdTurn = wikiPost.turns.find((item) => String(item.id) === String(turnRows[0].id));
+
+        if (existing.author_id && String(existing.author_id) !== String(user.id)) {
+          await createNotification(tx, {
+            recipientId: existing.author_id,
+            actorId: user.id,
+            type: 'turn_replied',
+            referenceId: id,
+            referenceType: 'wiki_post',
+            title: 'Novo turno na sua cena',
+            message: `${user.username} postou um turno na cena "${existing.titulo || 'Cena'}".`,
+          });
+        }
+
         return { wikiPost, turno: createdTurn };
       });
       res.status(201).json(result);
@@ -1201,6 +1215,7 @@ function createApp(options) {
   app.use('/api', createWikiRouter({ sql, auth }));
   app.use('/api', createProposalRouter({ sql, auth }));
   app.use('/api', createSourceRouter({ sql, auth }));
+  app.use(createInteractionsRouter({ sql, auth }));
   app.use('/api', function (_req, res) {
     return sendError(res, new ApiError(404, 'NOT_FOUND', 'Rota não encontrada.'));
   });
