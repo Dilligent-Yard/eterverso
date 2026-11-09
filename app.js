@@ -601,14 +601,6 @@ function tipoNotificacaoLabel(type) {
   return 'Notificação';
 }
 
-function tipoNotificacaoIcon(type) {
-  if (type === 'turn_replied') return '📜';
-  if (type === 'like_personagem') return '❤️';
-  if (type === 'like_turn') return '❤️';
-  if (type === 'like_wiki_post') return '❤️';
-  return '🔔';
-}
-
 function renderNotificacoesDropdown() {
   if (!DB.session) return '';
   var lista = DB.notifications.slice().sort(function(a, b) {
@@ -616,26 +608,25 @@ function renderNotificacoesDropdown() {
   });
   var html = '<div class="notifications-panel">';
   html += '<div class="notifications-header">';
-  html += '<h3 style="font-size:14px;margin:0;color:#fff;">Notificações</h3>';
-  html += '<button class="btn btn-small" onclick="marcarTodasNotificacoesLidas()" style="padding:4px 8px;font-size:11px;">Marcar todas como lidas</button>';
+  html += '<h3 style="font-size:13px;font-weight:600;margin:0;color:#fff;">Notificações</h3>';
+  html += '<button class="btn btn-small" onclick="marcarTodasNotificacoesLidas()" style="padding:3px 8px;font-size:11px;">Marcar todas como lidas</button>';
   html += '</div>';
   if (!lista.length) {
-    html += '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px;">Nenhuma notificação por enquanto.</div>';
+    html += '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;">Nenhuma notificação por enquanto.</div>';
   } else {
     lista.forEach(function(n) {
       var cssId = String(n.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-      html += '<div id="notif-item-' + cssId + '" class="notification-item' + (n.read ? ' read' : ' unread') + '" style="display:flex;gap:10px;padding:10px;border-bottom:1px solid var(--border-subtle);' + (n.read ? 'opacity:0.75;' : 'background:rgba(255,255,255,0.03);') + '">';
-      html += '<div style="font-size:18px;">' + tipoNotificacaoIcon(n.type) + '</div>';
-      html += '<div style="flex:1;">';
-      html += '<div style="font-weight:600;font-size:12.5px;color:#fff;">' + h(tipoNotificacaoLabel(n.type)) + '</div>';
-      html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">' + h(n.message || '') + '</div>';
-      html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + h(n.createdAt ? new Date(n.createdAt).toLocaleString('pt-BR') : '') + '</div>';
+      html += '<div id="notif-item-' + cssId + '" class="notification-item' + (n.read ? ' read' : ' unread') + '">';
+      html += '<div style="flex:1;min-width:0;">';
+      html += '<div style="font-weight:600;font-size:12px;color:#fff;">' + h(tipoNotificacaoLabel(n.type)) + '</div>';
+      html += '<div style="font-size:11.5px;color:var(--text-secondary);margin-top:2px;">' + h(n.message || '') + '</div>';
+      html += '<div style="font-size:10px;color:var(--text-muted);margin-top:3px;">' + h(n.createdAt ? new Date(n.createdAt).toLocaleString('pt-BR') : '') + '</div>';
       html += '</div>';
-      html += '<div style="display:flex;gap:6px;align-items:center;font-size:11px;">';
+      html += '<div style="display:flex;gap:4px;align-items:center;font-size:11px;flex-shrink:0;">';
       if (!n.read) {
-        html += '<button class="btn btn-small" onclick="marcarNotificacaoLida(' + jsArg(n.id) + ')" style="padding:3px 6px;">Ler</button>';
+        html += '<button class="btn btn-small" onclick="marcarNotificacaoLida(' + jsArg(n.id) + ')" style="padding:2px 7px;font-size:10.5px;">Ler</button>';
       }
-      html += '<button class="btn btn-small btn-danger" onclick="excluirNotificacao(' + jsArg(n.id) + ')" style="padding:3px 6px;">Excluir</button>';
+      html += '<button class="btn btn-small btn-danger" onclick="excluirNotificacao(' + jsArg(n.id) + ')" style="padding:2px 7px;font-size:10.5px;">Excluir</button>';
       html += '</div>';
       html += '</div>';
     });
@@ -646,10 +637,8 @@ function renderNotificacoesDropdown() {
 
 function renderSinoNotificacoes() {
   if (!DB.session) return '';
-  var badge = DB.unreadCount > 0 ? '<span class="notification-badge">' + (DB.unreadCount > 99 ? '99+' : DB.unreadCount) + '</span>' : '';
-  return '<div class="notifications-bell-wrap" onclick="abrirNotificacoes()" title="Notificações" style="cursor:pointer;position:relative;display:inline-flex;align-items:center;padding:0 6px;">' +
-    '<span style="font-size:18px;">🔔</span>' + badge +
-    '</div>';
+  var badge = DB.unreadCount > 0 ? ' <span class="notification-badge">' + (DB.unreadCount > 99 ? '99+' : DB.unreadCount) + '</span>' : '';
+  return '<a class="notifications-bell-wrap" onclick="abrirNotificacoes()">Notificações' + badge + '</a>';
 }
 
 function abrirNotificacoes() {
@@ -678,15 +667,20 @@ function carregarLikesTurno(wikiPostId, turnId, cb) {
   });
 }
 
+function formatarLikeTexto(liked, count) {
+  var c = typeof count === 'number' ? count : 0;
+  return (liked ? 'Curtido' : 'Curtir') + ' <span class="like-count">(' + c + ')</span>';
+}
+
 function toggleLikePersonagem(id, btnEl) {
   if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
   apiPost('/api/personagens/' + id + '/like', {}, function(err, data) {
     if (err) { showAlert(err, 'error'); return; }
     if (btnEl) {
       btnEl.classList.toggle('liked', !!data.liked);
-      btnEl.innerHTML = (data.liked ? '❤️' : '🤍') + ' <span class="like-count">' + data.likeCount + '</span>';
+      btnEl.innerHTML = formatarLikeTexto(!!data.liked, data.likeCount);
     }
-    showAlert(data.liked ? 'Ficha curtida!' : 'Curtida removida.', data.liked ? 'success' : 'info');
+    showAlert(data.liked ? 'Ficha curtida.' : 'Curtida removida.', data.liked ? 'success' : 'info');
   });
 }
 
@@ -696,9 +690,9 @@ function toggleLikeCena(id, btnEl) {
     if (err) { showAlert(err, 'error'); return; }
     if (btnEl) {
       btnEl.classList.toggle('liked', !!data.liked);
-      btnEl.innerHTML = (data.liked ? '❤️' : '🤍') + ' <span class="like-count">' + data.likeCount + '</span>';
+      btnEl.innerHTML = formatarLikeTexto(!!data.liked, data.likeCount);
     }
-    showAlert(data.liked ? 'Cena curtida!' : 'Curtida removida.', data.liked ? 'success' : 'info');
+    showAlert(data.liked ? 'Cena curtida.' : 'Curtida removida.', data.liked ? 'success' : 'info');
   });
 }
 
@@ -708,28 +702,23 @@ function toggleLikeTurno(wikiPostId, turnId, btnEl) {
     if (err) { showAlert(err, 'error'); return; }
     if (btnEl) {
       btnEl.classList.toggle('liked', !!data.liked);
-      btnEl.innerHTML = (data.liked ? '❤️' : '🤍') + ' <span class="like-count">' + data.likeCount + '</span>';
+      btnEl.innerHTML = formatarLikeTexto(!!data.liked, data.likeCount);
     }
-    showAlert(data.liked ? 'Turno curtido!' : 'Curtida removida.', data.liked ? 'success' : 'info');
+    showAlert(data.liked ? 'Turno curtido.' : 'Curtida removida.', data.liked ? 'success' : 'info');
   });
 }
 
 function aplicarLikeBtn(prefix, targetId, data) {
   var cssId = String(targetId).replace(/[^a-zA-Z0-9_-]/g, '_');
   var btn = document.getElementById(prefix + cssId);
-  var span = document.getElementById(prefix + 'count-' + cssId);
-  if (!btn && !span) return;
-  var filled = data.userLiked ? '❤️' : '🤍';
-  if (btn) {
-    btn.classList.toggle('liked', !!data.userLiked);
-    btn.onclick = function () {
-      if (prefix === 'like-char-') toggleLikePersonagem(targetId, this);
-      if (prefix === 'like-cena-') toggleLikeCena(targetId, this);
-      if (prefix === 'like-turn-') toggleLikeTurno(String(currentCena), targetId, this);
-    };
-  }
-  if (span) span.textContent = data.likeCount;
-  if (btn && !span) btn.innerHTML = filled + ' <span class="like-count">' + data.likeCount + '</span>';
+  if (!btn) return;
+  btn.classList.toggle('liked', !!data.userLiked);
+  btn.innerHTML = formatarLikeTexto(!!data.userLiked, data.likeCount);
+  btn.onclick = function () {
+    if (prefix === 'like-char-') toggleLikePersonagem(targetId, this);
+    if (prefix === 'like-cena-') toggleLikeCena(targetId, this);
+    if (prefix === 'like-turn-') toggleLikeTurno(String(currentCena), targetId, this);
+  };
 }
 
 // ==================== FÓRUM ====================
@@ -3842,16 +3831,15 @@ function renderPersonagemView() {
     html += '<div class="card-author-row" style="margin-top:6px;">' + renderAuthorChip(p.author, '', 'Ficha publicada por') + ' ' + roleBadgeFromRole(p.author.role) + '</div>';
   }
   html += '</div>';
-  if (isModOrAdmin()) {
-    html += '<div style="display:flex;gap:8px;"><button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button></div>';
-  }
+  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
   if (DB.session) {
     var pidCss = String(p.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-    html += '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;">';
-    html += '<button type="button" id="like-char-' + pidCss + '" class="like-btn" onclick="toggleLikePersonagem(' + idJs(p.id) + ', this)" style="background:none;border:none;color:#fff;cursor:pointer;font-size:16px;padding:6px 10px;border-radius:4px;display:flex;align-items:center;gap:6px;">🤍 <span id="like-count-char-' + pidCss + '">--</span></button>';
-    html += '<span style="font-size:11px;color:var(--text-muted);">Curtidas</span>';
-    html += '</div>';
+    html += '<button type="button" id="like-char-' + pidCss + '" class="btn btn-small like-btn" onclick="toggleLikePersonagem(' + idJs(p.id) + ', this)">Curtir <span class="like-count">(0)</span></button>';
   }
+  if (isModOrAdmin()) {
+    html += '<button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button>';
+  }
+  html += '</div>';
   html += '</div>';
 
   html += '<div class="char-sheet-grid">';
@@ -4394,7 +4382,7 @@ function renderCenaView() {
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
     if (DB.session) {
       var widCss = String(w.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-      html += '<button type="button" id="like-cena-' + widCss + '" class="btn btn-small" onclick="toggleLikeCena(' + idJs(w.id) + ', this)" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;">🤍 <span id="like-count-cena-' + widCss + '">--</span></button>';
+      html += '<button type="button" id="like-cena-' + widCss + '" class="btn btn-small like-btn" onclick="toggleLikeCena(' + idJs(w.id) + ', this)">Curtir <span class="like-count">(0)</span></button>';
     }
     if (isModOrAdmin()) {
       if (!w.turnsReadOnly) {
@@ -4411,7 +4399,7 @@ function renderCenaView() {
     html += '<button class="btn btn-small" onclick="exportarLogCena()">Exportar Log</button>';
     if (DB.session) {
       var widCss2 = String(w.id).replace(/[^a-zA-Z0-9_-]/g, '_');
-      html += '<button type="button" id="like-cena-' + widCss2 + '" class="btn btn-small" onclick="toggleLikeCena(' + idJs(w.id) + ', this)" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;">🤍 <span id="like-count-cena-' + widCss2 + '">--</span></button>';
+      html += '<button type="button" id="like-cena-' + widCss2 + '" class="btn btn-small like-btn" onclick="toggleLikeCena(' + idJs(w.id) + ', this)">Curtir <span class="like-count">(0)</span></button>';
     }
     if (isModOrAdmin()) {
       if (!w.turnsReadOnly) html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
@@ -4572,8 +4560,8 @@ function renderCenaView() {
     html += '<div class="post-actions">';
     if (DB.session) {
       var tidCss = String(t.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+      html += '<a id="like-turn-' + tidCss + '" class="like-btn-turn" onclick="toggleLikeTurno(' + idJs(w.id) + ', ' + idJs(t.id) + ', this)">Curtir <span class="like-count">(0)</span></a>';
       if (!w.turnsReadOnly) html += '<a onclick="citarTurno(' + idJs(t.id) + ')">Citar Turno</a>';
-      html += '<button type="button" id="like-turn-' + tidCss + '" class="like-btn-turn" onclick="toggleLikeTurno(' + idJs(w.id) + ', ' + idJs(t.id) + ', this)" style="background:none;border:none;color:#fff;cursor:pointer;font-size:13px;padding:2px 6px;border-radius:3px;margin-left:8px;">🤍 <span id="like-count-turn-' + tidCss + '">--</span></button>';
       if (!w.turnsReadOnly && podeEditarTurno(t)) {
         html += '<a onclick="abrirModalEditarTurno(' + idJs(t.id) + ')">Editar</a>';
         html += '<a class="danger-link" onclick="excluirTurnoCena(' + idJs(t.id) + ')">Excluir</a>';
@@ -6022,7 +6010,7 @@ function renderTimeline() {
       return '<div class="alert alert-error">' + h(timelineLoadError) + ' <button class="btn btn-small" onclick="carregarTimelineServidor(true)">Tentar novamente</button></div>';
     }
     carregarTimelineServidor(false);
-    return '<div class="alert alert-info">Carregando cronologia do Eterverso…</div>';
+    return '<div class="alert alert-info">Carregando cronologia do Eterverso...</div>';
   }
 
   var allEvents = serverTimelineEvents || [];
@@ -6042,33 +6030,36 @@ function renderTimeline() {
   var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / Linha do Tempo</div>';
 
   html += '<div class="timeline-hero">';
-  html += '<h2>Cronologia de Daare &amp; Eterverso</h2>';
-  html += '<p>O registro temporal oficial dos acontecimentos do universo, desde os primórdios da Casa de Leão e Dragão, o desastre de Órion e o exílio empíreo, até o Marco Zero na Fenda de Daare e as incursões Akáshicas do presente.</p>';
+  html += '<div class="timeline-hero-top">';
+  html += '<div>';
+  html += '<h2>Cronologia de Daare e Eterverso</h2>';
+  html += '<p>Registro temporal dos acontecimentos do universo, desde as origens da Casa de Leão e Dragão e o exílio empíreo até o Marco Zero em Daare e as incursões Akáshicas.</p>';
+  html += '</div>';
+  if (isModOrAdmin()) {
+    html += '<button class="btn btn-primary btn-small" onclick="openTimelineModal()">Novo Evento</button>';
+  }
+  html += '</div>';
   html += '</div>';
 
   html += '<div class="timeline-controls">';
   html += '<div class="timeline-pills">';
   html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'all' ? ' active' : '') + '" onclick="setTimelineEra(\'all\')">Todas (' + allEvents.length + ')</button>';
-  html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'Before Daare' ? ' active' : '') + '" onclick="setTimelineEra(\'Before Daare\')">Antes de Daare (BD)</button>';
-  html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'Marco Zero' ? ' active' : '') + '" onclick="setTimelineEra(\'Marco Zero\')">✦ Marco Zero</button>';
-  html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'Campanha / Presente' ? ' active' : '') + '" onclick="setTimelineEra(\'Campanha / Presente\')">Campanha / Presente (AD)</button>';
+  html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'Before Daare' ? ' active' : '') + '" onclick="setTimelineEra(\'Before Daare\')">Antes de Daare</button>';
+  html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'Marco Zero' ? ' active' : '') + '" onclick="setTimelineEra(\'Marco Zero\')">Marco Zero</button>';
+  html += '<button type="button" class="timeline-pill' + (timelineFilterEra === 'Campanha / Presente' ? ' active' : '') + '" onclick="setTimelineEra(\'Campanha / Presente\')">Campanha</button>';
   html += '</div>';
 
-  html += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">';
+  html += '<div class="timeline-filters-right">';
   html += '<div class="timeline-search-box">';
-  html += '<input type="text" id="timeline-search-input" placeholder="Buscar na cronologia…" value="' + ha(timelineFilterSearch) + '" oninput="onTimelineSearch(this.value)">';
+  html += '<input type="text" id="timeline-search-input" placeholder="Filtrar eventos..." value="' + ha(timelineFilterSearch) + '" oninput="onTimelineSearch(this.value)">';
   html += '</div>';
 
   html += '<select class="timeline-character-select" onchange="onTimelineCharFilter(this.value)">';
-  html += '<option value="all"' + (timelineFilterChar === 'all' ? ' selected' : '') + '>Todos os Personagens</option>';
+  html += '<option value="all"' + (timelineFilterChar === 'all' ? ' selected' : '') + '>Todos os personagens</option>';
   allChars.forEach(function(charName) {
     html += '<option value="' + ha(charName) + '"' + (timelineFilterChar === charName ? ' selected' : '') + '>' + h(charName) + '</option>';
   });
   html += '</select>';
-
-  if (isModOrAdmin()) {
-    html += '<button class="btn btn-primary btn-small" onclick="openTimelineModal()">+ Novo Evento</button>';
-  }
   html += '</div>';
   html += '</div>';
 
@@ -6087,9 +6078,9 @@ function renderTimeline() {
 
     if (timelineFilterEra === 'all' && e.era !== currentEraHeading) {
       currentEraHeading = e.era;
-      var eraTitle = e.era === 'Before Daare' ? 'Era Antes de Daare (BD) — Origens, Clãs &amp; Empíreo'
-        : (e.era === 'Marco Zero' ? 'Marco Zero — Incidente da Fenda em Daare (01/01/1 AD)'
-        : 'Era Presente &amp; Futuro (AD) — Trifarix, Ascensão &amp; Incursões');
+      var eraTitle = e.era === 'Before Daare' ? 'Origens, Clãs e Empíreo'
+        : (e.era === 'Marco Zero' ? 'Incidente da Fenda em Daare (01/01/1 AD)'
+        : 'Trifarix, Ascensão e Incursões');
       html += '<div class="timeline-era-divider"><div class="timeline-era-divider-inner">';
       html += '<span class="timeline-era-badge">' + h(e.era) + '</span>';
       html += '<span class="timeline-era-title">' + eraTitle + '</span>';
@@ -6103,6 +6094,7 @@ function renderTimeline() {
     html += '<div class="timeline-node ' + ha(colorClass) + '"></div>';
     html += '<div class="timeline-card">';
 
+    html += '<div class="timeline-card-head">';
     html += '<div class="timeline-meta-bar">';
     html += '<span class="timeline-date-tag">' + h(e.startDate || e.internalId) + '</span>';
     if (e.storyArc) {
@@ -6111,27 +6103,8 @@ function renderTimeline() {
     if (e.characterGroup) {
       html += '<span class="timeline-group-tag">' + h(e.characterGroup) + '</span>';
     }
-    html += '</div>';
-
-    html += '<h3>' + h(e.title) + '</h3>';
-
-    if (e.summary) {
-      html += '<div class="timeline-card-summary">' + h(e.summary) + '</div>';
-    }
-
-    html += '<div class="timeline-footer">';
-    html += '<div class="timeline-chars-list">';
-    if (e.characters) {
-      html += '<span>Figuras:</span> ';
-      e.characters.split(',').forEach(function(c) {
-        var trimmed = c.trim();
-        if (trimmed) {
-          html += '<span class="timeline-char-chip">' + h(trimmed) + '</span>';
-        }
-      });
-    }
     if (e.location) {
-      html += ' <span style="color:var(--text-muted);">&middot; 📍 ' + h(e.location) + '</span>';
+      html += '<span class="timeline-loc-tag">Local: ' + h(e.location) + '</span>';
     }
     html += '</div>';
 
@@ -6141,8 +6114,28 @@ function renderTimeline() {
       html += '<button class="btn btn-small btn-danger" onclick="excluirTimelineEvento(\'' + ha(e.id) + '\',' + jsArg(e.title) + ')">Excluir</button>';
       html += '</div>';
     }
-
     html += '</div>';
+
+    html += '<h3>' + h(e.title) + '</h3>';
+
+    if (e.summary) {
+      html += '<div class="timeline-card-summary">' + h(e.summary) + '</div>';
+    }
+
+    if (e.characters) {
+      html += '<div class="timeline-footer">';
+      html += '<div class="timeline-chars-list">';
+      html += '<span class="timeline-chars-label">Envolvidos:</span>';
+      e.characters.split(',').forEach(function(c) {
+        var trimmed = c.trim();
+        if (trimmed) {
+          html += '<span class="timeline-char-chip">' + h(trimmed) + '</span>';
+        }
+      });
+      html += '</div>';
+      html += '</div>';
+    }
+
     html += '</div>';
     html += '</div>';
   });
@@ -6177,20 +6170,20 @@ function openTimelineModal(eventId) {
   var summary = existing ? existing.summary : '';
 
   var modalHtml = '<div class="modal-overlay" onclick="if(event.target===this)closeTimelineModal()">';
-  modalHtml += '<div class="modal" style="max-width:620px;">';
+  modalHtml += '<div class="modal" style="max-width:580px;">';
   modalHtml += '<div class="modal-header">';
-  modalHtml += '<h3>' + (existing ? 'Editar Evento da Cronologia' : 'Novo Evento na Cronologia') + '</h3>';
-  modalHtml += '<button type="button" onclick="closeTimelineModal()">&times;</button>';
+  modalHtml += '<span>' + (existing ? 'Editar Evento da Cronologia' : 'Novo Evento na Cronologia') + '</span>';
+  modalHtml += '<button type="button" onclick="closeTimelineModal()" style="font-size:13px;padding:2px 6px;">Fechar</button>';
   modalHtml += '</div>';
 
   modalHtml += '<div class="modal-body">';
-  modalHtml += '<div class="form-row"><label>Título do Evento *</label><input type="text" id="tm-title" value="' + ha(title) + '" placeholder="Ex: Vincent ascende como Argus da Casa de Dragão"></div>';
-  modalHtml += '<div class="form-row" style="display:flex;gap:12px;">';
-  modalHtml += '<div style="flex:1;"><label>Data Narrativa *</label><input type="text" id="tm-start-date" value="' + ha(startDate) + '" placeholder="Ex: Before Daare 24 ou 1-01-01"></div>';
+  modalHtml += '<div class="form-row"><label>Título do Evento</label><input type="text" id="tm-title" value="' + ha(title) + '" placeholder="Ex: Vincent ascende como Argus da Casa de Dragão"></div>';
+  modalHtml += '<div class="form-row" style="display:flex;gap:10px;">';
+  modalHtml += '<div style="flex:1;"><label>Data Narrativa</label><input type="text" id="tm-start-date" value="' + ha(startDate) + '" placeholder="Ex: Before Daare 24 ou 1-01-01"></div>';
   modalHtml += '<div style="flex:1;"><label>Data Término (opcional)</label><input type="text" id="tm-end-date" value="' + ha(endDate) + '" placeholder="Ex: Before Daare 24"></div>';
   modalHtml += '</div>';
 
-  modalHtml += '<div class="form-row" style="display:flex;gap:12px;">';
+  modalHtml += '<div class="form-row" style="display:flex;gap:10px;">';
   modalHtml += '<div style="flex:1;"><label>Era Narrativa</label>';
   modalHtml += '<select id="tm-era">';
   modalHtml += '<option value="Before Daare"' + (era === 'Before Daare' ? ' selected' : '') + '>Antes de Daare (BD)</option>';
@@ -6198,17 +6191,17 @@ function openTimelineModal(eventId) {
   modalHtml += '<option value="Campanha / Presente"' + (era === 'Campanha / Presente' ? ' selected' : '') + '>Campanha / Presente (AD)</option>';
   modalHtml += '</select></div>';
 
-  modalHtml += '<div style="flex:1;"><label>Cor de Destaque</label>';
+  modalHtml += '<div style="flex:1;"><label>Tom do Marcador</label>';
   modalHtml += '<select id="tm-color">';
   var colors = [
-    { id: 'Green', label: 'Verde (Esmeralda)' },
-    { id: 'Indigo', label: 'Índigo (Safira)' },
-    { id: 'Purple', label: 'Roxo (Ametista)' },
-    { id: 'Teal', label: 'Turquesa (Ciano)' },
-    { id: 'Yellow', label: 'Amarelo (Dourado)' },
-    { id: 'Orange', label: 'Laranja (Âmbar)' },
-    { id: 'Red', label: 'Vermelho (Rubro)' },
-    { id: 'Gray', label: 'Cinza (Neutro)' }
+    { id: 'Indigo', label: 'Branco Puro (Destaque Principal)' },
+    { id: 'Green', label: 'Prata Claro' },
+    { id: 'Purple', label: 'Cinza Médio' },
+    { id: 'Teal', label: 'Cinza Neutro' },
+    { id: 'Yellow', label: 'Grafite Claro' },
+    { id: 'Orange', label: 'Grafite' },
+    { id: 'Red', label: 'Contraste Forte' },
+    { id: 'Gray', label: 'Discreto' }
   ];
   colors.forEach(function(col) {
     modalHtml += '<option value="' + col.id + '"' + (color === col.id ? ' selected' : '') + '>' + col.label + '</option>';
@@ -6218,16 +6211,16 @@ function openTimelineModal(eventId) {
 
   modalHtml += '<div class="form-row"><label>Arco Narrativo</label><input type="text" id="tm-story-arc" value="' + ha(storyArc) + '" placeholder="Ex: Chains of Crown, Empyreal Traveler"></div>';
   modalHtml += '<div class="form-row"><label>Personagens Envolvidos (separados por vírgula)</label><input type="text" id="tm-characters" value="' + ha(characters) + '" placeholder="Ex: Cristopher, Dianne, Vincent"></div>';
-  modalHtml += '<div class="form-row" style="display:flex;gap:12px;">';
+  modalHtml += '<div class="form-row" style="display:flex;gap:10px;">';
   modalHtml += '<div style="flex:1;"><label>Facção / Organização</label><input type="text" id="tm-group" value="' + ha(characterGroup) + '" placeholder="Ex: Éden Mortis, Shidou"></div>';
   modalHtml += '<div style="flex:1;"><label>Local</label><input type="text" id="tm-location" value="' + ha(location) + '" placeholder="Ex: Caer Annwn, Daare"></div>';
   modalHtml += '</div>';
 
-  modalHtml += '<div class="form-row"><label>Resumo / Crônica dos Fatos</label><textarea id="tm-summary" rows="5" placeholder="Descreva os fatos ocorridos neste marco cronológico...">' + h(summary) + '</textarea></div>';
+  modalHtml += '<div class="form-row"><label>Resumo dos Fatos</label><textarea id="tm-summary" rows="4" placeholder="Descreva os fatos ocorridos neste marco cronológico...">' + h(summary) + '</textarea></div>';
 
-  modalHtml += '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">';
-  modalHtml += '<button type="button" class="btn" onclick="closeTimelineModal()">Cancelar</button>';
-  modalHtml += '<button type="button" class="btn btn-primary" onclick="salvarTimelineModal()">' + (existing ? 'Salvar Alterações' : 'Criar Evento') + '</button>';
+  modalHtml += '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">';
+  modalHtml += '<button type="button" class="btn btn-small" onclick="closeTimelineModal()">Cancelar</button>';
+  modalHtml += '<button type="button" class="btn btn-primary btn-small" onclick="salvarTimelineModal()">' + (existing ? 'Salvar Alterações' : 'Criar Evento') + '</button>';
   modalHtml += '</div>';
 
   modalHtml += '</div>';
