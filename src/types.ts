@@ -195,6 +195,46 @@ export interface LikeStatusResult {
   userLiked: boolean;
 }
 
+export interface DbTimelineEvent {
+  id: string;
+  internal_id: string;
+  title: string;
+  short_title?: string;
+  summary: string;
+  color: string;
+  era: string;
+  start_date: string;
+  end_date?: string;
+  order_index: number;
+  tags?: string;
+  story_arc?: string;
+  characters?: string;
+  character_group?: string;
+  location?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicTimelineEvent {
+  id: string;
+  internalId: string;
+  title: string;
+  shortTitle: string;
+  summary: string;
+  color: string;
+  era: string;
+  startDate: string;
+  endDate: string;
+  orderIndex: number;
+  tags: string;
+  storyArc: string;
+  characters: string;
+  characterGroup: string;
+  location: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ServerConfig {
   databaseUrl: string;
   sessionSecret: string;
@@ -203,3 +243,4 @@ export interface ServerConfig {
   publicOrigin: string;
   port: number;
 }
+

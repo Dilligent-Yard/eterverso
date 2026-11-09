@@ -692,3 +692,28 @@ export const likes = pgTable("likes", {
 	}).onDelete("cascade"),
 ]);
 
+export const timelineEvents = pgTable("timeline_events", {
+	id: uuid().primaryKey().notNull().defaultRandom(),
+	internalId: varchar("internal_id", { length: 50 }).notNull(),
+	title: varchar({ length: 250 }).notNull(),
+	shortTitle: varchar("short_title", { length: 150 }),
+	summary: text().default(''),
+	color: varchar({ length: 50 }).default('Green'),
+	era: varchar({ length: 50 }).default('Before Daare').notNull(),
+	startDate: varchar("start_date", { length: 100 }).notNull(),
+	endDate: varchar("end_date", { length: 100 }),
+	orderIndex: integer("order_index").default(0).notNull(),
+	tags: varchar({ length: 250 }).default(''),
+	storyArc: varchar("story_arc", { length: 150 }).default(''),
+	characters: text().default(''),
+	characterGroup: varchar("character_group", { length: 150 }).default(''),
+	location: varchar({ length: 150 }).default(''),
+	createdAt: timestamp("created_at", { mode: 'string', withTimezone: true }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { mode: 'string', withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+	unique("idx_timeline_events_internal_id").on(table.internalId),
+	index("idx_timeline_events_era").using("btree", table.era.asc().nullsLast()),
+	index("idx_timeline_events_order").using("btree", table.orderIndex.asc().nullsLast()),
+]);
+
+

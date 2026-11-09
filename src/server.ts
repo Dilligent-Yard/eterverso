@@ -13,6 +13,7 @@ import 'dotenv/config';
 import path from 'path';
 import postgres, { Sql } from 'postgres';
 import { createApp } from '../server/app';
+import { ensureTimelineSchema } from '../server/timeline';
 import type { ServerConfig } from './types';
 
 export * from './types';
@@ -125,6 +126,7 @@ export async function startServer(options: { rootDirectory?: string; env?: NodeJ
   });
 
   await ensureInteractionsSchema(sql);
+  await ensureTimelineSchema(sql);
 
   const app = createApp({
     sql,

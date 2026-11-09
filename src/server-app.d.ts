@@ -15,3 +15,10 @@ declare module '../server/app' {
 
   export function createApp(options: CreateAppOptions): Express;
 }
+
+declare module '../server/timeline' {
+  import type { Sql } from 'postgres';
+  export function ensureTimelineSchema(sql: Sql): Promise<void>;
+  export function seedTimelineIfEmpty(sql: Sql): Promise<void>;
+}
+

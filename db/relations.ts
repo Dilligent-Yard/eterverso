@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { users, threads, categories, posts, personagens, comments, wikiPosts, wikiPages, wikiRevisions, wikiProposals, wikiSections, notifications, likes } from "./schema";
+import { users, threads, categories, posts, personagens, comments, wikiPosts, wikiPages, wikiRevisions, wikiProposals, wikiSections, notifications, likes, timelineEvents } from "./schema";
 
 // Relações entre as tabelas
 

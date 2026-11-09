@@ -19,6 +19,7 @@ const { createSourceRouter } = require('./sources');
 const { createLegacyImportRouter } = require('./legacy-import');
 const { createWikiTransfersRouter } = require('./wiki-transfers');
 const { createInteractionsRouter, createNotification } = require('./interactions');
+const { createTimelineRouter, ensureTimelineSchema } = require('./timeline');
 
 function createApp(options) {
   if (!options || typeof options.sql !== 'function' || typeof options.sql.json !== 'function') {
@@ -64,6 +65,8 @@ function createApp(options) {
     '/wiki/editor': 'index.html',
     '/wiki/propostas': 'index.html',
     '/personagens': 'index.html',
+    '/cenas': 'index.html',
+    '/timeline': 'index.html',
     '/admin': 'index.html',
     '/app.js': 'app.js',
     '/client/api.js': 'client/api.js',
@@ -1215,6 +1218,7 @@ function createApp(options) {
   app.use('/api', createWikiRouter({ sql, auth }));
   app.use('/api', createProposalRouter({ sql, auth }));
   app.use('/api', createSourceRouter({ sql, auth }));
+  app.use('/api/timeline', createTimelineRouter({ sql, auth }));
   app.use(createInteractionsRouter({ sql, auth }));
   app.use('/api', function (_req, res) {
     return sendError(res, new ApiError(404, 'NOT_FOUND', 'Rota não encontrada.'));
