@@ -5935,7 +5935,8 @@ var timelineLoading = false;
 var timelineLoadError = null;
 var timelineFilterEra = 'all';
 var timelineFilterSearch = '';
-var timelineFilterChar = 'all';
+var timelineFilterChars = [];
+var timelineCharFilterMode = 'any';
 var timelineEditingId = null;
 
 function carregarTimelineServidor(force) {
@@ -5969,8 +5970,32 @@ function onTimelineSearch(val) {
   }
 }
 
-function onTimelineCharFilter(char) {
-  timelineFilterChar = char;
+function toggleTimelineCharFilter(charName) {
+  if (!charName || charName === 'all') return;
+  var idx = timelineFilterChars.indexOf(charName);
+  if (idx === -1) {
+    timelineFilterChars.push(charName);
+  } else {
+    timelineFilterChars.splice(idx, 1);
+  }
+  render();
+}
+
+function removeTimelineCharFilter(charName) {
+  var idx = timelineFilterChars.indexOf(charName);
+  if (idx !== -1) {
+    timelineFilterChars.splice(idx, 1);
+    render();
+  }
+}
+
+function clearTimelineCharFilters() {
+  timelineFilterChars = [];
+  render();
+}
+
+function setTimelineCharMode(mode) {
+  timelineCharFilterMode = mode === 'all' ? 'all' : 'any';
   render();
 }
 
@@ -5982,10 +6007,19 @@ function getFilteredTimelineEvents() {
     list = list.filter(function(e) { return e.era === timelineFilterEra; });
   }
 
-  if (timelineFilterChar && timelineFilterChar !== 'all') {
-    var cLower = timelineFilterChar.toLowerCase();
+  if (Array.isArray(timelineFilterChars) && timelineFilterChars.length > 0) {
     list = list.filter(function(e) {
-      return (e.characters && e.characters.toLowerCase().indexOf(cLower) !== -1);
+      if (!e || !e.characters) return false;
+      var eventChars = e.characters.split(',').map(function(c) { return c.trim().toLowerCase(); });
+      if (timelineCharFilterMode === 'all') {
+        return timelineFilterChars.every(function(ch) {
+          return eventChars.indexOf(ch.toLowerCase()) !== -1;
+        });
+      } else {
+        return timelineFilterChars.some(function(ch) {
+          return eventChars.indexOf(ch.toLowerCase()) !== -1;
+        });
+      }
     });
   }
 
@@ -6054,14 +6088,33 @@ function renderTimeline() {
   html += '<input type="text" id="timeline-search-input" placeholder="Filtrar eventos..." value="' + ha(timelineFilterSearch) + '" oninput="onTimelineSearch(this.value)">';
   html += '</div>';
 
-  html += '<select class="timeline-character-select" onchange="onTimelineCharFilter(this.value)">';
-  html += '<option value="all"' + (timelineFilterChar === 'all' ? ' selected' : '') + '>Todos os personagens</option>';
+  html += '<select class="timeline-character-select" onchange="if(this.value){toggleTimelineCharFilter(this.value);this.value=\'\';}">';
+  html += '<option value="">Filtrar personagem...</option>';
   allChars.forEach(function(charName) {
-    html += '<option value="' + ha(charName) + '"' + (timelineFilterChar === charName ? ' selected' : '') + '>' + h(charName) + '</option>';
+    var isSelected = timelineFilterChars.indexOf(charName) !== -1;
+    html += '<option value="' + ha(charName) + '">' + h(charName) + (isSelected ? ' (selecionado)' : '') + '</option>';
   });
   html += '</select>';
   html += '</div>';
   html += '</div>';
+
+  if (timelineFilterChars.length > 0) {
+    html += '<div class="timeline-char-filter-bar">';
+    html += '<span class="timeline-char-filter-heading">Personagens selecionados:</span>';
+    html += '<div class="timeline-char-filter-chips">';
+    timelineFilterChars.forEach(function(ch) {
+      html += '<span class="timeline-filter-chip"><span>' + h(ch) + '</span><button type="button" class="timeline-chip-remove" onclick="removeTimelineCharFilter(' + jsArg(ch) + ')">remover</button></span>';
+    });
+    html += '</div>';
+    if (timelineFilterChars.length > 1) {
+      html += '<div class="timeline-mode-toggle">';
+      html += '<button type="button" class="timeline-mode-btn' + (timelineCharFilterMode === 'any' ? ' active' : '') + '" onclick="setTimelineCharMode(\'any\')">Qualquer um</button>';
+      html += '<button type="button" class="timeline-mode-btn' + (timelineCharFilterMode === 'all' ? ' active' : '') + '" onclick="setTimelineCharMode(\'all\')">Todos juntos</button>';
+      html += '</div>';
+    }
+    html += '<button type="button" class="timeline-clear-btn" onclick="clearTimelineCharFilters()">Limpar personagens</button>';
+    html += '</div>';
+  }
 
   if (filtered.length === 0) {
     html += '<div class="alert alert-info">Nenhum evento corresponde aos filtros selecionados.</div>';

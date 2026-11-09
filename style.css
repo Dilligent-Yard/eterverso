@@ -2949,6 +2949,109 @@ label {
   cursor: pointer;
 }
 
+/* Barra de Filtro de Multiplos Personagens */
+
+.timeline-char-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  background: #080808;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-top: -10px;
+  margin-bottom: 18px;
+}
+
+.timeline-char-filter-heading {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.timeline-char-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+
+.timeline-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #141414;
+  border: 1px solid var(--border-medium);
+  color: #ffffff;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.timeline-chip-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.timeline-chip-remove:hover {
+  color: #ffffff;
+}
+
+.timeline-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.timeline-mode-btn {
+  background: #0d0d0d;
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  font-size: 10.5px;
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.timeline-mode-btn:last-child {
+  border-right: none;
+}
+
+.timeline-mode-btn:hover {
+  color: #ffffff;
+}
+
+.timeline-mode-btn.active {
+  background: #ffffff;
+  color: #000000;
+  font-weight: 600;
+}
+
+.timeline-clear-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.timeline-clear-btn:hover {
+  border-color: var(--border-hover);
+  color: #ffffff;
+}
+
 /* Estrutura Compacta da Linha do Tempo */
 
 .timeline-wrapper {
