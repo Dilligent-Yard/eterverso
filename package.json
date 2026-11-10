@@ -8,6 +8,7 @@
     "dev": "node server.js",
     "dev:ts": "ts-node src/server.ts",
     "build": "npm run typecheck && npm run build:node && npm run build:client",
+    "postinstall": "npm run build",
     "test:env:up": "node scripts/test-env.js up",
     "test:env:down": "node scripts/test-env.js down",
     "test:unit": "node scripts/test-runner.js unit",
