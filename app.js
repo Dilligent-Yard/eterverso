@@ -1,4 +1,5 @@
 var sessionRevision = 0;
+var authEpoch = 0;
 var DB = {
   users: [
     { id: 1, username: 'Admin', email: 'admin@forum.com', avatar: '', title: 'Administrador', posts: 0, role: 'admin', bio: '', joinDate: '01/01/2026', admTentativaUsada: false },
@@ -7883,6 +7884,7 @@ function applyServerSession(serverUser, expectedRevision) {
     clearServerForumPendingReply();
     clearNotificationCache();
     resetAdminStateCache();
+    if (previousId) authEpoch += 1;
     DB.session = null;
     if (window.Aetherverse) window.Aetherverse.clearSessionUser();
     return true;
@@ -7899,9 +7901,11 @@ function applyServerSession(serverUser, expectedRevision) {
     clearServerForumPendingReply();
     clearNotificationCache();
     resetAdminStateCache();
+    if (previousId) authEpoch += 1;
     DB.session = null;
     return true;
   }
+  if (!previousId || String(previousId) !== safeUser.id) authEpoch += 1;
   if (!previousId || String(previousId) !== safeUser.id || previousRole !== safeUser.role) {
     pendingProfileAvatarUpload = null;
     pendingProfileAvatarCleared = false;
@@ -7951,10 +7955,11 @@ function doLogin() {
 }
 
 function doLogout() {
-  var logoutRequestRevision = sessionRevision;
+  var logoutAuthEpoch = authEpoch;
   apiPost('/api/auth/logout', {}, function(err) {
     if (err) { showAlert(err, 'error'); return; }
-    if (!applyServerSession(null, logoutRequestRevision)) return;
+    if (logoutAuthEpoch !== authEpoch) return;
+    applyServerSession(null);
     navigate('forum');
   });
 }

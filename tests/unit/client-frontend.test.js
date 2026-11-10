@@ -1406,3 +1406,36 @@ test('a stale profile success cannot restore the previous account after relogin'
   assert.equal(finished, 1);
   assert.equal(alerts.includes('Perfil atualizado com sucesso.'), false);
 });
+
+test('a successful logout still clears the UI after an earlier profile response applied', async () => {
+  const callbacks = {};
+  const context = makeFrontend({ apiRequest: (method, route, body, callback) => {
+    callbacks[route] = callback;
+    return Promise.resolve({});
+  } });
+  for (const id of ['prof-title', 'prof-avatar', 'prof-bio', 'prof-current-password', 'prof-password']) {
+    context.__elements[id] = field('');
+  }
+  context.__elements['prof-title'].value = 'Cronista';
+  context.DB.session = {
+    id: USER_A, serverId: USER_A, username: 'Ana', role: 'admin',
+    title: 'Cronista', avatar: '', bio: '', version: 1,
+  };
+  context.resourceFormDraftDescriptor = () => null;
+  context.saveActiveResourceFormDraft = () => {};
+  context.beginResourceFormSubmission = () => () => {};
+  context.clearResourceFormDraft = () => {};
+  context.syncCachedAuthorData = () => {};
+  context.updateTopBar = () => {};
+  context.render = () => {};
+  context.navigate = () => {};
+  context.showAlert = () => {};
+
+  context.salvarEdicaoPerfil();
+  context.doLogout();
+  callbacks['/api/auth/profile'](null, { user: { id: USER_A, username: 'Ana', role: 'admin' } });
+  callbacks['/api/auth/logout'](null, {});
+  await flushMicrotasks();
+
+  assert.equal(context.DB.session, null, 'logout must clear the current same-account session');
+});
