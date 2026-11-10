@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const dotenv = require('dotenv');
 const postgres = require('postgres');
+const { STARTUP_OUTPUTS, assertBuildOutput } = require('./check-build');
 const { bootstrapAdmin } = require('../server/admin');
 
 function parseArguments(args) {
@@ -24,6 +25,9 @@ function parseArguments(args) {
 
 async function main(args = process.argv.slice(2), environment = process.env) {
   if (Number(process.versions.node.split('.')[0]) !== 24) throw new Error('Use Node.js 24: nvm use.');
+  // Direct CLI use has no npm pre-hook. Requiring `../server` below loads
+  // these generated modules, so fail with the build command first.
+  assertBuildOutput({ required: STARTUP_OUTPUTS });
   const values = parseArguments(args);
   // An env file is read only when explicitly selected. Never create or change it.
   const fileEnv = values['env-file'] ? dotenv.parse(fs.readFileSync(path.resolve(values['env-file']))) : {};

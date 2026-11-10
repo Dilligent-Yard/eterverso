@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const express = require('express');
 const cookieSession = require('cookie-session');
 const postgres = require('postgres');
@@ -181,6 +181,93 @@ test('PRO-01 proposal is idempotent and private; staff acceptance creates a cred
   assert.deepEqual(audit.map((row) => row.action), ['wiki.proposal.accept', 'wiki.proposal.submit']);
 });
 
+test('accepted proposals carry base citations for retained sections and later publication copies them', async (t) => {
+  const fixture = await makeFixture(t, ['admin', 'member', 'moderador']);
+  const base = snapshot(
+    'Synthetic citation base',
+    'synthetic-citation-base',
+    '<p>Retained synthetic section.</p>',
+  );
+  const retainedSection = base.body.sections[0];
+  const removedSection = {
+    ...retainedSection,
+    id: randomUUID(),
+    heading: 'Synthetic removed section',
+    html: '<p>Removed synthetic section.</p>',
+  };
+  base.body.sections.push(removedSection);
+  const source = await makeWikiSource(fixture, fixture.users.admin.id, `Synthetic citation source ${randomUUID()}`);
+  const baseCitations = [
+    { sectionId: retainedSection.id, sourceId: source.id, locator: 'Synthetic retained line 1' },
+    { sectionId: retainedSection.id, sourceId: source.id, locator: 'Synthetic retained line 2' },
+    { sectionId: removedSection.id, sourceId: source.id, locator: 'Synthetic removed line' },
+  ];
+  const page = await createPublishedPage(fixture, fixture.users.admin, 'Synthetic citation page', {
+    snapshot: base,
+    citations: baseCitations,
+  });
+  const memberSession = await sessionFor(fixture.users.member1.id);
+  const moderatorSession = await sessionFor(fixture.users.moderador.id);
+  const candidate = {
+    ...base,
+    title: 'Synthetic retained citation candidate',
+    slug: 'synthetic-retained-citation-candidate',
+    body: { ...base.body, sections: [retainedSection] },
+  };
+  const proposal = await submitProposal(fixture, page, memberSession, candidate);
+  const retainedCitations = sortedCitations(baseCitations.filter((citation) => citation.sectionId === retainedSection.id));
+
+  const accepted = await request(moderatorSession, `/staff/wiki/proposals/${proposal.id}/accept`, {
+    method: 'POST',
+    body: {
+      expectedVersion: 1,
+      expectedWorkVersion: 1,
+      expectedPublishedRevisionId: page.revisionId,
+    },
+  });
+  assert.equal(accepted.status, 201, JSON.stringify(accepted.body));
+  const acceptedRevisionId = accepted.body.data.revision.id;
+  fixture.revisionIds.push(acceptedRevisionId);
+  assert.deepEqual(await readCitationRows(acceptedRevisionId), retainedCitations);
+  assert.deepEqual(await readCitationRows(page.revisionId), sortedCitations(baseCitations));
+
+  const staffSnapshot = {
+    ...candidate,
+    title: 'Synthetic accepted citation staff revision',
+    slug: 'synthetic-accepted-citation-staff-revision',
+    accessLevel: 'staff',
+  };
+  const staffRevision = await request(moderatorSession, `/staff/wiki/pages/${page.id}/revisions`, {
+    method: 'POST',
+    body: {
+      snapshot: staffSnapshot,
+      summary: 'Synthetic staff revision from accepted proposal',
+      expectedVersion: 2,
+    },
+  });
+  assert.equal(staffRevision.status, 200, JSON.stringify(staffRevision.body));
+  assert.deepEqual(staffRevision.body.data.head.citations, retainedCitations);
+  const staffRevisionId = staffRevision.body.data.headRevisionId;
+  assert.deepEqual(await readCitationRows(staffRevisionId), retainedCitations);
+
+  const published = await request(moderatorSession, `/staff/wiki/pages/${page.id}/publish`, {
+    method: 'POST',
+    body: {
+      revisionId: staffRevisionId,
+      expectedVersion: staffRevision.body.data.workVersion,
+      expectedPublishedRevisionId: page.revisionId,
+      summary: 'Synthetic publication from accepted proposal',
+      makePublic: true,
+    },
+  });
+  assert.equal(published.status, 200, JSON.stringify(published.body));
+  assert.notEqual(published.body.data.headRevisionId, staffRevisionId);
+  assert.equal(published.body.data.publishedRevisionId, published.body.data.headRevisionId);
+  assert.deepEqual(await readCitationRows(published.body.data.headRevisionId), retainedCitations);
+  assert.deepEqual(await readCitationRows(staffRevisionId), retainedCitations);
+  assert.deepEqual(await readCitationRows(page.revisionId), sortedCitations(baseCitations));
+});
+
 test('proposer withdrawal and staff rejection are versioned terminal decisions', async (t) => {
   const fixture = await makeFixture(t, ['admin', 'member', 'member', 'moderador']);
   const page = await createPublishedPage(fixture, fixture.users.admin, 'Terminal-state fixture');
@@ -300,7 +387,7 @@ test('acceptance rejects stale publication bases, existing staff drafts, and sta
 });
 
 async function makeFixture(t, roles) {
-  const fixture = { users: {}, pageIds: [], proposalIds: [], revisionIds: [] };
+  const fixture = { users: {}, pageIds: [], proposalIds: [], revisionIds: [], sourceIds: [] };
   t.after(async () => cleanFixture(fixture));
   const suffix = randomUUID().slice(0, 8);
   for (const role of roles) {
@@ -317,8 +404,8 @@ async function makeFixture(t, roles) {
   return fixture;
 }
 
-async function createPublishedPage(fixture, creator, title) {
-  const initial = snapshot(title, slugifyFixture(title), '<p>Original public text.</p>');
+async function createPublishedPage(fixture, creator, title, options = {}) {
+  const initial = options.snapshot || snapshot(title, slugifyFixture(title), '<p>Original public text.</p>');
   const rows = await sql`
     INSERT INTO wiki_pages (created_by, access_level, work_version, public_version, published_at)
     VALUES (${creator.id}, 'public', 1, 1, now()) RETURNING id`;
@@ -331,6 +418,7 @@ async function createPublishedPage(fixture, creator, title) {
     UPDATE wiki_pages SET head_revision_id = ${revision.id}, published_revision_id = ${revision.id}
     WHERE id = ${page.id}`;
   page.revisionId = revision.id;
+  if (options.citations) await insertTestCitations(revision.id, options.citations);
   await sql`
     INSERT INTO wiki_names (name_key, page_id, kind)
     VALUES (${initial.slug}, ${page.id}, 'canonical')`;
@@ -374,6 +462,54 @@ async function insertTestRevision(fixture, page, actor, value, fields) {
     ) RETURNING id`;
   fixture.revisionIds.push(rows[0].id);
   return { id: rows[0].id };
+}
+
+async function makeWikiSource(fixture, importedBy, content) {
+  const rows = await sql`
+    INSERT INTO wiki_sources
+      (archive_sha256, relative_path, file_sha256, family, language, content, imported_by)
+    VALUES (
+      ${createHash('sha256').update(`archive-${randomUUID()}`).digest('hex')},
+      ${`synthetic/${randomUUID()}.txt`},
+      ${createHash('sha256').update(content).digest('hex')},
+      'Synthetic proposal citation fixture', 'en', ${content}, ${importedBy}
+    )
+    RETURNING id`;
+  const id = String(rows[0].id).toLowerCase();
+  fixture.sourceIds.push(id);
+  return { id };
+}
+
+async function insertTestCitations(revisionId, citations) {
+  for (const citation of citations) {
+    await sql`
+      INSERT INTO wiki_revision_citations (revision_id, section_id, source_id, locator)
+      VALUES (${revisionId}, ${citation.sectionId}, ${citation.sourceId}, ${citation.locator})`;
+  }
+}
+
+async function readCitationRows(revisionId) {
+  const rows = await sql`
+    SELECT section_id, source_id, locator FROM wiki_revision_citations
+    WHERE revision_id = ${revisionId}
+    ORDER BY section_id ASC, source_id ASC, locator ASC`;
+  return sortedCitations(rows.map((row) => ({
+    sectionId: String(row.section_id).toLowerCase(),
+    sourceId: String(row.source_id).toLowerCase(),
+    locator: row.locator,
+  })));
+}
+
+function sortedCitations(citations) {
+  return citations.map(({ sectionId, sourceId, locator }) => ({
+    sectionId: sectionId.toLowerCase(),
+    sourceId: sourceId.toLowerCase(),
+    locator,
+  })).sort((left, right) => {
+    const leftKey = `${left.sectionId}\0${left.sourceId}\0${left.locator}`;
+    const rightKey = `${right.sectionId}\0${right.sourceId}\0${right.locator}`;
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
 }
 
 async function submitProposal(fixture, page, session, candidate, options = {}) {
@@ -428,6 +564,7 @@ async function cleanFixture(fixture) {
       await tx`DELETE FROM audit_events WHERE target_id = ${proposalId}`;
     }
     for (const pageId of fixture.pageIds) {
+      await tx`DELETE FROM wiki_revision_citations WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${pageId})`;
       await tx`DELETE FROM wiki_revision_categories WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${pageId})`;
       await tx`DELETE FROM wiki_revision_links WHERE revision_id IN (SELECT id FROM wiki_revisions WHERE page_id = ${pageId})`;
       await tx`UPDATE wiki_revisions SET accepted_proposal_id = NULL WHERE page_id = ${pageId}`;
@@ -439,6 +576,9 @@ async function cleanFixture(fixture) {
       for (const revision of revisions) await tx`DELETE FROM wiki_revisions WHERE id = ${revision.id}`;
       await tx`DELETE FROM wiki_names WHERE page_id = ${pageId}`;
       await tx`DELETE FROM wiki_pages WHERE id = ${pageId}`;
+    }
+    if (fixture.sourceIds.length) {
+      await tx`DELETE FROM wiki_sources WHERE id = ANY(${tx.array(fixture.sourceIds, 2950)})`;
     }
     await tx`ALTER TABLE wiki_revisions ENABLE TRIGGER wiki_revisions_immutable`;
     for (const user of Object.values(fixture.users)) await tx`DELETE FROM users WHERE id = ${user.id}`;

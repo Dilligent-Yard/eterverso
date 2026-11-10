@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false,
+    "rootDir": "src",
+    "outDir": ".generated",
+    "noUncheckedIndexedAccess": true,
+    "noEmitOnError": true
+  }
+}

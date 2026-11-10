@@ -13,7 +13,7 @@ const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
 const LEGACY_KEY = 'forum-antigo-db-v22';
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0017_timeline_events';
 const PASSWORD = 'Synthetic-browser-password-42';
 let sql;
 let server;
@@ -90,7 +90,7 @@ test('FOR-02/UI-01 two independent accounts share a UI-created topic and reply a
 
     await pageA.goto(`${origin}/forum/categorias/${fixture.categoryId}`);
     await expect(pageA.locator('.cat-header')).toContainText(fixture.categoryName);
-    await pageA.getByRole('button', { name: '+ Novo Tópico', exact: true }).click();
+    await pageA.getByRole('link', { name: '+ Novo Tópico', exact: true }).click();
     await pageA.locator('#thread-title').fill(fixture.title);
     await pageA.locator('#thread-cat').selectOption(fixture.categoryId);
     await pageA.locator('#thread-tag').selectOption('ooc');
@@ -142,6 +142,51 @@ test('FOR-02/UI-01 two independent accounts share a UI-created topic and reply a
     expect(await pageB.evaluate((key) => localStorage.getItem(key), LEGACY_KEY)).toBeNull();
     expect(errors).toEqual([]);
   } finally { await Promise.all([a.close(), b.close()]); }
+});
+
+test('forum search keeps the input usable while typing and clears cached filters', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    const threadId = randomUUID();
+    await sql`INSERT INTO threads (id, category_id, author_id, title, tag)
+      VALUES (${threadId}, ${fixture.categoryId}, ${fixture.users[0].id}, ${fixture.title}, 'ooc')`;
+    await sql`INSERT INTO posts (id, thread_id, author_id, content, post_no)
+      VALUES (${randomUUID()}, ${threadId}, ${fixture.users[0].id}, ${'<p>' + fixture.opening + '</p>'}, 1)`;
+    await page.goto(`${origin}/forum`);
+    const input = page.locator('#forum-search-input');
+    await input.click();
+    await input.pressSequentially(fixture.title.slice(0, 12), { delay: 40 });
+    await expect(input).toHaveValue(fixture.title.slice(0, 12));
+    await expect(page.locator('#forum-search-input')).toBeFocused();
+    await expect(page.locator('#main')).toContainText(fixture.title);
+    await page.getByRole('button', { name: 'Limpar Filtro', exact: true }).click();
+    await expect(page.locator('#forum-search-input')).toHaveValue('');
+    await expect(page.locator('#main')).toContainText(fixture.title);
+  } finally {
+    await context.close();
+  }
+});
+
+test('legacy forum tags render as text without injecting attributes', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    const threadId = randomUUID();
+    const hostileTag = ' onclick=alert() x=';
+    await sql`INSERT INTO threads (id, category_id, author_id, title, tag)
+      VALUES (${threadId}, ${fixture.categoryId}, ${fixture.users[0].id}, ${fixture.title}, ${hostileTag})`;
+    await sql`INSERT INTO posts (id, thread_id, author_id, content, post_no)
+      VALUES (${randomUUID()}, ${threadId}, ${fixture.users[0].id}, ${'<p>' + fixture.opening + '</p>'}, 1)`;
+    await page.goto(`${origin}/forum/categorias/${fixture.categoryId}`);
+    const tag = page.locator('.tag').filter({ hasText: hostileTag.trim().toUpperCase() }).first();
+    await expect(tag).toBeVisible();
+    const outer = await tag.evaluate((element) => element.outerHTML);
+    expect(outer).not.toContain('onclick=alert');
+    expect(await tag.getAttribute('onclick')).toBeNull();
+  } finally {
+    await context.close();
+  }
 });
 
 test('UI-01 a fresh anonymous reader opens stable category/topic URLs, reloads and navigates history', async ({ browser }) => {
@@ -199,6 +244,302 @@ test('UI-01 a fresh anonymous reader opens stable category/topic URLs, reloads a
   } finally { await Promise.all([author.close(), reader.close()]); }
 });
 
+test('pending reply actions use one record lookup and paging keeps every post exactly once', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    const errors = observePageErrors(page);
+    await login(page, fixture.users[0]);
+    const threadId = await createLongDiscussion(fixture, 40);
+    const replyText = `Pending reply 41 ${fixture.suffix}`;
+    const editedText = `${replyText} edited`;
+    const postOffsets = [];
+    page.on('request', (request) => {
+      const url = new URL(request.url());
+      if (request.method() === 'GET' && url.pathname === `/api/forum/threads/${threadId}/posts`) {
+        postOffsets.push(Number(url.searchParams.get('offset')));
+      }
+    });
+    await page.goto(`${origin}/forum/topicos/${threadId}`);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 20));
+
+    await page.locator('#reply-editor').fill(replyText);
+    const publishedResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/forum/threads/${threadId}/posts`);
+    await page.getByRole('button', { name: 'Enviar Resposta', exact: true }).click();
+    const published = await publishedResponse;
+    expect(published.status()).toBe(201);
+    const replyPostId = (await published.json()).data.id;
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 20).concat('#41'));
+
+    const pendingCard = page.locator('.post-box').filter({ hasText: '#41' });
+    await expect(pendingCard.locator('.post-content')).toContainText(replyText);
+
+    // Quote the displayed pending reply before any intermediate page is fetched.
+    await pendingCard.getByText('Citar', { exact: true }).click();
+    await expect(page.locator('#reply-editor')).toContainText('escreveu:');
+    await expect(page.locator('#reply-editor')).toContainText(replyText);
+
+    // Edit/save the displayed pending reply using its server version.
+    await pendingCard.getByText('Editar', { exact: true }).click();
+    const modal = page.locator('#modal-container');
+    await expect(modal.locator('#edit-post-editor')).toContainText(replyText);
+    await modal.locator('#edit-post-editor').fill(editedText);
+    await modal.locator('#edit-post-summary').fill('Synthetic pending reply edit');
+    const patchedResponse = page.waitForResponse((response) => response.request().method() === 'PATCH'
+      && new URL(response.url()).pathname === `/api/forum/posts/${replyPostId}`);
+    await modal.getByRole('button', { name: 'Salvar', exact: true }).click();
+    expect((await patchedResponse).status()).toBe(200);
+    await expect(page.locator('#modal-container #edit-post-editor')).toHaveCount(0);
+    await expect(pendingCard.locator('.post-content')).toContainText(editedText);
+
+    // Fetch every intermediate page. The sparse reply 41 must not shift offsets.
+    const firstPageResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+      && new URL(response.url()).pathname === `/api/forum/threads/${threadId}/posts`
+      && new URL(response.url()).searchParams.get('offset') === '20');
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    const firstPage = await firstPageResponse;
+    expect(firstPage.status()).toBe(200);
+    expect((await firstPage.json()).data.map((post) => post.postNo))
+      .toEqual(Array.from({ length: 20 }, (_, index) => 21 + index));
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 40).concat('#41'));
+
+    const secondPageResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+      && new URL(response.url()).pathname === `/api/forum/threads/${threadId}/posts`
+      && new URL(response.url()).searchParams.get('offset') === '40');
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    const secondPage = await secondPageResponse;
+    expect(secondPage.status()).toBe(200);
+    expect((await secondPage.json()).data.map((post) => post.postNo)).toEqual([41]);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 41));
+    expect(postOffsets).toEqual([0, 0, 20, 40]);
+    const renderedNumbers = await page.locator('.post-number').allTextContents();
+    expect(renderedNumbers).toHaveLength(41);
+    expect(new Set(renderedNumbers).size).toBe(41);
+    await expect(page.locator('.post-content').last()).toContainText(editedText);
+
+    const stored = await sql`SELECT post_no, content, version, deleted_at FROM posts
+      WHERE thread_id = ${threadId} ORDER BY post_no`;
+    expect(stored.map((post) => post.post_no)).toEqual(Array.from({ length: 41 }, (_, index) => index + 1));
+    expect(stored[40].content).toContain(editedText);
+    expect(stored[40].version).toBe(2);
+    expect(stored[40].deleted_at).toBeNull();
+    expect(stored[20].post_no).toBe(21);
+    expect(stored[20].content).toContain(`Long post 21 ${fixture.suffix}`);
+    const freshPage = await context.request.get(`${origin}/api/forum/threads/${threadId}/posts?limit=20&offset=40`);
+    expect(freshPage.status()).toBe(200);
+    expect((await freshPage.json()).data.map((post) => post.postNo)).toEqual([41]);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('hiding a displayed pending reply updates it before earlier pages are fetched', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    const errors = observePageErrors(page);
+    await login(page, fixture.users[0]);
+    const threadId = await createLongDiscussion(fixture, 40);
+    const replyText = `Pending hidden reply 41 ${fixture.suffix}`;
+    await page.goto(`${origin}/forum/topicos/${threadId}`);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 20));
+
+    await page.locator('#reply-editor').fill(replyText);
+    const publishedResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/forum/threads/${threadId}/posts`);
+    await page.getByRole('button', { name: 'Enviar Resposta', exact: true }).click();
+    const published = await publishedResponse;
+    expect(published.status()).toBe(201);
+    const replyPostId = (await published.json()).data.id;
+    const pendingCard = page.locator('.post-box').filter({ hasText: '#41' });
+    await expect(pendingCard.locator('.post-content')).toContainText(replyText);
+
+    page.on('dialog', (dialog) => dialog.accept('Synthetic hide reason'));
+    const hiddenResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/forum/posts/${replyPostId}/hide`);
+    await pendingCard.getByText('Ocultar', { exact: true }).click();
+    expect((await hiddenResponse).status()).toBe(200);
+    await expect(pendingCard.locator('.post-content')).toContainText('Esta publicação foi ocultada.');
+    await expect(pendingCard.getByText('Citar', { exact: true })).toHaveCount(0);
+    await expect(pendingCard.getByText('Editar', { exact: true })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 40).concat('#41'));
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 41));
+    const stored = await sql`SELECT post_no, version, deleted_at FROM posts
+      WHERE thread_id = ${threadId} ORDER BY post_no`;
+    expect(stored.map((post) => post.post_no)).toEqual(Array.from({ length: 41 }, (_, index) => index + 1));
+    expect(stored[40].version).toBe(2);
+    expect(stored[40].deleted_at).not.toBeNull();
+    const renderedNumbers = await page.locator('.post-number').allTextContents();
+    expect(new Set(renderedNumbers).size).toBe(41);
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a stale offset-40 page cannot revert an edited pending reply', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    const errors = observePageErrors(page);
+    await login(page, fixture.users[0]);
+    const threadId = await createLongDiscussion(fixture, 40);
+    const replyText = `Pending stale edit 41 ${fixture.suffix}`;
+    const editedText = `Edited stale reply ${fixture.suffix}`;
+    await page.goto(`${origin}/forum/topicos/${threadId}`);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 20));
+
+    await page.locator('#reply-editor').fill(replyText);
+    const publishedResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/forum/threads/${threadId}/posts`);
+    await page.getByRole('button', { name: 'Enviar Resposta', exact: true }).click();
+    const published = await publishedResponse;
+    expect(published.status()).toBe(201);
+    const replyPostId = (await published.json()).data.id;
+    const pendingCard = page.locator('.post-box').filter({ hasText: '#41' });
+    await expect(pendingCard.locator('.post-content')).toContainText(replyText);
+
+    // Fetch page 20 normally, then hold page 40 after its body was produced.
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 40).concat('#41'));
+    const heldPage = await holdPostsPage(page, threadId, 40);
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    await heldPage.captured;
+    expect(heldPage.body.data.map((post) => post.postNo)).toEqual([41]);
+    expect(heldPage.body.data[0].version).toBe(1);
+    expect(heldPage.body.data[0].content).toContain(replyText);
+
+    // Edit the pending reply while the old page is still in flight.
+    await pendingCard.getByText('Editar', { exact: true }).click();
+    const modal = page.locator('#modal-container');
+    await expect(modal.locator('#edit-post-editor')).toContainText(replyText);
+    await modal.locator('#edit-post-editor').fill(editedText);
+    await modal.locator('#edit-post-summary').fill('Synthetic stale-page edit');
+    const patchedResponse = page.waitForResponse((response) => response.request().method() === 'PATCH'
+      && new URL(response.url()).pathname === `/api/forum/posts/${replyPostId}`);
+    await modal.getByRole('button', { name: 'Salvar', exact: true }).click();
+    expect((await patchedResponse).status()).toBe(200);
+    await expect(pendingCard.locator('.post-content')).toContainText(editedText);
+
+    // Release the version-1 body. It must not replace or duplicate version 2.
+    await heldPage.release();
+    await expect(page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true })).toHaveCount(0);
+    await expect(pendingCard.locator('.post-content')).toContainText(editedText);
+    await expect(page.locator('.post-content').filter({ hasText: replyText })).toHaveCount(0);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 41));
+    const renderedNumbers = await page.locator('.post-number').allTextContents();
+    expect(new Set(renderedNumbers).size).toBe(41);
+    await expect(pendingCard.getByText('Citar', { exact: true })).toBeVisible();
+
+    const stored = await sql`SELECT version, content, deleted_at FROM posts WHERE id = ${replyPostId}`;
+    expect(stored[0].version).toBe(2);
+    expect(stored[0].content).toContain(editedText);
+    expect(stored[0].deleted_at).toBeNull();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a stale offset-40 page cannot make a hidden pending reply visible again', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    const errors = observePageErrors(page);
+    await login(page, fixture.users[0]);
+    const threadId = await createLongDiscussion(fixture, 40);
+    const replyText = `Pending stale hide 41 ${fixture.suffix}`;
+    await page.goto(`${origin}/forum/topicos/${threadId}`);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 20));
+
+    await page.locator('#reply-editor').fill(replyText);
+    const publishedResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/forum/threads/${threadId}/posts`);
+    await page.getByRole('button', { name: 'Enviar Resposta', exact: true }).click();
+    const published = await publishedResponse;
+    expect(published.status()).toBe(201);
+    const replyPostId = (await published.json()).data.id;
+    const pendingCard = page.locator('.post-box').filter({ hasText: '#41' });
+    await expect(pendingCard.locator('.post-content')).toContainText(replyText);
+
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 40).concat('#41'));
+    const heldPage = await holdPostsPage(page, threadId, 40);
+    await page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true }).click();
+    await heldPage.captured;
+    expect(heldPage.body.data.map((post) => post.postNo)).toEqual([41]);
+    expect(heldPage.body.data[0].version).toBe(1);
+    expect(heldPage.body.data[0].deleted).toBe(false);
+
+    page.on('dialog', (dialog) => dialog.accept('Synthetic stale-page hide reason'));
+    const hiddenResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === `/api/forum/posts/${replyPostId}/hide`);
+    await pendingCard.getByText('Ocultar', { exact: true }).click();
+    expect((await hiddenResponse).status()).toBe(200);
+    await expect(pendingCard.locator('.post-content')).toContainText('Esta publicação foi ocultada.');
+
+    await heldPage.release();
+    await expect(page.getByRole('button', { name: 'Carregar publicações anteriores', exact: true })).toHaveCount(0);
+    await expect(pendingCard.locator('.post-content')).toContainText('Esta publicação foi ocultada.');
+    await expect(page.locator('.post-content').filter({ hasText: replyText })).toHaveCount(0);
+    await expect(pendingCard.getByText('Citar', { exact: true })).toHaveCount(0);
+    await expect(pendingCard.getByText('Editar', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.post-number')).toHaveText(postNumbers(1, 41));
+    const renderedNumbers = await page.locator('.post-number').allTextContents();
+    expect(new Set(renderedNumbers).size).toBe(41);
+
+    const stored = await sql`SELECT version, deleted_at FROM posts WHERE id = ${replyPostId}`;
+    expect(stored[0].version).toBe(2);
+    expect(stored[0].deleted_at).not.toBeNull();
+    expect(errors).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+async function holdPostsPage(page, threadId, offset) {
+  let release = null;
+  let body = null;
+  const captured = new Promise((resolve) => {
+    page.route((url) => url.pathname === `/api/forum/threads/${threadId}/posts`
+      && url.searchParams.get('offset') === String(offset), async (route) => {
+      const response = await route.fetch();
+      body = await response.json();
+      release = () => route.fulfill({ response, json: body });
+      resolve();
+    });
+  });
+  return {
+    captured,
+    get body() { return body; },
+    release: async () => { await release(); },
+  };
+}
+
+async function createLongDiscussion(f, count) {
+  const threadId = randomUUID();
+  await sql.begin(async (tx) => {
+    await tx`INSERT INTO threads (id, category_id, author_id, title, tag)
+      VALUES (${threadId}, ${f.categoryId}, ${f.users[0].id}, ${f.title}, 'ooc')`;
+    for (let postNo = 1; postNo <= count; postNo += 1) {
+      await tx`INSERT INTO posts (id, thread_id, author_id, content, post_no)
+        VALUES (${randomUUID()}, ${threadId}, ${f.users[0].id},
+          ${`<p>Long post ${postNo} ${f.suffix}</p>`}, ${postNo})`;
+    }
+    await tx`UPDATE threads SET next_post_no = ${count + 1} WHERE id = ${threadId}`;
+  });
+  return threadId;
+}
+
+function postNumbers(first, last) {
+  return Array.from({ length: last - first + 1 }, (_, index) => `#${first + index}`);
+}
+
 async function assertRequiredSchema() {
   const journal = JSON.parse(fs.readFileSync(path.join(ROOT, 'drizzle/meta/_journal.json'), 'utf8')).entries;
   const required = journal.findIndex((entry) => entry.tag === REQUIRED_MIGRATION);
@@ -219,7 +560,7 @@ async function assertRequiredSchema() {
 async function makeFixture() {
   const suffix = randomUUID().slice(0, 8);
   const f = {
-    users: [], categoryId: null, categoryName: `Browser forum ${suffix}`,
+    suffix, users: [], categoryId: null, categoryName: `Browser forum ${suffix}`,
     title: `Tópico sintético ${suffix}`, opening: `Abertura compartilhada ${suffix}`,
     reply: `Resposta independente ${suffix}`,
   };

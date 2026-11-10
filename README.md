@@ -7,13 +7,20 @@ forum content, characters, scenes, scene turns, and reference wiki data.
 
 ## Local development
 
-Use Node.js 24 from `.nvmrc`, npm, and Docker Compose. Select Node 24 and install
-the locked dependencies:
+Use Node.js 24 from `.nvmrc`, npm, and Docker Compose. Select Node 24, install
+the locked dependencies, and compile the typed islands and browser bundle:
 
 ```sh
 nvm use
 npm ci
+npm run build
 ```
+
+`npm run build` runs the typechecks, emits the Node entry points under
+`.generated/node/`, and bundles `generated/client/vault.js`. `npm start` and
+`npm run dev` do not compile; their `prestart`/`predev` hooks run
+`node scripts/check-build.js`, which lists every missing generated file and the
+`npm run build` command. Rebuild after changing TypeScript sources.
 
 Check for an existing `.env` before creating one. If none exists, copy the
 template; otherwise preserve the existing file and edit it deliberately:
@@ -73,10 +80,11 @@ for supported migration paths and recovery steps.
 Start the app after preflight confirms the required schema:
 
 ```sh
-npm run dev
+npm start
 ```
 
-Open <http://localhost:3000>. Startup loads the existing `.env` and checks
+`npm start` and `npm run dev` both run `node server.js`. Open
+<http://localhost:3000>. Startup loads the existing `.env` and checks
 schema readiness; it does not create or alter database structures. Stop the
 app with Ctrl+C. `docker compose down` stops PostgreSQL and preserves its named
 development volume. Do not remove that volume as routine cleanup.
@@ -106,6 +114,78 @@ env -u DATABASE_URL node scripts/bootstrap-admin.js \
 The command records the operator and reason, and refuses if an active
 administrator already exists. Sign out and back in after bootstrap. Manage
 later account roles through the authenticated admin interface.
+
+
+### TypeScript islands and build
+
+The contribution adds typed implementation islands under `src/browser/` and
+`src/node/`. Legacy entry points and global browser handlers remain small
+adapters so existing URLs, scripts and callers keep working.
+
+```sh
+npm run typecheck     # legacy schema/server entry + Node and browser islands
+npm run lint:typed    # strict rules for the typed islands
+npm run build         # typecheck, emit Node islands, bundle the browser facade
+npm start             # node server.js; prestart validates generated files
+```
+
+`npm run build:client` writes the generated classic-script bundle to
+`generated/client/vault.js`; `npm run build:node` writes the Node islands under
+`.generated/node/`. Both are ignored by Git and must be built before running
+the app or a direct CLI that consumes an adapter. `node scripts/check-build.js`
+checks the complete set used by canonical startup and its adapters; direct
+`db-migrate` and `bootstrap-admin` invocations also fail early with the same
+build guidance when their generated modules are absent. The default
+`npm start` serves repository-root assets and Drizzle migrations; the build
+does not relocate `.env`, SQL, static files or the timeline seed. Hosting
+provider build/start settings are not verified by this repository.
+
+## Deployment
+
+The service runs with Node.js 24 and a production dependency set. Build and
+apply schema changes while development dependencies are available, then prune
+them for the runtime artifact:
+
+```sh
+npm ci
+npm run build
+# Apply the reviewed migrations through 0017_timeline_events.
+# Optionally seed an empty timeline as described below.
+npm prune --omit=dev
+npm start
+```
+
+`npm start` runs `node server.js`; it does not compile TypeScript or install
+tooling. `prestart` runs `node scripts/check-build.js` and refuses to start if
+any required generated file is missing. Do not run `npm run build` after
+pruning: the TypeScript compiler and esbuild are development dependencies.
+If the platform installs production dependencies only, perform the build in a
+separate build step before that install.
+
+Startup verifies the applied migration history and required columns through
+`0017_timeline_events` and refuses an older, partial or divergent schema; it
+never runs DDL. The deployment database must therefore receive the reviewed
+migrations before the service starts. Migration tooling remains an explicit,
+reviewed operator step rather than something startup performs.
+
+Timeline seed material is a content decision and is never loaded at startup.
+After migrating a database whose timeline is still empty, load the committed
+seed explicitly:
+
+```sh
+DATABASE_URL='postgres://...' node scripts/seed-timeline.js --confirm-empty
+npm run db:seed:timeline -- --confirm-empty --target=development
+```
+
+The command requires `--confirm-empty`, accepts one explicitly supplied
+`DATABASE_URL` or one guarded `--target`, refuses if any timeline row exists,
+prints the seed and row counts, and performs no DDL. The `DATABASE_URL` form
+does not read `.env` implicitly.
+
+These are the repository build/start expectations. Any hosting dashboard
+settings, including a Render service, remain unverified here; configure the
+platform to use Node 24, run this build and migration procedure, and start with
+`npm start`.
 
 ## Tests
 
@@ -199,6 +279,29 @@ creates a new public revision carrying its citations and publishes it atomically
 it does not rewrite the historical private snapshot. New staff-only publication
 requests are refused. Public listings continue to use only public publications.
 
+### Timeline, notifications and likes
+
+The **Linha do Tempo** page is a separate, staff-managed public timeline. It is
+not reference-wiki content: its events do not create page revisions, citations,
+proposals or publication pointers. Migration `0017_timeline_events` creates the
+empty timeline table. Committed seed material in `server/timeline-seed.json` is
+not applied automatically at startup. An operator may load it only into an
+empty timeline with `npm run db:seed:timeline -- --confirm-empty --target=...`
+(or an explicit `DATABASE_URL`); see [Deployment](#deployment). Seeding is a
+content decision, not an automatic publication.
+
+Logged-in users can receive notifications for scene turns and likes, and can
+like characters, RPG scenes and scene turns. Scene likes use the `wiki_posts`
+records; they do not apply to reference `wiki_pages`. Notification text is
+limited to the acting user's public identity and the scene/character title, and
+is readable only by its recipient.
+
+Timeline edits and deletes are staff-only and recorded in `audit_events`. The
+current timeline editor uses an optional `expectedUpdatedAt` concurrency check
+and deletes remain permanent but auditable. A versioned, restorable timeline
+archive is not implemented; do not describe timeline editing as having the same
+history guarantees as reference-wiki revisions.
+
 ### Portable wiki transfers
 
 Administrators can export selected wiki pages from the Admin area as an
@@ -270,6 +373,9 @@ the local rendered articles. The eventual PR/changelog process is recorded in
 | `server.js` | Loads configuration, checks database readiness, and starts Express |
 | `server/app.js` | Express app factory and shared auth, profile, character, and scene routes |
 | `server/forum.js`, `server/admin.js` | Shared forum and administrator routes |
+| `server/interactions.js` | Notification and character/scene/turn like routes |
+| `server/timeline.js` | Staff-managed public timeline and its audit/concurrency checks |
+| `src/server.ts` | Optional TypeScript entry that reuses the canonical readiness/startup path; `npm start` remains the default |
 | `server/wiki.js`, `server/proposals.js`, `server/sources.js` | Reference wiki, member proposals, and restricted source routes |
 | `server/wiki-transfers.js` | Admin-only, versioned wiki bundle export, preview, refresh, and commit |
 | `server/wiki-article-files.js` | Staff article-file preview/commit, latest-revision export and AI guide/template |
@@ -286,9 +392,16 @@ collaborative RPG scenes and turns.
 ## Current status and limitations
 
 Forum categories, topics, replies, moderation, and reference wiki pages are
-server-backed. Accounts, profiles, characters, RPG scenes, and scene turns
-also use PostgreSQL. Browser storage remains for local drafts, preferences,
-and legacy recovery; it is not the shared source of forum or wiki content.
+server-backed. Accounts, profiles, characters, RPG scenes, scene turns,
+notifications, likes, and timeline events also use PostgreSQL. Browser storage
+remains for local drafts, preferences, and legacy recovery; it is not the shared
+source of forum or wiki content.
+
+The timeline, notifications and likes were integrated from upstream and adapted
+to this project's migration/readiness and authorization rules. The reference
+wiki keeps its separate revision, proposal, source and citation model; timeline
+events are not reference articles. See the timeline section above for its
+current history limitations.
 
 Current test results, completed acceptance gates, and remaining limitations
 are recorded in [`docs/planning/EXECUTION_STATE.md`](docs/planning/EXECUTION_STATE.md).

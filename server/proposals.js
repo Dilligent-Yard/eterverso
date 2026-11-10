@@ -14,7 +14,12 @@ const {
   paginationParams,
   validateUuid,
 } = require('./validation');
-const { extractWikiLinks, normalizeSlug, validateWikiSnapshot } = require('./wiki');
+const {
+  insertRevisionCitations,
+  retainedRevisionCitations,
+  saveRevisionIndexes,
+  validateWikiSnapshot,
+} = require('./wiki');
 
 const STAFF_ROLES = ['moderador', 'admin'];
 const PROPOSAL_COLUMNS = `
@@ -255,6 +260,9 @@ function createProposalRouter({ sql, auth } = {}) {
       if (!currentBase.length || validateWikiSnapshot(currentBase[0].snapshot).accessLevel !== 'public') {
         throw conflict('PROPOSAL_PAGE_UNAVAILABLE', 'O artigo não está mais disponível para aceitar propostas.');
       }
+      // Acceptance cannot edit citations. Carry the base publication's rows
+      // forward only for sections that remain in the accepted snapshot.
+      const citations = await retainedRevisionCitations(tx, proposal.base_published_revision_id, snapshot);
 
       const sequenceRows = await tx`
         SELECT COALESCE(max(sequence), 0)::integer AS sequence
@@ -274,6 +282,7 @@ function createProposalRouter({ sql, auth } = {}) {
                   page_id, actor_id, edit_summary, snapshot, accepted_proposal_id, created_at`;
       const revision = inserted[0];
       await saveRevisionIndexes(tx, revision.id, snapshot);
+      await insertRevisionCitations(tx, revision.id, citations);
       const pageUpdate = await tx`
         UPDATE wiki_pages SET head_revision_id = ${revision.id},
           work_version = ${nextWorkVersion}, updated_at = now()
@@ -444,19 +453,6 @@ async function lockPage(tx, id) {
     FROM wiki_pages WHERE id = ${id} FOR UPDATE`;
   if (!rows.length) throw notFound();
   return rows[0];
-}
-
-async function saveRevisionIndexes(tx, revisionId, snapshot) {
-  for (const category of snapshot.categories) {
-    await tx`
-      INSERT INTO wiki_revision_categories (revision_id, category, category_key)
-      VALUES (${revisionId}, ${category}, ${normalizeSlug(category, 'category')})`;
-  }
-  for (const link of extractWikiLinks(snapshot)) {
-    await tx`
-      INSERT INTO wiki_revision_links (revision_id, target_name_key, target_anchor)
-      VALUES (${revisionId}, ${link.targetNameKey}, ${link.targetAnchor})`;
-  }
 }
 
 async function withStaffTransaction(auth, req, callback) {

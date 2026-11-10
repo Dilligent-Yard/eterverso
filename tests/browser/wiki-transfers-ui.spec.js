@@ -32,7 +32,7 @@ test('admin wiki transfer controls stay hidden from members and reject client-si
     const page = await context.newPage();
     await page.goto(`${ORIGIN}/admin`);
     await expect(page.locator('#main')).toContainText('Acesso negado.');
-    await expect(page.locator('#nav-admin-btn button')).toHaveCount(0);
+    await expect(page.locator('#nav-admin-btn a')).toHaveCount(0);
     await expect(page.locator('#admin-wiki-transfers')).toHaveCount(0);
     await page.evaluate(() => {
       loadAdminWikiTransferPages(true);
@@ -169,6 +169,7 @@ async function stubApi(context, role, calls) {
     ['/style.css', ['style.css', 'text/css; charset=utf-8']],
     ['/editor.js', ['editor.js', 'text/javascript; charset=utf-8']],
     ['/client/api.js', ['client/api.js', 'text/javascript; charset=utf-8']],
+    ['/generated/vault.js', ['generated/client/vault.js', 'text/javascript; charset=utf-8']],
   ]);
   await context.route(`${ORIGIN}/**`, async (route) => {
     const request = route.request();

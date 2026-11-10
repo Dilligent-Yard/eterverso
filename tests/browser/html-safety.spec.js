@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0017_timeline_events';
 const PASSWORD = 'Synthetic-html-safety-browser-password-42';
 const TURN_PRESENTATION_PAYLOAD = `');window.__htmlSafetyRuns.push("turn-presentation");//`;
 let sql;
@@ -129,7 +129,7 @@ test('HTML-01/02 hostile legacy content stays inert across rendered pages, block
     await expect.poll(() => page.evaluate(() => window.__htmlSafetyRuns)).toEqual([]);
 
     await page.goto(`${origin}/cenas`);
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
+    await page.getByRole('link', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     await page.locator('#c-titulo').fill(`Prévia sintética ${fixture.suffix}`);
     // Keep hostile source inert in the editor's HTML textarea until the
     // preview request sends it through the server sanitizer.

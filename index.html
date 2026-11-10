@@ -14,17 +14,17 @@
 <header id="site-header">
   <div class="header-inner">
     <div class="header-left">
-      <div id="logo-bar" onclick="navigate('forum')">
+      <a id="logo-bar" href="/forum" onclick="navigate('forum')">
         <h1>aetherverse vault</h1>
-      </div>
+      </a>
 
       <nav id="nav-bar" aria-label="Navegação principal">
-        <button onclick="navigate('forum')" id="nav-forum">Fórum</button>
-        <button onclick="navigate('wiki')" id="nav-wiki">Wiki</button>
-        <button onclick="navigate('personagens')" id="nav-personagens">Personagens</button>
-        <button onclick="navigate('cenas')" id="nav-cenas">Cenas</button>
-        <button onclick="navigate('timeline')" id="nav-timeline">Linha do Tempo</button>
-        <button onclick="navigate('sobre')" id="nav-sobre">Sobre</button>
+        <a href="/forum" onclick="navigate('forum')" id="nav-forum">Fórum</a>
+        <a href="/wiki" onclick="navigate('wiki')" id="nav-wiki">Wiki</a>
+        <a href="/personagens" onclick="navigate('personagens')" id="nav-personagens">Personagens</a>
+        <a href="/cenas" onclick="navigate('cenas')" id="nav-cenas">Cenas</a>
+        <a href="/timeline" onclick="navigate('timeline')" id="nav-timeline">Linha do Tempo</a>
+        <a href="/sobre" onclick="navigate('sobre')" id="nav-sobre">Sobre</a>
         <span id="nav-admin-btn"></span>
       </nav>
     </div>
@@ -44,20 +44,21 @@
   <div class="footer-inner">
     <span>aetherverse vault &copy; 2026</span>
     <div class="footer-links">
-      <a onclick="navigate('forum')">Fórum</a>
-      <a onclick="navigate('wiki')">Wiki</a>
-      <a onclick="navigate('personagens')">Personagens</a>
-      <a onclick="navigate('cenas')">Cenas</a>
-      <a onclick="navigate('timeline')">Linha do Tempo</a>
-      <a onclick="navigate('sobre')">Sobre</a>
+      <a href="/forum" onclick="navigate('forum')">Fórum</a>
+      <a href="/wiki" onclick="navigate('wiki')">Wiki</a>
+      <a href="/personagens" onclick="navigate('personagens')">Personagens</a>
+      <a href="/cenas" onclick="navigate('cenas')">Cenas</a>
+      <a href="/timeline" onclick="navigate('timeline')">Linha do Tempo</a>
+      <a href="/sobre" onclick="navigate('sobre')">Sobre</a>
     </div>
   </div>
 </footer>
 
 <div id="modal-container"></div>
 <div id="lightbox-container"></div>
-<div id="toast-container"></div>
+<div id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
+<script src="/generated/vault.js"></script>
 <script src="/client/api.js"></script>
 <script src="/editor.js"></script>
 <script src="/app.js"></script>

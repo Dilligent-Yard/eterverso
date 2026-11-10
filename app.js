@@ -1,3 +1,5 @@
+var sessionRevision = 0;
+var authEpoch = 0;
 var DB = {
   users: [
     { id: 1, username: 'Admin', email: 'admin@forum.com', avatar: '', title: 'Administrador', posts: 0, role: 'admin', bio: '', joinDate: '01/01/2026', admTentativaUsada: false },
@@ -212,8 +214,12 @@ var serverForumThreads = Object.create(null);
 var forumLandingLoaded = false;
 var serverForumThread = null;
 var serverForumPosts = null;
+var serverForumPendingReply = null;
+var serverForumPendingReplyAccountId = null;
 var serverForumPostsPage = { limit: 20, offset: 0, hasMore: false };
 var forumLandingLoading = false;
+var forumLandingReloadRequested = false;
+var forumLandingRequestSequence = 0;
 var forumCategoryLoading = Object.create(null);
 var forumThreadLoading = false;
 var forumThreadLoadingId = null;
@@ -223,6 +229,8 @@ var pendingTopicKey = null;
 var pendingTopicPayload = null;
 var pendingReplyKey = null;
 var pendingReplyPayload = null;
+var pendingReplyThreadId = null;
+var pendingReplyAccountId = null;
 var forumDraftRestoreSequence = 0;
 var FORUM_DRAFT_VERSION = 1;
 var wikiArticleFileState = createWikiArticleFileState();
@@ -285,6 +293,10 @@ var WIKI_DRAFT_VERSION = 1;
 // Filtros de UI
 var forumFilterSearch = '';
 var forumFilterTag = 'all';
+var forumFilterTimer = null;
+var forumFilterFocusPending = false;
+var loginSubmissionPending = false;
+var signupSubmissionPending = false;
 var wikiFilterSearch = '';
 var wikiFilterCategory = 'all';
 var wikiFilterCat = 'all';
@@ -310,91 +322,91 @@ function createAdminWikiTransferState() {
 }
 
 function routePath(page, extra) {
-  if (page === 'forum') return '/forum';
-  if (page === 'cat' && typeof extra === 'string') return '/forum/categorias/' + encodeURIComponent(extra);
-  if (page === 'thread' && typeof extra === 'string') return '/forum/topicos/' + encodeURIComponent(extra);
-  if (page === 'wiki') return '/wiki';
-  if (page === 'wikiStaff') return '/wiki/equipe';
-  if (page === 'wikiStaffArticle' && typeof extra === 'string') return '/wiki/rascunhos/' + encodeURIComponent(extra);
-  if (page === 'wikiArticle' && typeof extra === 'string') return '/wiki/' + encodeURIComponent(extra);
-  if (page === 'wikiCreate') return '/wiki/novo';
-  if (page === 'wikiEditor' && typeof extra === 'string') return '/wiki/editor/' + encodeURIComponent(extra);
-  if (page === 'wikiEditor') return '/wiki/editor';
-  if (page === 'wikiProposals') return '/wiki/propostas';
-  if (page === 'wikiProposal' && typeof extra === 'string') return '/wiki/propostas/' + encodeURIComponent(extra);
-  if (page === 'personagens') return '/personagens';
-  if (page === 'personagemView' && typeof extra === 'string') return '/personagens/' + encodeURIComponent(extra);
-  if (page === 'cenas') return '/cenas';
-  if (page === 'cenaView' && typeof extra === 'string') return '/cenas/' + encodeURIComponent(extra);
-  if (page === 'timeline') return '/timeline';
-  if (page === 'admin') return '/admin';
-  return null;
+  return VaultModules.navigation.routePath(page, extra);
 }
 
 function parseRouteFromLocation() {
-  var path = window.location.pathname;
-  var match;
-  if (path === '/' || path === '/index.html' || path === '/forum') {
-    currentPage = 'forum';
+  var route = VaultModules.routeParser.parsePath(window.location.pathname, new URL(window.location.href).search);
+  currentPage = route.page;
+  if (route.page === 'forum') {
     currentCat = null;
     currentThread = null;
-    if (path !== '/forum') window.history.replaceState({ page: 'forum' }, '', '/forum');
+    if (route.redirectToForum) window.history.replaceState({ page: 'forum' }, '', '/forum');
     return;
   }
-  match = path.match(/^\/forum\/categorias\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'cat'; currentCat = decodeURIComponent(match[1]); return; }
-  match = path.match(/^\/forum\/topicos\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'thread'; currentThread = decodeURIComponent(match[1]); return; }
-  if (path === '/wiki') {
-    currentPage = 'wiki';
-    var category = new URL(window.location.href).searchParams.get('categoria');
-    wikiFilterCategory = category && /^[a-z0-9][a-z0-9-]{0,99}$/.test(category) ? category : 'all';
+  if (route.page === 'cat') { currentCat = route.id; return; }
+  if (route.page === 'threadEdit') {
+    currentThread = route.id;
+    editandoThread = route.editThread;
     return;
   }
-  if (path === '/wiki/equipe') { currentPage = 'wikiStaff'; return; }
-  match = path.match(/^\/wiki\/rascunhos\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'wikiStaffArticle'; currentWikiPageId = match[1].toLowerCase(); return; }
-  if (path === '/wiki/novo') { currentPage = 'wikiCreate'; currentWikiPageId = null; return; }
-  if (path === '/wiki/editor') { currentPage = 'wikiEditor'; currentWikiPageId = null; return; }
-  match = path.match(/^\/wiki\/editor\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'wikiEditor'; currentWikiPageId = decodeURIComponent(match[1]).toLowerCase(); return; }
-  if (path === '/wiki/propostas') { currentPage = 'wikiProposals'; return; }
-  match = path.match(/^\/wiki\/propostas\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'wikiProposal'; currentWikiPageId = decodeURIComponent(match[1]).toLowerCase(); return; }
-  match = path.match(/^\/wiki\/([a-z0-9][a-z0-9_-]{0,119})$/i);
-  if (match) { currentPage = 'wikiArticle'; currentWikiSlug = decodeURIComponent(match[1]); return; }
-  if (path === '/personagens') { currentPage = 'personagens'; return; }
-  if (path === '/admin') { currentPage = 'admin'; return; }
-  match = path.match(/^\/personagens\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'personagemView'; currentPersonagem = decodeURIComponent(match[1]); return; }
-  if (path === '/cenas') { currentPage = 'cenas'; return; }
-  match = path.match(/^\/cenas\/([0-9a-f-]{36})$/i);
-  if (match) { currentPage = 'cenaView'; currentCena = decodeURIComponent(match[1]); return; }
-  if (path === '/timeline') { currentPage = 'timeline'; return; }
-  currentPage = 'notFound';
+  if (route.page === 'thread') { currentThread = route.id; return; }
+  if (route.page === 'novaThread') {
+    currentCat = route.id;
+    editandoThread = null;
+    return;
+  }
+  if (route.page === 'wiki') { wikiFilterCategory = route.category || 'all'; return; }
+  if (route.page === 'wikiStaffArticle' || route.page === 'wikiProposal'
+      || (route.page === 'wikiEditor' && route.id)) {
+    currentWikiPageId = route.id;
+    return;
+  }
+  if (route.page === 'wikiCreate' || route.page === 'wikiEditor') {
+    currentWikiPageId = null;
+    return;
+  }
+  if (route.page === 'wikiArticle') { currentWikiSlug = route.id; return; }
+  if (route.page === 'personagemView') { currentPersonagem = route.id; return; }
+  if (route.page === 'novoPersonagem') {
+    if (route.id) sessionStorage.setItem('editPersonagemId', route.id);
+    else sessionStorage.removeItem('editPersonagemId');
+    return;
+  }
+  if (route.page === 'cenaView') { currentCena = route.id; return; }
+  if (route.page === 'novaCena') {
+    if (route.id) sessionStorage.setItem('editCenaId', route.id);
+    else sessionStorage.removeItem('editCenaId');
+    return;
+  }
 }
 
 function navigate(page, extra, options) {
+  if (page === 'cat') {
+    forumFilterSearch = '';
+    forumFilterTag = 'all';
+    if (extra !== undefined) delete serverForumThreads[String(extra)];
+  }
   if (page === 'wiki') wikiFilterCategory = 'all';
   if (page === 'wikiStaff' || page === 'wikiStaffArticle') wikiStaffState = { items: null, article: null, loading: false, error: null };
   currentPage = page;
   if (extra !== undefined) {
     if (page === 'thread') currentThread = extra;
+    if (page === 'threadEdit') { currentThread = extra; editandoThread = extra; }
     if (page === 'cat') currentCat = extra;
+    if (page === 'novaThread') { currentCat = extra; editandoThread = null; }
     if (page === 'personagemView') currentPersonagem = extra;
     if (page === 'cenaView') currentCena = extra;
     if (page === 'wikiArticle') currentWikiSlug = extra;
     if (page === 'wikiEditor' || page === 'wikiStaffArticle') currentWikiPageId = extra;
     if (page === 'wikiProposal') currentWikiPageId = extra;
   }
+  if (page === 'novoPersonagem') {
+    if (extra !== undefined) sessionStorage.setItem('editPersonagemId', String(extra));
+    else sessionStorage.removeItem('editPersonagemId');
+  }
+  if (page === 'novaCena') {
+    if (extra !== undefined) sessionStorage.setItem('editCenaId', String(extra));
+    else sessionStorage.removeItem('editCenaId');
+  }
   var destination = routePath(page, extra);
   if (destination && !(options && options.fromHistory) && window.location.pathname + (window.location.search || '') + (window.location.hash || '') !== destination) {
     if (options && options.replace) window.history.replaceState({ page: page, id: extra }, '', destination);
     else window.history.pushState({ page: page, id: extra }, '', destination);
   }
-  document.querySelectorAll('#nav-bar button').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('#nav-bar a, #nav-bar button').forEach(function(b) { b.classList.remove('active'); });
   var navMap = {
-    forum: 'nav-forum', cat: 'nav-forum', thread: 'nav-forum', novaThread: 'nav-forum',
+    forum: 'nav-forum', cat: 'nav-forum', thread: 'nav-forum', threadEdit: 'nav-forum', novaThread: 'nav-forum',
     wiki: 'nav-wiki', wikiStaff: 'nav-wiki', wikiStaffArticle: 'nav-wiki', wikiArticle: 'nav-wiki', wikiEditor: 'nav-wiki', wikiCreate: 'nav-wiki', wikiProposals: 'nav-wiki', wikiProposal: 'nav-wiki',
     personagens: 'nav-personagens', personagemView: 'nav-personagens', novoPersonagem: 'nav-personagens',
     cenas: 'nav-cenas', cenaView: 'nav-cenas', novaCena: 'nav-cenas',
@@ -410,6 +422,47 @@ function navigate(page, extra, options) {
   window.scrollTo(0, 0);
 }
 
+function parseSimpleNavigateOnclick(code) {
+  return VaultModules.navigation.parseSimpleNavigateOnclick(code);
+}
+
+function decorateNavigationControls(root) {
+  var scope = root || document;
+  if (!scope.querySelectorAll) return;
+  scope.querySelectorAll('a[onclick], button[onclick]').forEach(function(element) {
+    var parsed = parseSimpleNavigateOnclick(element.getAttribute('onclick'));
+    if (!parsed) return;
+    var href = routePath(parsed.page, parsed.extra);
+    if (!href) return;
+    if (element.tagName === 'BUTTON' && element.form && element.getAttribute('type') !== 'button') return;
+    var link = element;
+    if (element.tagName !== 'A') {
+      link = document.createElement('a');
+      Array.prototype.forEach.call(element.attributes, function(attribute) {
+        if (attribute.name === 'onclick' || attribute.name === 'type' || attribute.name === 'disabled') return;
+        link.setAttribute(attribute.name, attribute.value);
+      });
+      link.innerHTML = element.innerHTML;
+      element.replaceWith(link);
+    }
+    link.setAttribute('href', href);
+    link.setAttribute('data-nav-page', parsed.page);
+    if (parsed.extra !== undefined) link.setAttribute('data-nav-extra', parsed.extra);
+    link.removeAttribute('onclick');
+  });
+}
+
+if (document.addEventListener) document.addEventListener('click', function(event) {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  var target = event.target && event.target.closest ? event.target.closest('a[data-nav-page]') : null;
+  if (!target) return;
+  if (target.target && target.target !== '_self') return;
+  if (target.hasAttribute('download')) return;
+  event.preventDefault();
+  var extra = target.getAttribute('data-nav-extra');
+  navigate(target.getAttribute('data-nav-page'), extra === null ? undefined : extra);
+});
+
 window.addEventListener('popstate', function() {
   parseRouteFromLocation();
   if (currentPage === 'wikiStaff' || currentPage === 'wikiStaffArticle') wikiStaffState = { items: null, article: null, loading: false, error: null };
@@ -421,6 +474,10 @@ function updateTopBar() {
   var info = document.getElementById('top-user-info');
   var actions = document.getElementById('top-btn-area');
   var adminBtn = document.getElementById('nav-admin-btn');
+  if (!info || !actions || !adminBtn) {
+    decorateNavigationControls(document);
+    return;
+  }
   if (DB.session) {
     info.innerHTML = '<span class="online-dot"></span>' + renderMiniAvatar(DB.session.username, DB.session.avatar, 'top-user-avatar') + '<a onclick="navigate(\'perfil\')" style="font-weight:600;color:#fff;">' + h(DB.session.username) + '</a> ' + badgeHtml(DB.session);
     actions.innerHTML = '<a onclick="navigate(\'perfil\')">Perfil</a>' + renderSinoNotificacoes() + '<a onclick="doLogout()">Sair</a>';
@@ -434,6 +491,7 @@ function updateTopBar() {
     actions.innerHTML = '<a onclick="showLoginModal()">Entrar</a><a onclick="navigate(\'registro\')">Criar Conta</a>';
     adminBtn.innerHTML = '';
   }
+  decorateNavigationControls(document);
 }
 
 function openLightbox(url, caption) {
@@ -467,6 +525,7 @@ function render() {
     forum: renderForum,
     cat: renderCat,
     thread: renderThread,
+    threadEdit: renderNovaThread,
     novaThread: renderNovaThread,
     wiki: renderWiki,
     wikiStaff: renderWikiStaff,
@@ -505,23 +564,35 @@ function render() {
       } catch (_error) {}
     }, 0);
   }
+  decorateNavigationControls(document);
+  focusForumFilterIfNeeded();
 
   // Carregar contagens de curtidas após o DOM ser atualizado
   setTimeout(function () {
+    var likeAccountId = forumDraftAccountId();
     if (currentPage === 'personagemView' && currentPersonagem && DB.session) {
-      carregarLikesPersonagem(currentPersonagem, function (err, data) {
-        if (!err && data) aplicarLikeBtn('like-char-', currentPersonagem, data);
+      var personagemLikeId = currentPersonagem;
+      carregarLikesPersonagem(personagemLikeId, function (err, data) {
+        if (!err && data && curtidaPertenceAoContextoAtual(likeAccountId, 'personagem', null, personagemLikeId)) {
+          aplicarLikeBtn('like-char-', personagemLikeId, data);
+        }
       });
     }
     if (currentPage === 'cenaView' && currentCena && DB.session) {
-      var w = listaWikiPosts().find(function (x) { return String(x.id) === String(currentCena); });
+      var cenaLikeId = currentCena;
+      var w = listaWikiPosts().find(function (x) { return String(x.id) === String(cenaLikeId); });
       if (w) {
-        carregarLikesCena(currentCena, function (err, data) {
-          if (!err && data) aplicarLikeBtn('like-cena-', currentCena, data);
+        carregarLikesCena(cenaLikeId, function (err, data) {
+          if (!err && data && curtidaPertenceAoContextoAtual(likeAccountId, 'cena', cenaLikeId, cenaLikeId)) {
+            aplicarLikeBtn('like-cena-', cenaLikeId, data);
+          }
         });
         (Array.isArray(w.turns) ? w.turns : []).forEach(function (t) {
-          carregarLikesTurno(currentCena, t.id, function (err, data) {
-            if (!err && data) aplicarLikeBtn('like-turn-', t.id, data);
+          var turnoLikeId = t.id;
+          carregarLikesTurno(cenaLikeId, turnoLikeId, function (err, data) {
+            if (!err && data && curtidaPertenceAoContextoAtual(likeAccountId, 'turno', cenaLikeId, turnoLikeId)) {
+              aplicarLikeBtn('like-turn-', turnoLikeId, data);
+            }
           });
         });
       }
@@ -533,10 +604,11 @@ function render() {
 
 function carregarNotificacoesServidor() {
   if (!DB.session) return;
+  var accountId = forumDraftAccountId();
   fetch('/api/notifications?limit=50')
     .then(function(res) { return res.ok ? res.json() : null; })
     .then(function(data) {
-      if (!data) return;
+      if (!data || accountId !== forumDraftAccountId()) return;
       DB.notifications = Array.isArray(data.notifications) ? data.notifications : [];
       DB.unreadCount = typeof data.unread === 'number' ? data.unread : DB.notifications.filter(function(n) { return !n.read; }).length;
       updateTopBar();
@@ -553,7 +625,9 @@ function sincronizarNotificacoes(data) {
 }
 
 function marcarNotificacaoLida(id) {
+  var accountId = forumDraftAccountId();
   apiPost('/api/notifications/' + id + '/read', {}, function(err) {
+    if (accountId !== forumDraftAccountId()) return;
     if (err) { showAlert(err, 'error'); return; }
     var n = DB.notifications.find(function(x) { return String(x.id) === String(id); });
     if (n && !n.read) {
@@ -570,7 +644,9 @@ function marcarNotificacaoLida(id) {
 }
 
 function marcarTodasNotificacoesLidas() {
+  var accountId = forumDraftAccountId();
   apiPost('/api/notifications/read-all', {}, function(err) {
+    if (accountId !== forumDraftAccountId()) return;
     if (err) { showAlert(err, 'error'); return; }
     DB.notifications.forEach(function(n) { n.read = true; });
     DB.unreadCount = 0;
@@ -580,7 +656,9 @@ function marcarTodasNotificacoesLidas() {
 }
 
 function excluirNotificacao(id) {
+  var accountId = forumDraftAccountId();
   apiRequest('DELETE', '/api/notifications/' + id, undefined, function(err) {
+    if (accountId !== forumDraftAccountId()) return;
     if (err) { showAlert(err, 'error'); return; }
     var idx = DB.notifications.findIndex(function(x) { return String(x.id) === String(id); });
     if (idx !== -1) {
@@ -667,6 +745,21 @@ function carregarLikesTurno(wikiPostId, turnId, cb) {
   });
 }
 
+function curtidaPertenceAoContextoAtual(accountId, tipo, sceneId, targetId, btnEl) {
+  if (!accountId || accountId !== forumDraftAccountId()) return false;
+  if (btnEl && btnEl.id && document.getElementById(btnEl.id) !== btnEl) return false;
+  if (tipo === 'personagem') {
+    return currentPage === 'personagemView' && String(currentPersonagem) === String(targetId);
+  }
+  if (currentPage !== 'cenaView' || String(currentCena) !== String(sceneId)) return false;
+  if (tipo === 'cena') return String(targetId) === String(sceneId);
+  if (tipo === 'turno') {
+    var scene = listaWikiPosts().find(function (x) { return String(x.id) === String(sceneId); });
+    return !!scene && (Array.isArray(scene.turns) ? scene.turns : []).some(function (t) { return String(t.id) === String(targetId); });
+  }
+  return false;
+}
+
 function formatarLikeTexto(liked, count) {
   var c = typeof count === 'number' ? count : 0;
   return (liked ? 'Curtido' : 'Curtir') + ' <span class="like-count">(' + c + ')</span>';
@@ -674,7 +767,9 @@ function formatarLikeTexto(liked, count) {
 
 function toggleLikePersonagem(id, btnEl) {
   if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
+  var accountId = forumDraftAccountId();
   apiPost('/api/personagens/' + id + '/like', {}, function(err, data) {
+    if (!curtidaPertenceAoContextoAtual(accountId, 'personagem', null, id, btnEl)) return;
     if (err) { showAlert(err, 'error'); return; }
     if (btnEl) {
       btnEl.classList.toggle('liked', !!data.liked);
@@ -686,7 +781,9 @@ function toggleLikePersonagem(id, btnEl) {
 
 function toggleLikeCena(id, btnEl) {
   if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
+  var accountId = forumDraftAccountId();
   apiPost('/api/wiki-posts/' + id + '/like', {}, function(err, data) {
+    if (!curtidaPertenceAoContextoAtual(accountId, 'cena', id, id, btnEl)) return;
     if (err) { showAlert(err, 'error'); return; }
     if (btnEl) {
       btnEl.classList.toggle('liked', !!data.liked);
@@ -698,7 +795,9 @@ function toggleLikeCena(id, btnEl) {
 
 function toggleLikeTurno(wikiPostId, turnId, btnEl) {
   if (!DB.session) { showAlert('Faça login para curtir.', 'error'); return; }
+  var accountId = forumDraftAccountId();
   apiPost('/api/wiki-posts/' + wikiPostId + '/turns/' + turnId + '/like', {}, function(err, data) {
+    if (!curtidaPertenceAoContextoAtual(accountId, 'turno', wikiPostId, turnId, btnEl)) return;
     if (err) { showAlert(err, 'error'); return; }
     if (btnEl) {
       btnEl.classList.toggle('liked', !!data.liked);
@@ -723,25 +822,45 @@ function aplicarLikeBtn(prefix, targetId, data) {
 
 // ==================== FÓRUM ====================
 
-function onForumFilterChange() {
+function onForumFilterChange(event) {
   var sEl = document.getElementById('forum-search-input');
   var tEl = document.getElementById('forum-tag-select');
   if (sEl) forumFilterSearch = sEl.value;
   if (tEl) forumFilterTag = tEl.value;
-  if (currentPage === 'forum') {
-    forumLandingLoaded = false;
-    serverForumThreads = Object.create(null);
-    loadForumLanding(true);
-  } else if (currentPage === 'cat') {
-    delete serverForumThreads[String(currentCat)];
-    loadForumCategory(currentCat, true);
+  if (event && event.type === 'input') forumFilterFocusPending = true;
+  if (forumFilterTimer) clearTimeout(forumFilterTimer);
+  forumFilterTimer = setTimeout(function() {
+    forumFilterTimer = null;
+    if (currentPage === 'forum') {
+      serverForumThreads = Object.create(null);
+      loadForumLanding(true);
+    } else if (currentPage === 'cat') {
+      delete serverForumThreads[String(currentCat)];
+      loadForumCategory(currentCat, true);
+    }
+  }, 300);
+}
+
+function focusForumFilterIfNeeded() {
+  if (!forumFilterFocusPending || currentPage !== 'forum') return;
+  forumFilterFocusPending = false;
+  var input = document.getElementById('forum-search-input');
+  if (!input) return;
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function clearForumFilters() {
+  forumFilterSearch = '';
+  forumFilterTag = 'all';
+  if (forumFilterTimer) {
+    clearTimeout(forumFilterTimer);
+    forumFilterTimer = null;
   }
+  serverForumThreads = Object.create(null);
+  forumLandingLoaded = false;
+  loadForumLanding(true);
   render();
-  var sAfter = document.getElementById('forum-search-input');
-  if (sAfter) {
-    sAfter.focus();
-    sAfter.setSelectionRange(sAfter.value.length, sAfter.value.length);
-  }
 }
 
 function forumApi() {
@@ -749,26 +868,49 @@ function forumApi() {
 }
 
 function loadForumLanding(force) {
-  if (forumLandingLoading || (!force && forumLandingLoaded)) return;
+  if (forumLandingLoading) {
+    if (force) forumLandingReloadRequested = true;
+    return;
+  }
+  if (!force && forumLandingLoaded) return;
   forumLandingLoading = true;
   forumLoadError = null;
-  forumApi().apiRequest('GET', '/api/forum/categories').then(function(categoryResponse) {
-    serverForumCategories = Array.isArray(categoryResponse.data) ? categoryResponse.data : [];
-    return Promise.all(serverForumCategories.map(function(category) {
+  var requestSequence = ++forumLandingRequestSequence;
+  var requestedSearch = forumFilterSearch.trim();
+  var requestedTag = forumFilterTag;
+  var nextThreads = Object.create(null);
+  var nextCategories = [];
+  forumApi().apiRequest('GET', '/api/forum/categories?limit=100&offset=0').then(function(categoryResponse) {
+    nextCategories = Array.isArray(categoryResponse.data) ? categoryResponse.data : [];
+    return Promise.all(nextCategories.map(function(category) {
       var params = { limit: '100', offset: '0' };
-      if (forumFilterSearch.trim()) params.search = forumFilterSearch.trim();
-      if (forumFilterTag !== 'all') params.tag = forumFilterTag;
+      if (requestedSearch) params.search = requestedSearch;
+      if (requestedTag !== 'all') params.tag = requestedTag;
       var query = new URLSearchParams(params);
       return forumApi().apiRequest('GET', '/api/forum/categories/' + encodeURIComponent(category.id) + '/threads?' + query.toString())
-        .then(function(response) { serverForumThreads[category.id] = Array.isArray(response.data) ? response.data : []; });
+        .then(function(response) { nextThreads[category.id] = Array.isArray(response.data) ? response.data : []; });
     }));
   }).then(function() {
+    if (requestSequence !== forumLandingRequestSequence
+      || requestedSearch !== forumFilterSearch.trim() || requestedTag !== forumFilterTag) {
+      forumLandingReloadRequested = true;
+      return;
+    }
+    serverForumCategories = nextCategories;
+    serverForumThreads = nextThreads;
     forumLandingLoaded = true;
   }).catch(function(error) {
-    forumLoadError = error && error.message ? error.message : 'Não foi possível carregar o fórum.';
+    if (requestSequence === forumLandingRequestSequence) {
+      forumLoadError = error && error.message ? error.message : 'Não foi possível carregar o fórum.';
+    }
   }).finally(function() {
     forumLandingLoading = false;
-    if (currentPage === 'forum') render();
+    if (forumLandingReloadRequested) {
+      forumLandingReloadRequested = false;
+      loadForumLanding(true);
+      return;
+    }
+    if (currentPage === 'forum' || currentPage === 'novaThread') render();
   });
 }
 
@@ -778,7 +920,7 @@ function loadForumCategory(categoryId, force) {
   forumCategoryLoading[key] = true;
   forumLoadError = null;
   if (!serverForumCategories) {
-    forumApi().apiRequest('GET', '/api/forum/categories').then(function(response) {
+    forumApi().apiRequest('GET', '/api/forum/categories?limit=100&offset=0').then(function(response) {
       serverForumCategories = Array.isArray(response.data) ? response.data : [];
     }).catch(function(error) {
       forumLoadError = error && error.message ? error.message : 'Não foi possível carregar as categorias.';
@@ -814,42 +956,155 @@ function forumCategoryThreadsUrl(categoryId) {
 function loadForumThread(threadId, options) {
   var key = String(threadId);
   if ((forumThreadLoading && String(forumThreadLoadingId) === key)
-      || (!(options && options.force) && serverForumThread && String(serverForumThread.id) === key && Array.isArray(serverForumPosts))) return;
+      || (!(options && options.force) && serverForumThread && String(serverForumThread.id) === key && Array.isArray(serverForumPosts))) return Promise.resolve();
   forumThreadLoading = true;
   forumThreadLoadingId = key;
   var requestSequence = ++forumThreadRequestSequence;
   forumLoadError = null;
   var offset = options && options.offset ? options.offset : 0;
-  if (offset === 0) {
+  var reset = !!(options && options.reset);
+  if (offset === 0 || reset) {
     serverForumThread = null;
-    serverForumPosts = null;
     serverForumPostsPage = { limit: 20, offset: 0, hasMore: false };
   }
-  Promise.all([
+  var stillDisplayedRoute = function() {
+    return (currentPage === 'thread' || currentPage === 'threadEdit') && String(currentThread) === key;
+  };
+  return Promise.all([
     forumApi().apiRequest('GET', '/api/forum/threads/' + encodeURIComponent(key)),
     forumApi().apiRequest('GET', '/api/forum/threads/' + encodeURIComponent(key) + '/posts?limit=20&offset=' + offset),
   ]).then(function(responses) {
-    if (requestSequence !== forumThreadRequestSequence) return;
+    if (requestSequence !== forumThreadRequestSequence || !stillDisplayedRoute()) return;
     serverForumThread = responses[0].data;
     var postsResponse = responses[1];
-    var nextPosts = Array.isArray(postsResponse.data) ? postsResponse.data : [];
-    serverForumPosts = offset ? (serverForumPosts || []).concat(nextPosts) : nextPosts;
+    var fetchedPosts = Array.isArray(postsResponse.data) ? postsResponse.data : [];
+    var nextPosts;
+    if (offset && !reset) {
+      nextPosts = mergeForumPostRecords(serverForumPosts, fetchedPosts);
+    } else {
+      var knownPosts = forumPostsById(serverForumPosts);
+      nextPosts = fetchedPosts.map(function(item) {
+        return item && item.id !== undefined && item.id !== null
+          ? chooseForumPostRecord(knownPosts[String(item.id)], item)
+          : item;
+      });
+    }
+    var pendingReply = serverForumPendingReplyFor(key);
+    if (pendingReply) {
+      var pendingId = String(pendingReply.id);
+      var fetchedPending = fetchedPosts.find(function(item) { return String(item.id) === pendingId; });
+      var displayedPending = nextPosts.find(function(item) { return String(item.id) === pendingId; });
+      if (displayedPending) pendingReply = chooseForumPostRecord(displayedPending, pendingReply);
+      serverForumPendingReply = pendingReply;
+      if (fetchedPending && forumPostVersionNumber(fetchedPending) >= forumPostVersionNumber(pendingReply)) {
+        nextPosts = nextPosts.map(function(item) {
+          return String(item.id) === pendingId ? chooseForumPostRecord(pendingReply, item) : item;
+        });
+        clearServerForumPendingReply();
+      } else {
+        // A stale page must not put an older copy beside the newer pending record.
+        nextPosts = nextPosts.filter(function(item) { return String(item.id) !== pendingId; });
+      }
+    }
+    serverForumPosts = nextPosts;
     serverForumPostsPage = postsResponse.page || { limit: 20, offset: offset, hasMore: false };
   }).catch(function(error) {
-    if (requestSequence !== forumThreadRequestSequence) return;
+    if (requestSequence !== forumThreadRequestSequence || !stillDisplayedRoute()) return;
     forumLoadError = error && error.message ? error.message : 'Não foi possível carregar esta conversa.';
   }).finally(function() {
     if (requestSequence === forumThreadRequestSequence) {
       forumThreadLoading = false;
       forumThreadLoadingId = null;
-      if (currentPage === 'thread' && String(currentThread) === key) render();
+      if (stillDisplayedRoute()) render();
     }
   });
 }
 
+function forumPostVersionNumber(post) {
+  return VaultModules.forumPostRecords.versionNumber(post);
+}
+
+function chooseForumPostRecord(current, incoming) {
+  return VaultModules.forumPostRecords.chooseRecord(current, incoming);
+}
+
+function forumPostsById(posts) {
+  return VaultModules.forumPostRecords.postsById(posts);
+}
+
+function sortForumPostRecords(posts) {
+  return VaultModules.forumPostRecords.sortRecords(posts);
+}
+
+function mergeForumPostRecords(posts, additions) {
+  return VaultModules.forumPostRecords.mergeRecords(posts, additions);
+}
+
+function serverForumPendingReplyFor(threadId) {
+  var key = String(threadId || (serverForumThread && serverForumThread.id) || '');
+  if (!serverForumPendingReply || String(serverForumPendingReply.threadId) !== key) return null;
+  var accountId = forumDraftAccountId();
+  if (!accountId || String(serverForumPendingReplyAccountId || '') !== String(accountId)) return null;
+  return serverForumPendingReply;
+}
+
+function clearServerForumPendingReply() {
+  serverForumPendingReply = null;
+  serverForumPendingReplyAccountId = null;
+}
+
+function setServerForumPendingReply(post) {
+  if (!post || post.id === undefined || post.id === null) return;
+  var accountId = forumDraftAccountId();
+  if (!accountId || accountId === 'anonymous') return;
+  var chosen = serverForumPendingReply && String(serverForumPendingReply.id) === String(post.id)
+    ? chooseForumPostRecord(serverForumPendingReply, post)
+    : post;
+  if (Array.isArray(serverForumPosts)) {
+    var index = serverForumPosts.findIndex(function(item) { return String(item.id) === String(chosen.id); });
+    if (index !== -1) {
+      serverForumPosts[index] = chooseForumPostRecord(serverForumPosts[index], chosen);
+      clearServerForumPendingReply();
+      return;
+    }
+  }
+  serverForumPendingReply = chosen;
+  serverForumPendingReplyAccountId = accountId;
+}
+
+function forumThreadPostRecords(threadId) {
+  var key = String(threadId || (serverForumThread && serverForumThread.id) || '');
+  var records = Array.isArray(serverForumPosts) ? serverForumPosts.slice() : [];
+  var pendingReply = serverForumPendingReplyFor(key);
+  if (pendingReply && !records.some(function(item) { return String(item.id) === String(pendingReply.id); })) {
+    records.push(pendingReply);
+  }
+  return sortForumPostRecords(records);
+}
+
+function findForumThreadPost(postId) {
+  return forumThreadPostRecords().find(function(post) { return String(post.id) === String(postId); }) || null;
+}
+
+function updateForumThreadPostRecord(post) {
+  if (!post || post.id === undefined || post.id === null) return;
+  var id = String(post.id);
+  if (serverForumPendingReply && String(serverForumPendingReply.id) === id) {
+    serverForumPendingReply = chooseForumPostRecord(serverForumPendingReply, post);
+    if (!serverForumPendingReplyAccountId) serverForumPendingReplyAccountId = forumDraftAccountId();
+  }
+  if (Array.isArray(serverForumPosts)) {
+    serverForumPosts = serverForumPosts.map(function(item) {
+      return String(item.id) === id ? chooseForumPostRecord(item, post) : item;
+    });
+  }
+}
+
 function loadMoreForumPosts() {
-  if (!serverForumThread || forumThreadLoading || !serverForumPostsPage.hasMore) return;
-  loadForumThread(serverForumThread.id, { force: true, offset: serverForumPosts.length });
+  if (!serverForumThread || forumThreadLoading || !serverForumPostsPage || !serverForumPostsPage.hasMore) return;
+  var limit = Number(serverForumPostsPage.limit) > 0 ? Number(serverForumPostsPage.limit) : 20;
+  var offset = Number.isFinite(Number(serverForumPostsPage.offset)) ? Number(serverForumPostsPage.offset) : 0;
+  loadForumThread(serverForumThread.id, { force: true, offset: offset + limit });
 }
 
 function newForumIdempotencyKey() {
@@ -1065,11 +1320,20 @@ function applyResourceFormDraft(descriptor, values, safe) {
     if (values.stats && typeof values.stats === 'object' && !Array.isArray(values.stats)) {
       STAT_KEYS.forEach(function(key) {
         var target = document.getElementById('p-stat-' + key);
-        if (target && Object.hasOwn(values.stats, key)) target.value = String(values.stats[key]);
+        if (target) target.value = Object.hasOwn(values.stats, key) ? String(values.stats[key]) : '';
       });
     }
-    if (values.theme && typeof values.theme.accentColor === 'string') {
-      restoreResourceFields({ accentColor: values.theme.accentColor }, { accentColor: 'p-accent-color' });
+    if (values.theme && typeof values.theme === 'object' && !Array.isArray(values.theme)) {
+      activePersonagemTheme = Object.assign({}, activePersonagemTheme || {}, values.theme);
+      if (typeof values.theme.accentColor === 'string') {
+        if (values.theme.accentColor === '') {
+          activePersonagemAccentEmpty = true;
+          restoreResourceFields({ accentColor: '#ffffff' }, { accentColor: 'p-accent-color' });
+        } else {
+          activePersonagemAccentEmpty = false;
+          restoreResourceFields({ accentColor: values.theme.accentColor }, { accentColor: 'p-accent-color' });
+        }
+      }
     }
     var skillsRoot = document.getElementById('p-skills-list');
     if (skillsRoot && Array.isArray(values.skills)) {
@@ -1082,18 +1346,29 @@ function applyResourceFormDraft(descriptor, values, safe) {
     if (typeof values.descricao === 'string') setEditorContent('p-editor', safe ? safe.html : '');
   } else if (descriptor.kind === 'scene') {
     restoreResourceFields(values, {
-      titulo: 'c-titulo', subtitulo: 'c-subtitulo', categoria: 'c-categoria', status: 'c-status',
-      resumo: 'c-resumo', banner: 'c-banner'
+      titulo: 'c-titulo', subtitulo: 'c-subtitulo', resumo: 'c-resumo', banner: 'c-banner'
     });
+    setSelectValueOrAppend('c-categoria', values.categoria);
+    setSelectValueOrAppend('c-status', values.status);
     var theme = values.theme || {};
     restoreResourceFields(theme, {
-      accentColor: 'c-accent', bannerStyle: 'c-banner-style', layout: 'c-layout',
+      bannerStyle: 'c-banner-style', layout: 'c-layout',
       fontFamily: 'c-font', bgEffect: 'c-bg-effect', bgm: 'c-bgm'
     });
+    activeCenaAccentEmpty = typeof theme.accentColor === 'string' && theme.accentColor === '';
+    if (document.getElementById('c-accent')) {
+      document.getElementById('c-accent').value = activeCenaAccentEmpty ? '#ffffff' : (theme.accentColor || '#ffffff');
+    }
     var infobox = values.infobox || {};
-    restoreResourceFields({ show: infobox.show, title: infobox.title, image: infobox.image, caption: infobox.caption, participants: Array.isArray(infobox.participants) ? infobox.participants.join(', ') : '' }, {
-      show: 'c-ib-show', title: 'c-ib-title', image: 'c-ib-image', caption: 'c-ib-caption', participants: 'c-ib-participants'
+    activeCenaInfoboxExtra = {
+      location: typeof infobox.location === 'string' ? infobox.location : '',
+      timeline: typeof infobox.timeline === 'string' ? infobox.timeline : ''
+    };
+    activeCenaParticipants = Array.isArray(infobox.participants) ? infobox.participants.slice() : null;
+    restoreResourceFields({ show: infobox.show, title: infobox.title, image: infobox.image, caption: infobox.caption }, {
+      show: 'c-ib-show', title: 'c-ib-title', image: 'c-ib-image', caption: 'c-ib-caption'
     });
+    if (Array.isArray(infobox.participants)) renderCenaParticipantRows(infobox.participants);
     var fieldsRoot = document.getElementById('c-infobox-fields');
     if (fieldsRoot && Array.isArray(infobox.fields)) {
       fieldsRoot.innerHTML = '';
@@ -1139,7 +1414,7 @@ function restoreResourceFormDraft() {
   if (!descriptor) return;
   var accountId = forumDraftAccountId();
   var key = resourceFormDraftKey(descriptor, accountId);
-  if (!key || resourceDraftRestored[key] || resourceDraftRestorePending[key]) return;
+  if (!key || resourceDraftRestorePending[key]) return;
   var record = readResourceFormDraftRecord(descriptor, accountId);
   if (!record) return;
   var values = record.values;
@@ -1257,8 +1532,8 @@ function forumDraftStorageKey(kind, resourceId, accountId) {
 }
 
 function forumDraftFields(kind) {
-  if (kind === 'topic') return { categoryId: 64, title: 200, tag: 8, content: 250000 };
-  if (kind === 'topic-edit') return { title: 200, tag: 8 };
+  if (kind === 'topic') return { categoryId: 64, title: 200, tag: 20, content: 250000 };
+  if (kind === 'topic-edit') return { title: 200, tag: 20 };
   if (kind === 'reply') return { content: 250000 };
   return null;
 }
@@ -1325,7 +1600,7 @@ function clearForumDraft(kind, resourceId, accountId) {
 }
 
 function activeForumDraftDescriptor() {
-  if (currentPage === 'novaThread') {
+  if (currentPage === 'novaThread' || currentPage === 'threadEdit') {
     return editandoThread === null
       ? { kind: 'topic', resourceId: 'new' }
       : { kind: 'topic-edit', resourceId: String(editandoThread) };
@@ -1369,11 +1644,17 @@ function saveActiveForumDraft() {
   } else if (descriptor.kind === 'reply') {
     var replyPayload = { content: values.content };
     var replySerialized = JSON.stringify(replyPayload);
-    if (pendingReplyPayload && pendingReplyPayload !== replySerialized) {
+    var replyThreadId = String(descriptor.resourceId);
+    var replyAccountId = forumDraftAccountId();
+    if (pendingReplyPayload && (pendingReplyPayload !== replySerialized
+      || pendingReplyThreadId !== replyThreadId || pendingReplyAccountId !== replyAccountId)) {
       pendingReplyKey = null;
       pendingReplyPayload = null;
+      pendingReplyThreadId = null;
+      pendingReplyAccountId = null;
     }
-    if (pendingReplyKey && pendingReplyPayload === replySerialized) idempotencyKey = pendingReplyKey;
+    if (pendingReplyKey && pendingReplyPayload === replySerialized
+      && pendingReplyThreadId === replyThreadId && pendingReplyAccountId === replyAccountId) idempotencyKey = pendingReplyKey;
   }
   writeForumDraft(descriptor.kind, descriptor.resourceId, values, idempotencyKey);
   return { descriptor: descriptor, values: values };
@@ -1433,6 +1714,8 @@ function restoreForumEditorDraft(editorId, html, idempotencyKey, descriptor) {
     } else if (descriptor.kind === 'reply' && idempotencyKey) {
       pendingReplyKey = idempotencyKey;
       pendingReplyPayload = JSON.stringify({ content: getEditorContent(editorId) });
+      pendingReplyThreadId = String(descriptor.resourceId);
+      pendingReplyAccountId = accountId;
       writeForumDraft('reply', descriptor.resourceId, { content: getEditorContent(editorId) }, idempotencyKey);
     } else if (descriptor.kind === 'topic') {
       writeForumDraft('topic', descriptor.resourceId, forumDraftValuesFromForm(descriptor));
@@ -1461,6 +1744,9 @@ function clearForumDraftEditors() {
   pendingTopicPayload = null;
   pendingReplyKey = null;
   pendingReplyPayload = null;
+  pendingReplyThreadId = null;
+  pendingReplyAccountId = null;
+  clearServerForumPendingReply();
 }
 
 function initializeForumDraftPersistence() {
@@ -1482,7 +1768,11 @@ function authorName(author) {
 }
 
 function forumThreadTag(tag) {
-  return ['ooc', 'rp', 'wiki'].includes(tag) ? tag : 'ooc';
+  return typeof tag === 'string' && tag ? tag : 'ooc';
+}
+
+function forumThreadTagClass(tag) {
+  return VaultModules.forumPostRecords.tagClass(tag);
 }
 
 function renderForum() {
@@ -1494,15 +1784,15 @@ function renderForum() {
   var html = '<div class="breadcrumb">Início / Fórum</div>';
 
   html += '<div class="filter-bar">';
-  html += '<input type="text" id="forum-search-input" maxlength="100" value="' + ha(forumFilterSearch) + '" placeholder="Pesquisar tópicos por título..." oninput="onForumFilterChange()">';
-  html += '<select id="forum-tag-select" onchange="onForumFilterChange()">';
+  html += '<input type="text" id="forum-search-input" maxlength="100" value="' + ha(forumFilterSearch) + '" placeholder="Pesquisar tópicos por título..." oninput="onForumFilterChange(event)">';
+  html += '<select id="forum-tag-select" onchange="onForumFilterChange(event)">';
   html += '<option value="all"' + (forumFilterTag === 'all' ? ' selected' : '') + '>Todas as Tags</option>';
   html += '<option value="ooc"' + (forumFilterTag === 'ooc' ? ' selected' : '') + '>OOC</option>';
   html += '<option value="rp"' + (forumFilterTag === 'rp' ? ' selected' : '') + '>RP</option>';
   html += '<option value="wiki"' + (forumFilterTag === 'wiki' ? ' selected' : '') + '>Wiki</option>';
   html += '</select>';
-  if (DB.session) {
-    html += '<button class="btn btn-primary" onclick="startNewThread(' + idJs(serverForumCategories[0] ? serverForumCategories[0].id : '') + ')">+ Novo Tópico</button>';
+  if (DB.session && serverForumCategories.length) {
+    html += '<button class="btn btn-primary" onclick="navigate(\'novaThread\', ' + idJs(serverForumCategories[0].id) + ')">+ Novo Tópico</button>';
   }
   html += '</div>';
 
@@ -1516,7 +1806,7 @@ function renderForum() {
       if (q && (t.title || '').toLowerCase().indexOf(q) === -1) return false;
       return true;
     });
-    html += '<div class="cat-header"><span>Resultados da Busca (' + matched.length + ')</span><a class="btn btn-small" onclick="forumFilterSearch=\'\';forumFilterTag=\'all\';render()">Limpar Filtro</a></div>';
+    html += '<div class="cat-header"><span>Resultados da Busca (' + matched.length + ')</span><button type="button" class="btn btn-small" onclick="clearForumFilters()">Limpar Filtro</button></div>';
     html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Publicações</th><th>Última atividade</th></tr></thead><tbody>';
     if (!matched.length) {
       html += '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:24px;">Nenhum tópico encontrado.</td></tr>';
@@ -1544,7 +1834,7 @@ function renderForum() {
     var lastInfo = lastThread ? ('<a onclick="navigate(\'thread\',' + idJs(lastThread.id) + ')" style="font-weight:500;">' + h(lastThread.title.substring(0, 38)) + (lastThread.title.length > 38 ? '…' : '') + '</a><br><small style="color:var(--text-muted);">' + h(formatForumTimestamp(lastThread.lastActivityAt)) + '</small>') : '<span style="color:var(--text-muted);">Nenhum tópico</span>';
 
     html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-    if (DB.session) html += '<button class="btn btn-small" onclick="startNewThread(' + idJs(cat.id) + ')">+ Novo Tópico</button>';
+    if (DB.session) html += '<button class="btn btn-small" onclick="navigate(\'novaThread\', ' + idJs(cat.id) + ')">+ Novo Tópico</button>';
     html += '</div>';
     html += '<table class="forum-table"><thead><tr><th style="width:48%">Categoria</th><th>Tópicos</th><th>Posts</th><th>Última Atividade</th></tr></thead><tbody>';
     html += '<tr><td><a onclick="navigate(\'cat\',' + idJs(cat.id) + ')" style="font-weight:600;font-size:14px;color:#fff;">' + h(cat.name) + '</a><br><small style="color:var(--text-secondary);">' + h(cat.description || '') + '</small></td>';
@@ -1574,14 +1864,14 @@ function renderCat() {
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / ' + h(cat.name) + '</div>';
   html += '<div class="cat-header"><span>' + h(cat.name) + '</span>';
-  if (DB.session) html += '<button class="btn btn-small btn-primary" onclick="startNewThread(' + idJs(cat.id) + ')">+ Novo Tópico</button>';
+  if (DB.session) html += '<button class="btn btn-small btn-primary" onclick="navigate(\'novaThread\', ' + idJs(cat.id) + ')">+ Novo Tópico</button>';
   html += '</div>';
   html += '<p style="color:var(--text-secondary);">' + h(cat.description || '') + '</p>';
   html += '<table class="forum-table"><thead><tr><th>Tópico</th><th>Autor</th><th>Publicações</th><th>Última atividade</th></tr></thead><tbody>';
 
   if (!threads.length) {
     html += '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:28px;">Nenhum tópico ainda.';
-    if (DB.session) html += ' <a onclick="startNewThread(' + idJs(cat.id) + ')">Criar o primeiro</a>';
+    if (DB.session) html += ' <a onclick="navigate(\'novaThread\', ' + idJs(cat.id) + ')">Criar o primeiro</a>';
     html += '</td></tr>';
   }
 
@@ -1591,7 +1881,7 @@ function renderCat() {
     html += '<tr><td>';
     if (t.pinned) html += '<span class="pin">FIXADO</span> ';
     if (t.locked) html += '<span class="tag">TRANCADO</span> ';
-    html += '<span class="tag tag-' + tag + '">' + h(tag.toUpperCase()) + '</span> ';
+    html += '<span class="tag tag-' + forumThreadTagClass(tag) + '">' + h(tag.toUpperCase()) + '</span> ';
     html += '<a onclick="navigate(\'thread\',' + idJs(t.id) + ')" style="font-weight:600;color:#fff;">' + h(t.title) + '</a>';
     html += '</td><td>' + h(authorName(author)) + '</td>';
     html += '<td>' + (Number(t.postsCount) || 0) + '</td>';
@@ -1654,6 +1944,26 @@ function toggleLockThread(threadId) {
   moderateForumThread(threadId, serverForumThread.locked ? 'unlock' : 'lock');
 }
 
+
+function renderForumPostHtml(post, thread) {
+  var author = post.author;
+  var name = author ? author.username : (post.authorLabel || 'Autoria não identificada');
+  var avatarHtml = author && author.avatar ? '<img src="' + ha(author.avatar) + '" alt="">' : h(name.substring(0, 2).toUpperCase());
+  var html = '<div class="post-box"><div class="post-header"><div class="post-meta"><span class="post-number">#' + Number(post.postNo) + '</span><strong style="color:#fff;">' + h(name) + '</strong></div><div class="post-meta"><span class="post-date">' + h(formatForumTimestamp(post.createdAt)) + '</span>' + (post.edited ? '<span class="tag">editado</span>' : '') + '</div></div>';
+  html += '<div class="post-body"><div class="post-user-panel"><div class="avatar">' + avatarHtml + '</div><div class="username">' + h(name) + '</div><div class="user-title">' + h(author ? author.title : 'Registro legado') + '</div>' + (author ? roleBadgeFromRole(author.role) : '') + '</div>';
+  html += '<div class="post-content">' + (post.deleted ? '<p class="alert alert-info">Esta publicação foi ocultada.</p>' : formatPost(post.content)) + '</div></div>';
+  if (!post.deleted) {
+    html += '<div class="post-footer"><div class="post-actions">';
+    if (DB.session && !thread.locked && !thread.archivedAt) html += '<a onclick="quotePost(' + idJs(post.id) + ')">Citar</a>';
+    if (canEditForumAuthor(author) && !thread.locked && !thread.archivedAt) html += '<a onclick="editPost(' + idJs(post.id) + ')">Editar</a>';
+    if (DB.session && ((canEditForumAuthor(author) && Number(post.postNo) !== 1) || isModOrAdmin())) html += '<a class="danger-link" onclick="deletePost(' + idJs(post.id) + ')">Ocultar</a>';
+    html += '</div></div>';
+  } else if (isModOrAdmin()) {
+    html += '<div class="post-footer"><div class="post-actions"><a onclick="restoreForumPost(' + idJs(post.id) + ')">Restaurar publicação</a></div></div>';
+  }
+  return html + '</div>';
+}
+
 function renderThread() {
   var threadId = String(currentThread || '');
   if (!serverForumThread || String(serverForumThread.id) !== threadId || !Array.isArray(serverForumPosts)) {
@@ -1662,7 +1972,7 @@ function renderThread() {
     return '<div class="alert alert-info">Carregando a conversa compartilhada…</div>';
   }
   var thread = serverForumThread;
-  var tagClass = 'tag-' + forumThreadTag(thread.tag);
+  var tagClass = 'tag-' + forumThreadTagClass(thread.tag);
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / <a onclick="navigate(\'cat\',' + idJs(thread.categoryId) + ')">' + h(thread.categoryName || 'Categoria') + '</a> / ' + h(thread.title) + '</div>';
   html += '<div class="thread-tools"><h2>';
   if (thread.pinned) html += '<span class="pin">FIXADO</span> ';
@@ -1674,27 +1984,10 @@ function renderThread() {
     html += '<button class="btn btn-small" onclick="toggleLockThread(' + idJs(thread.id) + ')">' + (thread.locked ? 'Destrancar' : 'Trancar') + '</button>';
     html += '<button class="btn btn-small btn-warn" onclick="moderateForumThread(' + idJs(thread.id) + ',\'' + (thread.archivedAt ? 'unarchive' : 'archive') + '\')">' + (thread.archivedAt ? 'Restaurar tópico' : 'Arquivar tópico') + '</button>';
   }
-  if (canEditForumAuthor(thread.author) && !thread.locked && !thread.archivedAt) html += '<button class="btn btn-warn btn-small" onclick="editarThread(' + idJs(thread.id) + ')">Editar</button>';
+  if (canEditForumAuthor(thread.author) && !thread.locked && !thread.archivedAt) html += '<button class="btn btn-warn btn-small" onclick="navigate(\'threadEdit\', ' + idJs(thread.id) + ')">Editar</button>';
   html += '</div></div>';
 
-  serverForumPosts.forEach(function(post) {
-    var author = post.author;
-    var name = author ? author.username : (post.authorLabel || 'Autoria não identificada');
-    var avatarHtml = author && author.avatar ? '<img src="' + ha(author.avatar) + '" alt="">' : h(name.substring(0, 2).toUpperCase());
-    html += '<div class="post-box"><div class="post-header"><div class="post-meta"><span class="post-number">#' + Number(post.postNo) + '</span><strong style="color:#fff;">' + h(name) + '</strong></div><div class="post-meta"><span class="post-date">' + h(formatForumTimestamp(post.createdAt)) + '</span>' + (post.edited ? '<span class="tag">editado</span>' : '') + '</div></div>';
-    html += '<div class="post-body"><div class="post-user-panel"><div class="avatar">' + avatarHtml + '</div><div class="username">' + h(name) + '</div><div class="user-title">' + h(author ? author.title : 'Registro legado') + '</div>' + (author ? roleBadgeFromRole(author.role) : '') + '</div>';
-    html += '<div class="post-content">' + (post.deleted ? '<p class="alert alert-info">Esta publicação foi ocultada.</p>' : formatPost(post.content)) + '</div></div>';
-    if (!post.deleted) {
-      html += '<div class="post-footer"><div class="post-actions">';
-      if (DB.session && !thread.locked && !thread.archivedAt) html += '<a onclick="quotePost(' + idJs(post.id) + ')">Citar</a>';
-      if (canEditForumAuthor(author) && !thread.locked && !thread.archivedAt) html += '<a onclick="editPost(' + idJs(post.id) + ')">Editar</a>';
-      if (DB.session && ((canEditForumAuthor(author) && Number(post.postNo) !== 1) || isModOrAdmin())) html += '<a class="danger-link" onclick="deletePost(' + idJs(post.id) + ')">Ocultar</a>';
-      html += '</div></div>';
-    } else if (isModOrAdmin()) {
-      html += '<div class="post-footer"><div class="post-actions"><a onclick="restoreForumPost(' + idJs(post.id) + ')">Restaurar publicação</a></div></div>';
-    }
-    html += '</div>';
-  });
+  forumThreadPostRecords(thread.id).forEach(function(post) { html += renderForumPostHtml(post, thread); });
 
   if (serverForumPostsPage.hasMore) html += '<div style="text-align:center;margin:16px;"><button class="btn" onclick="loadMoreForumPosts()"' + (forumThreadLoading ? ' disabled' : '') + '>Carregar publicações anteriores</button></div>';
   if (thread.locked || thread.archivedAt) {
@@ -1715,7 +2008,14 @@ function renderNovaThread() {
     loadForumLanding(false);
     return '<div class="alert alert-info">Carregando categorias…</div>';
   }
-  if (isEdit && !thr) return '<div class="alert alert-error">Atualize o tópico antes de editá-lo.</div>';
+  if (isEdit && !thr) {
+    if (forumLoadError) return '<div class="alert alert-error">' + h(forumLoadError) + '</div>';
+    loadForumThread(editandoThread, { force: true });
+    return '<div class="alert alert-info">Carregando tópico…</div>';
+  }
+  if (!isEdit && (!serverForumCategories || !serverForumCategories.length)) {
+    return '<div class="alert alert-error">Nenhuma categoria disponível. Peça à administração para criar uma categoria antes de abrir um tópico.</div>';
+  }
   var selCat = currentCat || (serverForumCategories && serverForumCategories[0] && serverForumCategories[0].id);
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'forum\')">Fórum</a> / ' + (isEdit ? 'Editar Tópico' : 'Novo Tópico') + '</div>';
@@ -1733,9 +2033,11 @@ function renderNovaThread() {
     html += '</div>';
   }
 
-  html += '<div class="form-row"><label>Título</label><input type="text" id="thread-title" value="' + (thr ? ha(thr.title) : '') + '" placeholder="Título do tópico"></div>';
+  html += '<div class="form-row"><label>Título</label><input type="text" id="thread-title" maxlength="200" value="' + (thr ? ha(thr.title) : '') + '" placeholder="Título do tópico"></div>';
   if (isEdit) {
-    html += '<div class="form-row"><label>Tipo</label><select id="thread-tag"><option value="ooc"' + (thr.tag === 'ooc' ? ' selected' : '') + '>OOC</option><option value="rp"' + (thr.tag === 'rp' ? ' selected' : '') + '>RP</option><option value="wiki"' + (thr.tag === 'wiki' ? ' selected' : '') + '>Wiki / Lore</option></select></div>';
+    html += '<div class="form-row"><label>Tipo</label><select id="thread-tag"><option value="ooc"' + (thr.tag === 'ooc' ? ' selected' : '') + '>OOC</option><option value="rp"' + (thr.tag === 'rp' ? ' selected' : '') + '>RP</option><option value="wiki"' + (thr.tag === 'wiki' ? ' selected' : '') + '>Wiki / Lore</option>';
+    if (['ooc', 'rp', 'wiki'].indexOf(thr.tag) === -1) html += '<option value="' + ha(thr.tag || '') + '" selected>' + h(thr.tag || 'Legado') + '</option>';
+    html += '</select></div>';
   } else {
     html += '<div class="form-row"><label>Conteúdo</label>' + buildEditor('thread-editor', '') + '</div>';
   }
@@ -1768,11 +2070,11 @@ function carregarPersonagensServidor() {
     .then(function(data) {
       if (!data || !Array.isArray(data.personagens)) throw new Error('A resposta de personagens é inválida.');
       serverPersonagens = data.personagens;
-      if (currentPage === 'personagens' || currentPage === 'personagemView' || currentPage === 'novaCena') render();
+      if (currentPage === 'personagens' || currentPage === 'personagemView' || currentPage === 'novoPersonagem' || currentPage === 'novaCena' || currentPage === 'cenaView') render();
     })
     .catch(function(error) {
       personagensLoadError = error.message || 'Não foi possível carregar personagens do servidor.';
-      if (currentPage === 'personagens' || currentPage === 'personagemView') render();
+      if (currentPage === 'personagens' || currentPage === 'personagemView' || currentPage === 'novoPersonagem') render();
     })
     .finally(function() { personagensLoading = false; });
 }
@@ -1790,7 +2092,7 @@ function renderCharCard(p) {
   var cardStyle = accent ? ' style="border-top: 2px solid ' + ha(accent) + ';"' : '';
   var totalAttr = calcStatTotal(p.stats);
 
-  var html = '<div class="char-card"' + cardStyle + ' onclick="navigate(\'personagemView\',' + idJs(p.id) + ')">';
+  var html = '<a class="char-card" href="' + ha(routePath('personagemView', p.id)) + '"' + cardStyle + '>';
   if (p.imagem) {
     html += '<img class="thumb" src="' + ha(p.imagem) + '" alt="' + ha(p.nome) + '">';
   } else {
@@ -1807,7 +2109,7 @@ function renderCharCard(p) {
   if (p.author) {
     html += '<div class="card-author-row">' + renderAuthorChip(p.author, '', 'Ficha por') + '</div>';
   }
-  html += '</div></div>';
+  html += '</div></a>';
   return html;
 }
 
@@ -1843,7 +2145,7 @@ function renderPersonagens() {
   var html = '<div class="breadcrumb"><a onclick="navigate(\'wiki\')">Wiki</a> / Personagens</div>';
   html += '<div class="cat-header"><span>Personagens (' + allChars.length + ')</span>';
   if (isModOrAdmin()) {
-    html += '<button class="btn btn-small btn-primary" onclick="sessionStorage.removeItem(\'editPersonagemId\');navigate(\'novoPersonagem\')">+ Novo Personagem</button>';
+    html += '<button class="btn btn-small btn-primary" onclick="navigate(\'novoPersonagem\')">+ Novo Personagem</button>';
   }
   html += '</div>';
 
@@ -1934,7 +2236,7 @@ function renderWiki() {
   html += renderWikiSections();
   if (wikiFilterCategory !== 'all') {
     var selected = (serverWikiSections || []).concat(serverWikiCategories || []).find(function(item) { return item.key === wikiFilterCategory; });
-    html += '<div class="cat-header"><span>' + h(selected ? selected.name : wikiFilterCategory) + '</span><button class="btn btn-small" onclick="selectWikiCategory(\'all\')">Todas as seções</button></div>';
+    html += '<div class="cat-header"><span>' + h(selected ? selected.name : wikiFilterCategory) + '</span><a class="btn btn-small" href="/wiki" onclick="return wikiCategoryClick(event, \'all\')">Todas as seções</a></div>';
   } else html += '<h2 class="wiki-articles-heading">Artigos publicados</h2>';
   if (wikiPagesLoadError) return html + '<div class="alert alert-error">' + h(wikiPagesLoadError) + ' <button class="btn" onclick="loadWikiPages(true)">Tentar carregar artigos novamente</button></div>';
   if (serverWikiPages === null) return html + '<p>Carregando artigos…</p>';
@@ -1947,7 +2249,7 @@ function renderWiki() {
     html += '</div>';
   } else if (!pages.length) {
     html += '<div class="builder-panel">Ainda não há artigos nesta seção com os filtros atuais.'
-      + (wikiFilterCategory !== 'all' ? ' <button class="btn btn-small" onclick="selectWikiCategory(\'all\')">Limpar categoria</button>' : '')
+      + (wikiFilterCategory !== 'all' ? ' <a class="btn btn-small" href="/wiki" onclick="return wikiCategoryClick(event, \'all\')">Limpar categoria</a>' : '')
       + '</div>';
   } else {
     html += '<div class="char-grid">';
@@ -1959,7 +2261,7 @@ function renderWiki() {
         html += '<p style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;">'
           + page.categories.map(function(category) {
             var key = wikiCategoryKey(category);
-            return '<button type="button" class="tag" onclick="selectWikiCategory(' + jsArg(key) + ')">' + h(category) + '</button>';
+            return '<a class="tag" href="/wiki?categoria=' + ha(key) + '" onclick="return wikiCategoryClick(event, ' + jsArg(key) + ')">' + h(category) + '</a>';
           }).join('') + '</p>';
       }
       if (page.author) {
@@ -2009,7 +2311,7 @@ function renderWikiSections() {
   function row(section) {
     var selected = wikiFilterCategory === section.key;
     var count = Number(section.pagesCount || 0);
-    return '<li class="wiki-section-row' + (selected ? ' selected' : '') + '"><div><h3><a href="/wiki?categoria=' + ha(section.key) + '"' + (selected ? ' aria-current="page"' : '') + ' onclick="selectWikiCategory(' + jsArg(section.key) + ');return false;">' + h(section.name) + '</a></h3><p>' + h(section.description || '') + '</p></div><div class="wiki-section-count">' + count + (count === 1 ? ' artigo publicado' : ' artigos publicados') + (count === 0 ? '<span>Ainda não há artigos nesta seção.</span>' : '') + '</div></li>';
+    return '<li class="wiki-section-row' + (selected ? ' selected' : '') + '"><div><h3><a href="/wiki?categoria=' + ha(section.key) + '"' + (selected ? ' aria-current="page"' : '') + ' onclick="return wikiCategoryClick(event, ' + jsArg(section.key) + ')">' + h(section.name) + '</a></h3><p>' + h(section.description || '') + '</p></div><div class="wiki-section-count">' + count + (count === 1 ? ' artigo publicado' : ' artigos publicados') + (count === 0 ? '<span>Ainda não há artigos nesta seção.</span>' : '') + '</div></li>';
   }
   var html = '<nav class="wiki-sections" aria-label="Seções da Wiki">';
   serverWikiSections.filter(function(section) {
@@ -2018,7 +2320,7 @@ function renderWikiSections() {
     var children = serverWikiSections.filter(function(section) {
       return section.parentKey === root.key && (wikiFilterCategory === 'all' || wikiFilterCategory === root.key || wikiFilterCategory === section.key);
     });
-    html += '<section class="wiki-section-group"><header><h2><a href="/wiki?categoria=' + ha(root.key) + '" onclick="selectWikiCategory(' + jsArg(root.key) + ');return false;">' + h(root.name) + '</a></h2><p>' + Number(root.pagesCount || 0) + (Number(root.pagesCount || 0) === 1 ? ' artigo publicado nesta área' : ' artigos publicados nesta área') + '</p>' + (root.description ? '<p>' + h(root.description) + '</p>' : '') + '</header><ul>' + (children.length ? children.map(row).join('') : row(root)) + '</ul></section>';
+    html += '<section class="wiki-section-group"><header><h2><a href="/wiki?categoria=' + ha(root.key) + '" onclick="return wikiCategoryClick(event, ' + jsArg(root.key) + ')">' + h(root.name) + '</a></h2><p>' + Number(root.pagesCount || 0) + (Number(root.pagesCount || 0) === 1 ? ' artigo publicado nesta área' : ' artigos publicados nesta área') + '</p>' + (root.description ? '<p>' + h(root.description) + '</p>' : '') + '</header><ul>' + (children.length ? children.map(row).join('') : row(root)) + '</ul></section>';
   });
   var known = new Set(serverWikiSections.map(function(section) { return section.key; }));
   var extra = (serverWikiCategories || []).filter(function(category) { return !known.has(category.key) && (wikiFilterCategory === 'all' || wikiFilterCategory === category.key); });
@@ -2066,14 +2368,32 @@ function loadWikiCategories(force) {
   });
 }
 
+function wikiStaffArticleClick(event, id) {
+  if (event && (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return true;
+  if (event) event.preventDefault();
+  navigate('wikiStaffArticle', id);
+  return false;
+}
+
+function wikiCategoryClick(event, key) {
+  if (event && (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return true;
+  if (event) event.preventDefault();
+  selectWikiCategory(key);
+  return false;
+}
+
 function selectWikiCategory(key) {
   var next = String(key || 'all');
   if (next !== 'all' && !/^[a-z0-9][a-z0-9-]{0,99}$/.test(next)) return;
-  if (currentPage !== 'wiki') navigate('wiki');
-  wikiFilterCategory = next;
   var destination = next === 'all' ? '/wiki' : '/wiki?categoria=' + encodeURIComponent(next);
-  window.history.pushState({ page: 'wiki' }, '', destination);
+  currentPage = 'wiki';
+  wikiFilterCategory = next;
+  if (window.location.pathname + (window.location.search || '') !== destination) {
+    window.history.pushState({ page: 'wiki' }, '', destination);
+  }
+  updateTopBar();
   render();
+  if (window.scrollTo) window.scrollTo(0, 0);
 }
 
 function loadWikiPages(force) {
@@ -2233,7 +2553,7 @@ function renderWikiStaff() {
     var snapshot = page.head.snapshot;
     var published = page.accessLevel === 'public' && !!page.publishedRevisionId;
     var actorChip = page.head.actor ? renderAuthorChip(page.head.actor, '', 'Revisão por') : '';
-    html += '<article class="builder-panel"><h2><a href="/wiki/rascunhos/' + ha(page.id) + '" onclick="navigate(\'wikiStaffArticle\',' + jsArg(page.id) + ');return false;">' + h(snapshot.title) + '</a></h2><p>' + h(snapshot.summary || '') + '</p><div class="card-author-row" style="gap:10px;"><span class="field-desc" style="margin:0;">' + (published ? 'Publicado para todos' + (page.headRevisionId !== page.publishedRevisionId ? ' · Com alterações de trabalho' : '') : 'Rascunho · Somente equipe') + '</span>' + actorChip + '</div></article>';
+    html += '<article class="builder-panel"><h2><a href="/wiki/rascunhos/' + ha(page.id) + '" onclick="return wikiStaffArticleClick(event, ' + jsArg(page.id) + ')">' + h(snapshot.title) + '</a></h2><p>' + h(snapshot.summary || '') + '</p><div class="card-author-row" style="gap:10px;"><span class="field-desc" style="margin:0;">' + (published ? 'Publicado para todos' + (page.headRevisionId !== page.publishedRevisionId ? ' · Com alterações de trabalho' : '') : 'Rascunho · Somente equipe') + '</span>' + actorChip + '</div></article>';
   });
   return html;
 }
@@ -2270,7 +2590,7 @@ function renderWikiArticle() {
   if (Array.isArray(article.categories) && article.categories.length) {
     html += '<p style="margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;">'
       + article.categories.map(function(category) {
-        return '<button type="button" class="tag" onclick="selectWikiCategory(' + jsArg(wikiCategoryKey(category)) + ')">' + h(category) + '</button>';
+        return '<a class="tag" href="/wiki?categoria=' + ha(wikiCategoryKey(category)) + '" onclick="return wikiCategoryClick(event, ' + jsArg(wikiCategoryKey(category)) + ')">' + h(category) + '</a>';
       }).join('') + '</p>';
   }
   if (article.aliases && article.aliases.length) {
@@ -3837,7 +4157,7 @@ function renderPersonagemView() {
     html += '<button type="button" id="like-char-' + pidCss + '" class="btn btn-small like-btn" onclick="toggleLikePersonagem(' + idJs(p.id) + ', this)">Curtir <span class="like-count">(0)</span></button>';
   }
   if (isModOrAdmin()) {
-    html += '<button class="btn btn-warn btn-small" onclick="editarPersonagem(' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button>';
+    html += '<button class="btn btn-warn btn-small" onclick="navigate(\'novoPersonagem\', ' + idJs(p.id) + ')">Editar Ficha</button><button class="btn btn-danger btn-small" onclick="deletarPersonagem(' + idJs(p.id) + ')">Ocultar</button>';
   }
   html += '</div>';
   html += '</div>';
@@ -3894,7 +4214,7 @@ function renderPersonagemView() {
     html += '<div>' + buildRadarChart(p.stats, pageAccent) + '</div>';
     html += '<div class="stat-readout">';
     for (var si = 0; si < STAT_LABELS.length; si++) {
-      var valorStat = p.stats[STAT_KEYS[si]] !== undefined ? p.stats[STAT_KEYS[si]] : 0;
+      var valorStat = safeStatValue(p.stats[STAT_KEYS[si]]);
       html += '<div class="stat-row"><span class="stat-label">' + STAT_LABELS[si] + '</span><span class="stat-bar"><span class="stat-bar-fill" style="width:' + valorStat + '%;"></span></span><span class="stat-value">' + valorStat + '</span></div>';
     }
     html += '</div></div>';
@@ -3908,6 +4228,10 @@ function renderPersonagemView() {
 var STAT_LABELS = ['Ataque', 'Destreza', 'Defesa', 'Reserva', 'Controle', 'Refino', 'Emissão', 'Alma', 'Inteligência', 'Habilidade'];
 var STAT_ABBR = ['ATK', 'DEX', 'DEF', 'STA', 'CON', 'REF', 'EMI', 'SOUL', 'INT', 'SKILL'];
 var STAT_KEYS = ['ataque', 'destreza', 'defesa', 'reserva', 'controle', 'refino', 'emissao', 'alma', 'inteligencia', 'habilidade'];
+
+function safeStatValue(value) {
+  return VaultModules.records.safeStatValue(value);
+}
 
 function statsPreenchidos(stats) {
   if (!stats) return false;
@@ -3956,9 +4280,7 @@ function buildRadarChart(stats, accentColor) {
 
   var pontosDado = '';
   for (var i = 0; i < n; i++) {
-    var valor = stats[keys[i]] || 0;
-    if (valor > 100) valor = 100;
-    if (valor < 0) valor = 0;
+    var valor = safeStatValue(stats[keys[i]]);
     var angDado = (Math.PI * 2 / n) * i - Math.PI / 2;
     var rDado = maxR * (valor / 100);
     var xDado = cx + rDado * Math.cos(angDado);
@@ -3972,14 +4294,27 @@ function buildRadarChart(stats, accentColor) {
 
 // Estado temporário do Construtor de Blocos durante criação/edição
 var activeBuilderBlocks = [];
+var activePersonagemTheme = null;
+var activePersonagemAccentEmpty = false;
+var activeCenaAccentEmpty = false;
+var activeCenaParticipants = null;
+var activeCenaInfoboxExtra = null;
 
 function renderNovoPersonagem() {
   if (!isModOrAdmin()) return '<div class="alert alert-error">Acesso restrito a Moderadores e Administradores.</div>';
 
   var editId = sessionStorage.getItem('editPersonagemId');
+  if (editId && serverPersonagens === null) {
+    if (personagensLoadError) return '<div class="alert alert-error">' + h(personagensLoadError) + ' <button class="btn btn-small" onclick="carregarPersonagensServidor()">Tentar novamente</button></div>';
+    carregarPersonagensServidor();
+    return '<div class="alert alert-info">Carregando ficha…</div>';
+  }
   var existing = editId ? listaPersonagens().find(function(p) { return String(p.id) === editId; }) : null;
+  if (editId && !existing) return '<p>Personagem não encontrado.</p>';
   var theme = (existing && existing.theme) ? existing.theme : {};
   activeBuilderBlocks = (existing && Array.isArray(existing.blocks)) ? JSON.parse(JSON.stringify(existing.blocks)) : [];
+  activePersonagemTheme = (existing && existing.theme) ? JSON.parse(JSON.stringify(existing.theme)) : null;
+  activePersonagemAccentEmpty = !!(activePersonagemTheme && activePersonagemTheme.accentColor === '');
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'personagens\')">Personagens</a> / ' + (existing ? 'Editar Personagem' : 'Novo Personagem') + '</div>';
   html += '<div class="cat-header"><span>' + (existing ? 'Editar Ficha de Personagem' : 'Cadastrar Novo Personagem') + '</span>';
@@ -3993,13 +4328,21 @@ function renderNovoPersonagem() {
   html += '<div class="builder-panel-title"><span>1. Identidade &amp; Dados da Ficha</span></div>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px;">';
   html += '<div class="form-row" style="margin-bottom:0"><label>Nome</label><input type="text" id="p-nome" value="' + (existing ? ha(existing.nome) : '') + '"></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>Categoria</label><select id="p-categoria"><option value="Personagem Principal"' + (!existing || existing.categoria !== 'Sub-Personagem' ? ' selected' : '') + '>Personagem Principal</option><option value="Sub-Personagem"' + (existing && existing.categoria === 'Sub-Personagem' ? ' selected' : '') + '>Sub-Personagem</option></select></div>';
+  var categoriaAtual = existing && typeof existing.categoria === 'string' ? existing.categoria : '';
+  var categoriaOpcoes = ['Personagem Principal', 'Sub-Personagem'];
+  if (categoriaAtual && categoriaOpcoes.indexOf(categoriaAtual) === -1) categoriaOpcoes.push(categoriaAtual);
+  var categoriaSelecionada = categoriaAtual || 'Personagem Principal';
+  var categoriaHtml = '';
+  categoriaOpcoes.forEach(function(categoria) {
+    categoriaHtml += '<option value="' + ha(categoria) + '"' + (categoria === categoriaSelecionada ? ' selected' : '') + '>' + h(categoria) + '</option>';
+  });
+  html += '<div class="form-row" style="margin-bottom:0"><label>Categoria</label><select id="p-categoria">' + categoriaHtml + '</select></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Título / Epíteto</label><input type="text" id="p-titulo" value="' + (existing ? ha(existing.titulo) : '') + '"></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Raça</label><input type="text" id="p-raca" value="' + (existing ? ha(existing.raca) : '') + '"></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Facção</label><input type="text" id="p-faccao" value="' + (existing ? ha(existing.faccao) : '') + '"></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Status</label><input type="text" id="p-status" value="' + (existing ? ha(existing.status) : '') + '" placeholder="Vivo, Falecido, Afastado..."></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>URL do Retrato / Imagem</label><input type="text" id="p-imagem" value="' + (existing ? ha(existing.imagem) : '') + '" placeholder="https://..."></div>';
-  html += '<div class="form-row" style="margin-bottom:0"><label>Cor de Destaque da Página</label><input type="color" id="p-accent-color" value="' + ha(theme.accentColor || '#ffffff') + '" style="height:38px;width:100%;cursor:pointer;"></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>Cor de Destaque da Página</label><input type="color" id="p-accent-color" value="' + ha(theme.accentColor || '#ffffff') + '" oninput="activePersonagemAccentEmpty=false" style="height:38px;width:100%;cursor:pointer;"></div>';
   html += '</div>';
 
   html += '<div class="form-row"><label>Descrição / Lore Principal (Editor Completo)</label>';
@@ -4013,7 +4356,7 @@ function renderNovoPersonagem() {
   html += '<div class="builder-panel-title"><span>Atributos &amp; Classificação (Opcional)</span></div>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;">';
   for (var ai = 0; ai < STAT_KEYS.length; ai++) {
-    var valorAttr = st[STAT_KEYS[ai]] !== undefined ? st[STAT_KEYS[ai]] : '';
+    var valorAttr = st[STAT_KEYS[ai]] !== undefined ? safeStatValue(st[STAT_KEYS[ai]]) : '';
     html += '<div class="form-row" style="margin-bottom:0"><label>' + STAT_LABELS[ai] + '</label><input type="number" min="0" max="100" id="p-stat-' + STAT_KEYS[ai] + '" value="' + valorAttr + '" placeholder="0-100"></div>';
   }
   html += '</div>';
@@ -4054,11 +4397,11 @@ function carregarWikiPostsServidor() {
     .then(function(data) {
       if (!data || !Array.isArray(data.wikiPosts)) throw new Error('A resposta de cenas é inválida.');
       serverWikiPosts = data.wikiPosts;
-      if (currentPage === 'cenas' || currentPage === 'cenaView' || currentPage === 'forum') render();
+      if (currentPage === 'cenas' || currentPage === 'cenaView' || currentPage === 'novaCena' || currentPage === 'forum') render();
     })
     .catch(function(error) {
       wikiPostsLoadError = error.message || 'Não foi possível carregar as cenas do servidor.';
-      if (currentPage === 'cenas' || currentPage === 'cenaView') render();
+      if (currentPage === 'cenas' || currentPage === 'cenaView' || currentPage === 'novaCena') render();
     })
     .finally(function() { wikiPostsLoading = false; });
 }
@@ -4091,7 +4434,7 @@ function renderCenas() {
   var html = '<div class="breadcrumb">Início / Cenas</div>';
   html += '<div class="cat-header"><span>Cenas &amp; Posts</span>';
   if (isModOrAdmin()) {
-    html += '<button class="btn btn-small btn-primary" onclick="sessionStorage.removeItem(\'editCenaId\');navigate(\'novaCena\')">+ Nova Cena / Post Customizável</button>';
+    html += '<button class="btn btn-small btn-primary" onclick="navigate(\'novaCena\')">+ Nova Cena / Post Customizável</button>';
   }
   html += '</div>';
 
@@ -4131,7 +4474,7 @@ function renderCenas() {
     html += '<p style="font-size:15px;color:#fff;margin-bottom:6px;">Nenhuma cena ou post encontrado.</p>';
     if (isModOrAdmin()) {
       html += '<p style="margin-bottom:14px;">Crie uma página de cena customizável com blocos modulares e turnos comentados.</p>';
-      html += '<button class="btn btn-primary" onclick="sessionStorage.removeItem(\'editCenaId\');navigate(\'novaCena\')">+ Criar Primeira Cena</button>';
+      html += '<button class="btn btn-primary" onclick="navigate(\'novaCena\')">+ Criar Primeira Cena</button>';
     }
     html += '</div>';
     return html;
@@ -4147,7 +4490,7 @@ function renderCenas() {
     var parts = (w.infobox && Array.isArray(w.infobox.participants)) ? w.infobox.participants : [];
     var descPreview = w.resumo || (w.descricao || '').replace(/<[^>]+>/g, '').substring(0, 140);
 
-    html += '<div class="cena-card" style="--card-accent:' + ha(accent) + ';" onclick="navigate(\'cenaView\',' + idJs(w.id) + ')">';
+    html += '<a class="cena-card" href="' + ha(routePath('cenaView', w.id)) + '" style="--card-accent:' + ha(accent) + ';">';
     html += '<div class="cena-card-banner" style="' + bannerStyle + '">';
     html += '<div class="cena-card-badges">';
     html += '<span class="tag" style="background:rgba(0,0,0,0.85);color:#fff;border-color:rgba(255,255,255,0.2);">' + h(w.categoria || 'Cena de RPG') + '</span>';
@@ -4170,7 +4513,7 @@ function renderCenas() {
     html += '<span><b>' + turnsCount + '</b> ' + (turnsCount === 1 ? 'turno' : 'turnos') + '</span>';
     html += '</div>';
     html += '<span style="color:#ffffff;font-weight:600;">Abrir &rarr;</span>';
-    html += '</div></div></div>';
+    html += '</div></div></a>';
   });
   html += '</div>';
   return html;
@@ -4386,7 +4729,7 @@ function renderCenaView() {
     }
     if (isModOrAdmin()) {
       if (!w.turnsReadOnly) {
-        html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
+        html += '<button class="btn btn-small btn-warn" onclick="navigate(\'novaCena\', ' + idJs(w.id) + ')">Customizar Página</button>';
       }
       html += '<button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Ocultar</button>';
     }
@@ -4402,7 +4745,7 @@ function renderCenaView() {
       html += '<button type="button" id="like-cena-' + widCss2 + '" class="btn btn-small like-btn" onclick="toggleLikeCena(' + idJs(w.id) + ', this)">Curtir <span class="like-count">(0)</span></button>';
     }
     if (isModOrAdmin()) {
-      if (!w.turnsReadOnly) html += '<button class="btn btn-small btn-warn" onclick="editarCena(' + idJs(w.id) + ')">Customizar Página</button>';
+      if (!w.turnsReadOnly) html += '<button class="btn btn-small btn-warn" onclick="navigate(\'novaCena\', ' + idJs(w.id) + ')">Customizar Página</button>';
       html += '<button class="btn btn-small btn-danger" onclick="deletarCena(' + idJs(w.id) + ')">Ocultar</button>';
     }
     html += '</div></div>';
@@ -4826,7 +5169,7 @@ function syncBuilderBlocksFromDOM() {
       card.querySelectorAll('.bb-subitem').forEach(function(sub) {
         var lb = sub.querySelector('.bb-tab-label').value.trim();
         var ct = sub.querySelector('.bb-tab-content').value;
-        if (lb || ct) items.push({ label: lb || 'Aba', content: ct });
+        if (lb || ct) items.push({ label: lb, content: ct });
       });
       updated.push({ type: 'tabs', title: title, items: items });
     } else if (type === 'gallery') {
@@ -4846,16 +5189,17 @@ function syncBuilderBlocksFromDOM() {
         var col = sub.querySelector('.bb-card-color').value;
         var img = sub.querySelector('.bb-card-img').value.trim();
         var d = sub.querySelector('.bb-card-desc').value.trim();
-        if (t || d) cItems.push({ title: t, badge: b, color: col, image: img, desc: d });
+        if (t || b || img || d) cItems.push({ title: t, badge: b, color: col, image: img, desc: d });
       });
       updated.push({ type: 'cards', title: title, items: cItems });
     } else if (type === 'stats') {
       var sItems = [];
       card.querySelectorAll('.bb-subitem').forEach(function(sub) {
         var lb = sub.querySelector('.bb-stat-label').value.trim();
-        var vl = parseInt(sub.querySelector('.bb-stat-val').value, 10) || 0;
+        var rawValue = sub.querySelector('.bb-stat-val').value.trim();
+        var vl = parseInt(rawValue, 10) || 0;
         var col = sub.querySelector('.bb-stat-col').value;
-        if (lb) sItems.push({ label: lb, value: vl, color: col });
+        if (lb || rawValue !== '') sItems.push({ label: lb, value: vl, color: col });
       });
       updated.push({ type: 'stats', title: title, items: sItems });
     } else if (type === 'accordion') {
@@ -4983,9 +5327,7 @@ function renderBuilderBlocksList() {
     html += '<button type="button" class="btn btn-small btn-danger" onclick="removeBuilderBlock(' + idx + ')">Remover Bloco</button>';
     html += '</div></div>';
 
-    if (b.type !== 'quote') {
-      html += '<div class="form-row"><label>Título do Bloco</label><input type="text" class="bb-title" value="' + ha(b.title || '') + '" placeholder="Título desta seção"></div>';
-    }
+    html += '<div class="form-row"><label>' + (b.type === 'quote' ? 'Título Interno (opcional)' : 'Título do Bloco') + '</label><input type="text" class="bb-title" value="' + ha(b.title || '') + '" placeholder="' + (b.type === 'quote' ? 'Metadado interno' : 'Título desta seção') + '"></div>';
 
     if (b.type === 'quote') {
       html += '<div class="form-row"><label>Texto da Citação / Fala</label><textarea class="bb-quote-text" rows="2">' + h(b.text || '') + '</textarea></div>';
@@ -5059,9 +5401,11 @@ function renderBuilderBlocksList() {
       html += '<button type="button" class="btn btn-small" onclick="addSubItemToBlock(' + idx + ')">+ Adicionar Evento na Cronologia</button>';
     } else if (b.type === 'datalist') {
       (b.items || []).forEach(function(it, sIdx) {
+        var dlLabel = it.label !== undefined ? it.label : (it.key || '');
+        var dlValue = it.value !== undefined ? it.value : (it.val || '');
         html += '<div class="bb-subitem" style="display:grid;grid-template-columns:180px 1fr auto;gap:8px;margin-bottom:8px;align-items:center;">';
-        html += '<input type="text" class="bb-dl-label" value="' + ha(it.label || '') + '" placeholder="Rótulo / Chave">';
-        html += '<input type="text" class="bb-dl-val" value="' + ha(it.value || '') + '" placeholder="Valor / Descrição">';
+        html += '<input type="text" class="bb-dl-label" value="' + ha(dlLabel) + '" placeholder="Rótulo / Chave">';
+        html += '<input type="text" class="bb-dl-val" value="' + ha(dlValue) + '" placeholder="Valor / Descrição">';
         html += '<button type="button" class="btn btn-small btn-danger" onclick="removeSubItemFromBlock(' + idx + ',' + sIdx + ')">Remover</button>';
         html += '</div>';
       });
@@ -5086,23 +5430,95 @@ function addInfoboxFieldRow() {
   if (c) c.insertAdjacentHTML('beforeend', infoboxFieldRowHtml('', ''));
 }
 
+function cenaParticipantRowHtml(nome) {
+  return VaultModules.scenes.participantRowHtml(nome, ha);
+}
+
+function cenaParticipantRowsFromDom() {
+  return VaultModules.scenes.participantRowsFromRoot(document.getElementById('c-ib-participants-list'));
+}
+
+function readCenaParticipantRows() {
+  var participants = cenaParticipantRowsFromDom();
+  activeCenaParticipants = participants.slice();
+  return participants;
+}
+
+function renderCenaParticipantRows(participants) {
+  var root = document.getElementById('c-ib-participants-list');
+  if (!root) return false;
+  root.innerHTML = '';
+  (Array.isArray(participants) ? participants : []).forEach(function(nome) {
+    if (typeof nome === 'string') root.insertAdjacentHTML('beforeend', cenaParticipantRowHtml(nome));
+  });
+  readCenaParticipantRows();
+  return true;
+}
+
+function addParticipanteRow(nome) {
+  var root = document.getElementById('c-ib-participants-list');
+  if (!root) return;
+  root.insertAdjacentHTML('beforeend', cenaParticipantRowHtml(typeof nome === 'string' ? nome : ''));
+  readCenaParticipantRows();
+}
+
+function removeParticipanteRow(button) {
+  var row = button && button.parentNode;
+  if (row && row.parentNode) row.parentNode.removeChild(row);
+  readCenaParticipantRows();
+}
+
 function toggleParticipanteInput(nome) {
-  var el = document.getElementById('c-ib-participants');
-  if (!el) return;
-  var parts = el.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-  var idx = parts.findIndex(function(p) { return p.toLowerCase() === nome.toLowerCase(); });
-  if (idx === -1) parts.push(nome);
-  else parts.splice(idx, 1);
-  el.value = parts.join(', ');
+  var root = document.getElementById('c-ib-participants-list');
+  if (!root) return;
+  var target = String(nome || '').trim().toLowerCase();
+  var rows = Array.prototype.slice.call(root.querySelectorAll('.infobox-participant-row'));
+  var existing = null;
+  rows.some(function(row) {
+    var input = row.querySelector ? row.querySelector('.ib-participant-name') : null;
+    if (input && String(input.value || '').trim().toLowerCase() === target) {
+      existing = row;
+      return true;
+    }
+    return false;
+  });
+  if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+  else root.insertAdjacentHTML('beforeend', cenaParticipantRowHtml(nome));
+  readCenaParticipantRows();
+  saveActiveResourceFormDraft();
+}
+
+function aplicarCorDestaqueCena(cor) {
+  var input = document.getElementById('c-accent');
+  if (!input) return;
+  input.value = cor;
+  activeCenaAccentEmpty = false;
+  saveActiveResourceFormDraft();
 }
 
 function renderNovaCena() {
   if (!isModOrAdmin()) return '<div class="alert alert-error">Apenas Moderadores e Administradores podem criar ou editar páginas da Wikia.</div>';
 
+  var loadError = wikiPostsLoadError || personagensLoadError;
+  if (serverWikiPosts === null || serverPersonagens === null) {
+    if (loadError) return '<div class="alert alert-error">' + h(loadError) + '</div>';
+    if (serverWikiPosts === null) carregarWikiPostsServidor();
+    if (serverPersonagens === null) carregarPersonagensServidor();
+    return '<div class="alert alert-info">Carregando dados da cena…</div>';
+  }
   var editId = sessionStorage.getItem('editCenaId');
   var existing = editId ? listaWikiPosts().find(function(w) { return String(w.id) === String(editId); }) : null;
+  if (editId && !existing) return '<p>Cena ou post não encontrado.</p>';
   var theme = (existing && existing.theme) ? existing.theme : { accentColor: '#ffffff', bannerStyle: 'cinematic', layout: 'sidebar-left', fontFamily: 'serif', bgEffect: 'none', bgm: '' };
   var infobox = (existing && existing.infobox) ? existing.infobox : { show: true, title: '', image: '', caption: '', participants: [], fields: [{ label: 'Localização', value: '' }, { label: 'Arco', value: '' }, { label: 'Clima / Ambiente', value: '' }] };
+  activeCenaInfoboxExtra = {
+    location: (existing && existing.infobox && typeof existing.infobox.location === 'string') ? existing.infobox.location : '',
+    timeline: (existing && existing.infobox && typeof existing.infobox.timeline === 'string') ? existing.infobox.timeline : ''
+  };
+  activeCenaAccentEmpty = !!(existing && existing.theme && existing.theme.accentColor === '');
+  activeCenaParticipants = (existing && existing.infobox && Array.isArray(existing.infobox.participants))
+    ? existing.infobox.participants.slice()
+    : null;
   activeBuilderBlocks = (existing && Array.isArray(existing.blocks)) ? JSON.parse(JSON.stringify(existing.blocks)) : [];
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'cenas\')">Cenas</a> / ' + (existing ? 'Customizar Página' : 'Nova Cena / Post Customizável') + '</div>';
@@ -5115,13 +5531,17 @@ function renderNovaCena() {
   html += '<div class="form-row" style="margin-bottom:0"><label>Título da Página</label><input type="text" id="c-titulo" value="' + (existing ? ha(existing.titulo) : '') + '" placeholder="Ex: Ecos sob o Rio Negro"></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Subtítulo / Arco (Opcional)</label><input type="text" id="c-subtitulo" value="' + (existing ? ha(existing.subtitulo) : '') + '" placeholder="Ex: Ato I · A Rota Clandestina"></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Categoria / Tipo</label><select id="c-categoria">';
-  ['Cena de RPG', 'Combate / Batalha', 'Evento / Arco', 'Lore & Mundo', 'Crônica'].forEach(function(cat) {
+  var sceneCategories = ['Cena de RPG', 'Combate / Batalha', 'Evento / Arco', 'Lore & Mundo', 'Crônica'];
+  if (existing && existing.categoria && sceneCategories.indexOf(existing.categoria) === -1) sceneCategories.push(existing.categoria);
+  sceneCategories.forEach(function(cat) {
     var sel = (existing && existing.categoria === cat) ? ' selected' : '';
     html += '<option value="' + ha(cat) + '"' + sel + '>' + h(cat) + '</option>';
   });
   html += '</select></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Status</label><select id="c-status">';
-  ['Em Andamento', 'Concluída', 'Canônica', 'Hiato'].forEach(function(st) {
+  var sceneStatuses = ['Em Andamento', 'Concluída', 'Canônica', 'Hiato'];
+  if (existing && existing.status && sceneStatuses.indexOf(existing.status) === -1) sceneStatuses.push(existing.status);
+  sceneStatuses.forEach(function(st) {
     var sel = (existing && existing.status === st) ? ' selected' : '';
     html += '<option value="' + ha(st) + '"' + sel + '>' + h(st) + '</option>';
   });
@@ -5135,9 +5555,9 @@ function renderNovaCena() {
   html += '<div class="builder-panel-title"><span>2. Estilo Visual &amp; Layout da Página</span></div>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px;">';
   html += '<div class="form-row" style="margin-bottom:0"><label>Cor de Destaque da Página</label>';
-  html += '<div class="swatch-row"><input type="color" id="c-accent" value="' + ha(theme.accentColor || '#ffffff') + '" style="width:44px;height:34px;cursor:pointer;">';
+  html += '<div class="swatch-row"><input type="color" id="c-accent" value="' + ha(theme.accentColor || '#ffffff') + '" oninput="activeCenaAccentEmpty=false" style="width:44px;height:34px;cursor:pointer;">';
   [['#ffffff', 'Branco'], ['#d4d4d4', 'Prata'], ['#a3a3a3', 'Cinza Claro'], ['#737373', 'Cinza Médio'], ['#404040', 'Grafite'], ['#262626', 'Carvão']].forEach(function(sw) {
-    html += '<button type="button" class="color-swatch-btn" title="' + sw[1] + '" style="background:' + sw[0] + ';" onclick="document.getElementById(\'c-accent\').value=\'' + sw[0] + '\'"></button>';
+    html += '<button type="button" class="color-swatch-btn" title="' + sw[1] + '" style="background:' + sw[0] + ';" onclick="aplicarCorDestaqueCena(\'' + sw[0] + '\')"></button>';
   });
   html += '</div></div>';
   html += '<div class="form-row" style="margin-bottom:0"><label>Estilo do Banner de Topo</label><select id="c-banner-style">';
@@ -5170,7 +5590,6 @@ function renderNovaCena() {
   html += '</div></div>';
 
   // Painel 3: Infobox Customizável
-  var partsStr = Array.isArray(infobox.participants) ? infobox.participants.join(', ') : '';
   html += '<div class="builder-panel">';
   html += '<div class="builder-panel-title"><span>3. Infobox Lateral Customizável</span><label style="display:inline-flex;align-items:center;gap:6px;margin:0;cursor:pointer;"><input type="checkbox" id="c-ib-show"' + (infobox.show !== false ? ' checked' : '') + '> Exibir Infobox</label></div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;">';
@@ -5179,8 +5598,14 @@ function renderNovaCena() {
   html += '<div class="form-row" style="margin-bottom:0"><label>Legenda da Imagem</label><input type="text" id="c-ib-caption" value="' + ha(infobox.caption || '') + '" placeholder="Legenda opcional"></div>';
   html += '</div>';
 
-  html += '<div class="form-row"><label>Participantes da Cena (separe por vírgula ou clique nos personagens abaixo)</label>';
-  html += '<input type="text" id="c-ib-participants" value="' + ha(partsStr) + '" placeholder="Ex: Shin Hae, Shidō Akane">';
+  html += '<div class="form-row"><label>Participantes da Cena</label>';
+  html += '<div id="c-ib-participants-list">';
+  if (Array.isArray(infobox.participants)) {
+    infobox.participants.forEach(function(nome) { html += cenaParticipantRowHtml(nome); });
+  }
+  html += '</div>';
+  html += '<button type="button" class="btn btn-small" onclick="addParticipanteRow()">+ Adicionar Participante</button>';
+  html += '<div class="field-desc" style="margin-top:4px;">Cada linha é um participante. Vírgulas dentro do nome são preservadas.</div>';
   var chars = listaPersonagens();
   if (chars.length) {
     html += '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;"><span style="font-size:11px;color:var(--text-muted);">Adicionar rápido:</span>';
@@ -5222,9 +5647,11 @@ function renderNovaCena() {
 }
 
 function previewPersonagemModal() {
-  var d = lerFormularioPersonagem();
-  requestSafeContentPreview({ html: d.descricao || '' }).then(function(safe) {
-    var html = '<div style="max-height:70vh;overflow-y:auto;padding-right:4px;">';
+  var d = lerFormPersonagem();
+  var payload = { html: d.descricao || '', blocks: Array.isArray(d.blocks) ? d.blocks : [] };
+  requestSafeContentPreview(payload).then(function(safe) {
+    var accent = (d.theme && d.theme.accentColor) ? d.theme.accentColor : '#ffffff';
+    var html = '<div class="custom-wiki-page" style="max-height:70vh;overflow-y:auto;padding-right:4px;--page-accent:' + ha(accent) + ';--page-accent-light:' + ha(accent) + ';">';
     html += '<div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border-subtle);">';
     var imageUrl = d.imagem && typeof editorSafeContentUrl === 'function'
       ? editorSafeContentUrl(d.imagem, { image: true }) : null;
@@ -5232,6 +5659,29 @@ function previewPersonagemModal() {
     html += '<div><h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">' + h(d.nome || 'Sem Nome') + '</h3>';
     html += '<div style="font-size:12px;color:var(--text-secondary);">' + h(d.titulo || '') + ' · ' + h(d.raca || '') + '</div></div></div>';
     html += '<div class="char-sheet-body" style="padding:18px;">' + safe.html + '</div>';
+    if (Array.isArray(safe.blocks) && safe.blocks.length) html += renderModularBlocks(safe.blocks, 'preview-char');
+    if (Array.isArray(d.skills) && d.skills.length) {
+      var previewSkills = d.skills.filter(function(skill) { return skill.tipo !== 'equipamento'; });
+      var previewEquipment = d.skills.filter(function(skill) { return skill.tipo === 'equipamento'; });
+      if (previewSkills.length) {
+        html += '<div class="cat-header"><span>Habilidades &amp; Técnicas (' + previewSkills.length + ')</span></div><div class="skill-grid">';
+        previewSkills.forEach(function(skill) { html += '<div class="skill-item"><h4>' + h(skill.nome) + '</h4><p>' + h(skill.descricao) + '</p></div>'; });
+        html += '</div>';
+      }
+      if (previewEquipment.length) {
+        html += '<div class="cat-header"><span>Equipamentos &amp; Artefatos (' + previewEquipment.length + ')</span></div><div class="skill-grid">';
+        previewEquipment.forEach(function(skill) { html += '<div class="skill-item equip-item"><h4>' + h(skill.nome) + '</h4><p>' + h(skill.descricao) + '</p></div>'; });
+        html += '</div>';
+      }
+    }
+    if (statsPreenchidos(d.stats)) {
+      html += '<div class="cat-header"><span>Matriz de Atributos</span></div><div class="stat-panel"><div>' + buildRadarChart(d.stats, accent) + '</div><div class="stat-readout">';
+      for (var i = 0; i < STAT_LABELS.length; i++) {
+        var value = safeStatValue(d.stats[STAT_KEYS[i]]);
+        html += '<div class="stat-row"><span class="stat-label">' + STAT_LABELS[i] + '</span><span class="stat-bar"><span class="stat-bar-fill" style="width:' + value + '%;"></span></span><span class="stat-value">' + value + '</span></div>';
+      }
+      html += '</div></div>';
+    }
     html += '</div>';
     showModal('Pré-visualização: ' + (d.nome || 'Personagem'), html);
   }).catch(function(error) {
@@ -5240,8 +5690,9 @@ function previewPersonagemModal() {
 }
 
 function exportarPersonagemJson() {
-  var d = lerFormularioPersonagem();
-  var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json;charset=utf-8' });
+  var d = lerFormPersonagem();
+  var payload = Object.assign({ schemaVersion: RECORD_JSON_SCHEMA_VERSION }, d);
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = ((d.nome || 'personagem').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '.json';
@@ -5252,12 +5703,38 @@ function exportarPersonagemJson() {
 }
 
 function importarPersonagemJsonModal() {
-  var body = '<div class="form-row"><label>Cole o JSON da ficha de personagem abaixo</label><textarea id="import-char-json" rows="8" style="font-family:var(--font-mono);font-size:12px;" placeholder=\'{"nome": "...", "titulo": "..."}\'></textarea></div>';
+  var body = '<div class="form-row"><label>Cole o JSON completo da ficha de personagem abaixo (inclui atributos, skills, tema e blocos)</label><textarea id="import-char-json" rows="8" style="font-family:var(--font-mono);font-size:12px;" placeholder=\'{"nome": "...", "titulo": "...", "blocks": []}\'></textarea></div>';
   body += '<div style="display:flex;justify-content:flex-end;gap:8px;"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn btn-primary" onclick="confirmImportPersonagemJson()">Carregar Dados</button></div>';
   showModal('Importar Ficha via JSON', body);
 }
 
 var importJsonPending = false;
+var RECORD_JSON_SCHEMA_VERSION = 1;
+var CHARACTER_JSON_METADATA_FIELDS = ['id', 'version', 'authorId', 'author', 'createdAt', 'updatedAt', 'hiddenAt', 'date', 'created_at', 'updated_at'];
+var CHARACTER_FORM_IDS = {
+  nome: 'p-nome', categoria: 'p-categoria', titulo: 'p-titulo', raca: 'p-raca',
+  faccao: 'p-faccao', status: 'p-status', imagem: 'p-imagem', mascaraTier: 'p-mascara-tier'
+};
+
+function assertImportedImageUrl(value, field) {
+  if (value === undefined || value === '') return;
+  var safe = typeof editorSafeContentUrl === 'function'
+    ? editorSafeContentUrl(value, { image: true })
+    : safeAvatarSrc(value);
+  if (typeof value !== 'string' || !safe) throw new Error('O campo "' + field + '" deve usar uma URL HTTPS de imagem válida.');
+}
+
+function hasMeaningfulSafeHtml(html) {
+  return VaultModules.records.hasMeaningfulSafeHtml(html);
+}
+
+function assertJsonSchemaVersion(data, label) {
+  return VaultModules.records.assertJsonSchemaVersion(data, label);
+}
+
+function assertSupportedJsonFields(data, allowedFields, label) {
+  return VaultModules.records.assertSupportedJsonFields(data, allowedFields, label);
+}
 
 function requestSafeContentPreview(payload) {
   if (!window.Aetherverse || typeof window.Aetherverse.apiRequest !== 'function') {
@@ -5276,17 +5753,194 @@ function requestSafeContentPreview(payload) {
   });
 }
 
+function jsonStringLength(value) {
+  return VaultModules.records.jsonStringLength(value);
+}
+
+function normalizeHexColorValue(value) {
+  return VaultModules.records.normalizeHexColorValue(value);
+}
+
 function importedStringFields(source, fields) {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) throw new Error('O JSON deve conter um objeto.');
-  var values = {};
-  fields.forEach(function(field) {
-    if (!Object.prototype.hasOwnProperty.call(source, field.name)) return;
-    var value = source[field.name];
-    if (typeof value === 'number' && Number.isFinite(value)) value = String(value);
-    if (typeof value !== 'string' || value.length > field.max) throw new Error('O campo "' + field.name + '" tem formato inválido.');
-    values[field.name] = value;
+  return VaultModules.records.importedStringFields(source, fields);
+}
+
+function importedStats(value) {
+  return VaultModules.records.importedStats(value);
+}
+
+function importedSkills(value) {
+  return VaultModules.records.importedSkills(value);
+}
+
+function importedTheme(value) {
+  return VaultModules.records.importedTheme(value);
+}
+
+function importedInfobox(value) {
+  return VaultModules.records.importedInfobox(value);
+}
+
+function setSelectValueOrAppend(id, value) {
+  if (value === undefined) return;
+  var select = document.getElementById(id);
+  if (!select) return;
+  var exists = Array.prototype.some.call(select.options, function(option) { return option.value === value; });
+  if (!exists) {
+    var option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    select.appendChild(option);
+  }
+  select.value = value;
+}
+
+
+function captureSceneFormState() {
+  var editor = document.getElementById('c-editor');
+  var source = document.getElementById('src-c-editor');
+  var state = { fields: {}, infoboxShow: null, infoboxFieldsHtml: null,
+    editorBody: editor ? editor.innerHTML : null,
+    editorBodyDisplay: editor ? editor.style.display : '',
+    editorSource: source ? source.value : null,
+    editorSourceDisplay: source ? source.style.display : '',
+    infoboxExtra: activeCenaInfoboxExtra ? JSON.parse(JSON.stringify(activeCenaInfoboxExtra)) : null,
+    participants: readCenaParticipantRows(),
+    blocks: JSON.parse(JSON.stringify(activeBuilderBlocks)) };
+  ['c-titulo', 'c-subtitulo', 'c-categoria', 'c-status', 'c-resumo', 'c-banner',
+    'c-accent', 'c-banner-style', 'c-layout', 'c-font', 'c-bg-effect', 'c-bgm',
+    'c-ib-title', 'c-ib-image', 'c-ib-caption'].forEach(function(id) {
+    var input = document.getElementById(id);
+    if (input) state.fields[id] = input.value;
   });
-  return values;
+  var show = document.getElementById('c-ib-show');
+  if (show) state.infoboxShow = show.checked;
+  var fieldsRoot = document.getElementById('c-infobox-fields');
+  if (fieldsRoot) {
+    state.infoboxFieldsHtml = fieldsRoot.innerHTML;
+    state.infoboxFieldValues = [];
+    fieldsRoot.querySelectorAll('.infobox-field-row').forEach(function(row) {
+      state.infoboxFieldValues.push({
+        label: (row.querySelector('.ib-field-label') || {}).value || '',
+        value: (row.querySelector('.ib-field-val') || {}).value || ''
+      });
+    });
+  }
+  state.accentEmpty = activeCenaAccentEmpty;
+  return state;
+}
+
+function restoreSceneFormState(state) {
+  if (!state) return;
+  Object.keys(state.fields).forEach(function(id) {
+    var input = document.getElementById(id);
+    if (input) input.value = state.fields[id];
+  });
+  var show = document.getElementById('c-ib-show');
+  if (show && state.infoboxShow !== null) show.checked = state.infoboxShow;
+  var fieldsRoot = document.getElementById('c-infobox-fields');
+  if (fieldsRoot && Array.isArray(state.infoboxFieldValues)) {
+    fieldsRoot.innerHTML = '';
+    state.infoboxFieldValues.forEach(function(field) {
+      fieldsRoot.insertAdjacentHTML('beforeend', infoboxFieldRowHtml(field.label, field.value));
+    });
+  } else if (fieldsRoot && state.infoboxFieldsHtml !== null) {
+    fieldsRoot.innerHTML = state.infoboxFieldsHtml;
+  }
+  activeCenaAccentEmpty = !!state.accentEmpty;
+  var editor = document.getElementById('c-editor');
+  if (editor && state.editorBody !== null) {
+    editor.innerHTML = state.editorBody;
+    editor.style.display = state.editorBodyDisplay;
+  }
+  var source = document.getElementById('src-c-editor');
+  if (source && state.editorSource !== null) {
+    source.value = state.editorSource;
+    source.style.display = state.editorSourceDisplay;
+  }
+  activeCenaInfoboxExtra = state.infoboxExtra;
+  activeCenaParticipants = state.participants;
+  renderCenaParticipantRows(Array.isArray(state.participants) ? state.participants : []);
+  activeBuilderBlocks = state.blocks;
+  refreshBuilderDOM();
+}
+
+function captureCharacterFormState() {
+  var fields = {};
+  Object.keys(CHARACTER_FORM_IDS).forEach(function(field) {
+    var input = document.getElementById(CHARACTER_FORM_IDS[field]);
+    if (input) fields[field] = input.value;
+  });
+  var editor = document.getElementById('p-editor');
+  var source = document.getElementById('src-p-editor');
+  var stats = {};
+  STAT_KEYS.forEach(function(key) {
+    var input = document.getElementById('p-stat-' + key);
+    if (input) stats[key] = input.value;
+  });
+  var skills = document.getElementById('p-skills-list');
+  var skillsValues = null;
+  if (skills) {
+    skillsValues = [];
+    skills.querySelectorAll('.skill-form-item').forEach(function(item) {
+      skillsValues.push({
+        nome: (item.querySelector('.skill-nome') || {}).value || '',
+        descricao: (item.querySelector('.skill-desc') || {}).value || '',
+        tipo: (item.querySelector('.skill-tipo') || {}).value || 'skill'
+      });
+    });
+  }
+  var accent = document.getElementById('p-accent-color');
+  return {
+    fields: fields,
+    skillsValues: skillsValues,
+    accentEmpty: activePersonagemAccentEmpty,
+    editorBody: editor ? editor.innerHTML : null,
+    editorBodyDisplay: editor ? editor.style.display : '',
+    editorSource: source ? source.value : null,
+    editorSourceDisplay: source ? source.style.display : '',
+    stats: stats,
+    skills: skills ? skills.innerHTML : null,
+    accent: accent ? accent.value : null,
+    theme: activePersonagemTheme ? JSON.parse(JSON.stringify(activePersonagemTheme)) : null,
+    blocks: JSON.parse(JSON.stringify(activeBuilderBlocks))
+  };
+}
+
+function restoreCharacterFormState(state) {
+  if (!state) return;
+  Object.keys(state.fields).forEach(function(field) {
+    var input = document.getElementById(CHARACTER_FORM_IDS[field]);
+    if (input) input.value = state.fields[field];
+  });
+  var editor = document.getElementById('p-editor');
+  if (editor && state.editorBody !== null) {
+    editor.innerHTML = state.editorBody;
+    editor.style.display = state.editorBodyDisplay;
+  }
+  var source = document.getElementById('src-p-editor');
+  if (source && state.editorSource !== null) {
+    source.value = state.editorSource;
+    source.style.display = state.editorSourceDisplay;
+  }
+  STAT_KEYS.forEach(function(key) {
+    var input = document.getElementById('p-stat-' + key);
+    if (input && state.stats[key] !== undefined) input.value = state.stats[key];
+  });
+  var skills = document.getElementById('p-skills-list');
+  if (skills && Array.isArray(state.skillsValues)) {
+    skills.innerHTML = state.skillsValues.map(function(skill) {
+      return skillFormRowHtml(skill.nome, skill.descricao, skill.tipo);
+    }).join('');
+  } else if (skills && state.skills !== null) {
+    skills.innerHTML = state.skills;
+  }
+  var accent = document.getElementById('p-accent-color');
+  if (accent && state.accent !== null) accent.value = state.accent;
+  activePersonagemTheme = state.theme;
+  activePersonagemAccentEmpty = !!state.accentEmpty;
+  activeBuilderBlocks = state.blocks;
+  refreshBuilderDOM();
 }
 
 function confirmImportPersonagemJson() {
@@ -5295,47 +5949,131 @@ function confirmImportPersonagemJson() {
   var raw = source ? source.value : '';
   var data;
   var values;
+  var stats;
+  var skills;
+  var theme;
+  var blocks;
+  var hasBlocks;
+  var metadataFields = [];
   try {
     data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('O JSON deve conter um objeto.');
+    assertJsonSchemaVersion(data, 'ficha');
+    assertSupportedJsonFields(data, [
+      'schemaVersion', 'nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem',
+      'descricao', 'stats', 'skills', 'mascaraTier', 'theme', 'blocks'
+    ].concat(CHARACTER_JSON_METADATA_FIELDS), 'ficha');
+    metadataFields = Object.keys(data).filter(function(key) { return CHARACTER_JSON_METADATA_FIELDS.indexOf(key) !== -1; });
     values = importedStringFields(data, [
-      { name: 'nome', max: 200 }, { name: 'titulo', max: 200 }, { name: 'raca', max: 100 },
-      { name: 'idade', max: 100 }, { name: 'afiliacao', max: 300 }, { name: 'imagem', max: 2048 },
-      { name: 'resumo', max: 2000 }, { name: 'descricao', max: 250000 }
+      { name: 'nome', max: 100 }, { name: 'categoria', max: 50 }, { name: 'titulo', max: 100 },
+      { name: 'raca', max: 80 }, { name: 'faccao', max: 120 }, { name: 'status', max: 80 },
+      { name: 'imagem', max: 500 }, { name: 'mascaraTier', max: 60 }, { name: 'descricao', max: 250000 }
     ]);
+    if (values.nome !== undefined && !values.nome.trim()) throw new Error('O nome da ficha não pode ficar vazio.');
+    assertImportedImageUrl(values.imagem, 'imagem');
+    stats = importedStats(data.stats);
+    skills = importedSkills(data.skills);
+    theme = importedTheme(data.theme);
+    hasBlocks = Object.prototype.hasOwnProperty.call(data, 'blocks');
+    if (hasBlocks && !Array.isArray(data.blocks)) throw new Error('O campo "blocks" deve ser uma lista.');
+    if (hasBlocks && data.blocks.length > 40) throw new Error('A ficha pode ter no máximo 40 blocos modulares.');
+    blocks = hasBlocks ? data.blocks : undefined;
   } catch (error) {
     showAlert(error && error.message && error.message !== 'Unexpected end of JSON input' ? error.message : 'JSON inválido.', 'error');
     return Promise.resolve();
   }
-  var description = Object.prototype.hasOwnProperty.call(values, 'descricao') ? values.descricao : '';
   var targets = {};
-  var ids = { nome: 'p-nome', titulo: 'p-titulo', raca: 'p-raca', idade: 'p-idade',
-    afiliacao: 'p-afiliacao', imagem: 'p-imagem', resumo: 'p-resumo' };
+  var editor = Object.prototype.hasOwnProperty.call(values, 'descricao') ? document.getElementById('p-editor') : null;
+  var skillsList = document.getElementById('p-skills-list');
+  var skillsHtml = null;
+  var accentInput = document.getElementById('p-accent-color');
+  var blocksContainer = document.getElementById('modular-blocks-container');
   try {
     Object.keys(values).forEach(function(field) {
       if (field === 'descricao') return;
-      targets[field] = document.getElementById(ids[field]);
+      targets[field] = document.getElementById(CHARACTER_FORM_IDS[field]);
       if (!targets[field]) throw new Error('O formulário da ficha não está disponível.');
     });
+    if (Object.prototype.hasOwnProperty.call(values, 'descricao') && !editor) {
+      throw new Error('O editor da ficha não está disponível.');
+    }
+    if (skills && !skillsList) throw new Error('A lista de skills da ficha não está disponível.');
+    if (hasBlocks && !blocksContainer) throw new Error('O construtor de blocos da ficha não está disponível.');
+    if (skills) {
+      skillsHtml = skills.map(function(skill) {
+        return skillFormRowHtml(skill.nome, skill.descricao, skill.tipo);
+      }).join('');
+    }
   } catch (error) {
     showAlert(error.message, 'error');
     return Promise.resolve();
   }
-  var editor = Object.prototype.hasOwnProperty.call(values, 'descricao') ? document.getElementById('p-editor') : null;
-  if (Object.prototype.hasOwnProperty.call(values, 'descricao') && !editor) {
-    showAlert('O editor da ficha não está disponível.', 'error');
-    return Promise.resolve();
-  }
+  var payload = {};
+  if (Object.prototype.hasOwnProperty.call(values, 'descricao')) payload.html = values.descricao;
+  if (hasBlocks) payload.blocks = blocks;
+  var preview = (payload.html !== undefined || payload.blocks !== undefined)
+    ? requestSafeContentPreview(payload)
+    : Promise.resolve(null);
   importJsonPending = true;
   var button = document.querySelector('#modal-container button.btn-primary');
   if (button) button.disabled = true;
-  return requestSafeContentPreview({ html: description }).then(function(safe) {
+  return preview.then(function(safe) {
     if (document.getElementById('import-char-json') !== source || (editor && document.getElementById('p-editor') !== editor)) return;
-    Object.keys(targets).forEach(function(field) { targets[field].value = values[field]; });
-    if (editor && !setEditorContent('p-editor', safe.html)) throw new Error('Não foi possível atualizar o editor da ficha.');
+    if (source.value !== raw) {
+      showAlert('O JSON foi alterado durante a validação. Revise o conteúdo e tente importar novamente.', 'error');
+      return;
+    }
+    if (hasBlocks && (!safe || !Array.isArray(safe.blocks))) throw new Error('A validação não retornou os blocos da ficha.');
+    if (payload.html !== undefined && safe && !hasMeaningfulSafeHtml(safe.html)) throw new Error('A descrição da ficha não pode ficar vazia.');
+    if ((safe && safe.formattingLoss && safe.formattingLoss.discarded)
+      || (safe && safe.blockFormattingLoss && safe.blockFormattingLoss.discarded)) {
+      if (!window.confirm('O servidor precisou remover ou normalizar formatação não permitida. Aplicar a importação mesmo assim?')) {
+        showAlert('Importação cancelada; o formulário não foi alterado.', 'error');
+        return;
+      }
+    }
+    var snapshot = captureCharacterFormState();
+    try {
+      if (editor && safe && !setEditorContent('p-editor', safe.html)) throw new Error('Não foi possível atualizar o editor da ficha.');
+      Object.keys(targets).forEach(function(field) {
+        if (field === 'categoria') {
+          setSelectValueOrAppend('p-categoria', values[field]);
+          return;
+        }
+        targets[field].value = values[field];
+      });
+      if (stats) {
+        STAT_KEYS.forEach(function(key) {
+          var input = document.getElementById('p-stat-' + key);
+          if (input) input.value = stats[key] === undefined ? '' : stats[key];
+        });
+      }
+      if (skills) skillsList.innerHTML = skillsHtml;
+      if (theme) {
+        activePersonagemTheme = Object.assign({}, activePersonagemTheme || {}, theme);
+        if (theme.accentColor === '') {
+          activePersonagemAccentEmpty = true;
+          if (accentInput) accentInput.value = '#ffffff';
+        } else if (theme.accentColor) {
+          activePersonagemAccentEmpty = false;
+          if (accentInput) accentInput.value = theme.accentColor;
+        }
+      }
+      if (hasBlocks) {
+        activeBuilderBlocks = JSON.parse(JSON.stringify(safe.blocks));
+        refreshBuilderDOM();
+      }
+    } catch (applyError) {
+      restoreCharacterFormState(snapshot);
+      throw applyError;
+    }
+    saveActiveResourceFormDraft();
     closeModal();
-    showAlert(safe.formattingLoss && safe.formattingLoss.discarded
+    var successMessage = safe && safe.formattingLoss && safe.formattingLoss.discarded
       ? 'Dados importados; a formatação não permitida foi removida.'
-      : 'Dados importados para o formulário.', 'success');
+      : 'Dados importados para o formulário.';
+    if (metadataFields.length) successMessage += ' Metadados de identificação foram mantidos pelo servidor.';
+    showAlert(successMessage, 'success');
   }).catch(function(error) {
     showAlert(error.message || 'Não foi possível validar o JSON importado.', 'error');
   }).finally(function() {
@@ -5356,6 +6094,19 @@ function previewCenaModal() {
     html += '</div>';
     if (safe.html) html += '<div class="char-sheet-body" style="padding:18px;margin-bottom:16px;">' + safe.html + '</div>';
     if (safe.blocks.length) html += renderModularBlocks(safe.blocks);
+    var infobox = d.infobox || {};
+    if (infobox.show !== false && (infobox.title || infobox.caption || (infobox.participants && infobox.participants.length) || (infobox.fields && infobox.fields.length))) {
+      html += '<div class="char-sheet-card" style="text-align:left;margin-top:16px;"><div class="char-sheet-card-title">' + h(infobox.title || 'Infobox') + '</div>';
+      if (infobox.caption) html += '<p style="font-size:12px;color:var(--text-secondary);">' + h(infobox.caption) + '</p>';
+      if (infobox.participants && infobox.participants.length) html += '<p style="font-size:12px;"><b>Participantes:</b> ' + h(infobox.participants.join(', ')) + '</p>';
+      if (infobox.fields && infobox.fields.length) {
+        html += '<table>';
+        infobox.fields.forEach(function(field) { html += '<tr><td><b>' + h(field.label) + '</b></td><td>' + h(field.value) + '</td></tr>'; });
+        html += '</table>';
+      }
+      html += '</div>';
+    }
+    if (d.theme) html += '<p style="font-size:11px;color:var(--text-muted);margin-top:12px;">Tema: ' + h(d.theme.accentColor || '') + ' · ' + h(d.theme.layout || '') + ' · ' + h(d.theme.fontFamily || '') + ' · ' + h(d.theme.bgEffect || '') + '</p>';
     html += '</div>';
     showModal('Pré-visualização da Página', html);
   }).catch(function(error) {
@@ -5365,7 +6116,8 @@ function previewCenaModal() {
 
 function exportarCenaJson() {
   var d = lerFormularioCena();
-  var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json;charset=utf-8' });
+  var payload = Object.assign({ schemaVersion: RECORD_JSON_SCHEMA_VERSION }, d);
+  var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = ((d.titulo || 'cena-wikia').toLowerCase().replace(/[^a-z0-9]+/g, '-')) + '.json';
@@ -5384,55 +6136,142 @@ function importarCenaJsonModal() {
 function confirmImportCenaJson() {
   if (importJsonPending) return Promise.resolve();
   var source = document.getElementById('import-cena-json');
+  var raw = source ? source.value : '';
   var data;
   var values;
+  var theme;
+  var infobox;
   var hasBlocks;
+  var metadataFields = [];
   try {
-    data = JSON.parse(source ? source.value : '');
+    data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('O JSON deve conter um objeto.');
+    assertJsonSchemaVersion(data, 'página');
+    assertSupportedJsonFields(data, [
+      'schemaVersion', 'titulo', 'subtitulo', 'categoria', 'status', 'resumo', 'banner',
+      'descricao', 'theme', 'infobox', 'blocks'
+    ].concat(CHARACTER_JSON_METADATA_FIELDS), 'página');
+    metadataFields = Object.keys(data).filter(function(key) { return CHARACTER_JSON_METADATA_FIELDS.indexOf(key) !== -1; });
     values = importedStringFields(data, [
-      { name: 'titulo', max: 200 }, { name: 'subtitulo', max: 300 }, { name: 'resumo', max: 2000 },
-      { name: 'banner', max: 2048 }, { name: 'descricao', max: 250000 }
+      { name: 'titulo', max: 200 }, { name: 'subtitulo', max: 200 }, { name: 'categoria', max: 80 },
+      { name: 'status', max: 80 }, { name: 'resumo', max: 1000 }, { name: 'banner', max: 600 },
+      { name: 'descricao', max: 300000 }
     ]);
+    if (values.titulo !== undefined && !values.titulo.trim()) throw new Error('O título da página não pode ficar vazio.');
+    assertImportedImageUrl(values.banner, 'banner');
+    theme = importedTheme(data.theme);
+    infobox = importedInfobox(data.infobox);
+    if (infobox) assertImportedImageUrl(infobox.image, 'infobox.image');
     hasBlocks = Object.prototype.hasOwnProperty.call(data, 'blocks');
     if (hasBlocks && !Array.isArray(data.blocks)) throw new Error('O campo "blocks" deve ser uma lista.');
+    if (hasBlocks && data.blocks.length > 40) throw new Error('A página pode ter no máximo 40 blocos modulares.');
   } catch (error) {
     showAlert(error && error.message && error.message !== 'Unexpected end of JSON input' ? error.message : 'JSON inválido.', 'error');
     return Promise.resolve();
   }
   var targets = {};
   var ids = { titulo: 'c-titulo', subtitulo: 'c-subtitulo', resumo: 'c-resumo', banner: 'c-banner' };
+  var editor = Object.prototype.hasOwnProperty.call(values, 'descricao') ? document.getElementById('c-editor') : null;
+  var blocksContainer = document.getElementById('modular-blocks-container');
   try {
     Object.keys(values).forEach(function(field) {
-      if (field === 'descricao') return;
+      if (field === 'descricao' || field === 'categoria' || field === 'status') return;
       targets[field] = document.getElementById(ids[field]);
       if (!targets[field]) throw new Error('O formulário da cena não está disponível.');
     });
+    if (Object.prototype.hasOwnProperty.call(values, 'descricao') && !editor) {
+      throw new Error('O editor da cena não está disponível.');
+    }
+    if (hasBlocks && !blocksContainer) throw new Error('O construtor de blocos da cena não está disponível.');
+    if (theme && !document.getElementById('c-accent')) throw new Error('Os campos de tema da cena não estão disponíveis.');
+    if (infobox && !document.getElementById('c-ib-show')) throw new Error('Os campos da infobox não estão disponíveis.');
+    if (infobox && !document.getElementById('c-ib-participants-list')) throw new Error('A lista de participantes da infobox não está disponível.');
   } catch (error) {
     showAlert(error.message, 'error');
     return Promise.resolve();
   }
-  var editor = Object.prototype.hasOwnProperty.call(values, 'descricao') ? document.getElementById('c-editor') : null;
-  if (Object.prototype.hasOwnProperty.call(values, 'descricao') && !editor) {
-    showAlert('O editor da cena não está disponível.', 'error');
-    return Promise.resolve();
-  }
-  var payload = { html: Object.prototype.hasOwnProperty.call(values, 'descricao') ? values.descricao : '' };
+  var payload = {};
+  if (Object.prototype.hasOwnProperty.call(values, 'descricao')) payload.html = values.descricao;
   if (hasBlocks) payload.blocks = data.blocks;
+  var preview = (payload.html !== undefined || payload.blocks !== undefined)
+    ? requestSafeContentPreview(payload)
+    : Promise.resolve(null);
   importJsonPending = true;
   var button = document.querySelector('#modal-container button.btn-primary');
   if (button) button.disabled = true;
-  return requestSafeContentPreview(payload).then(function(safe) {
+  return preview.then(function(safe) {
     if (document.getElementById('import-cena-json') !== source || (editor && document.getElementById('c-editor') !== editor)) return;
-    Object.keys(targets).forEach(function(field) { targets[field].value = values[field]; });
-    if (editor && !setEditorContent('c-editor', safe.html)) throw new Error('Não foi possível atualizar o editor da cena.');
-    if (hasBlocks) {
-      activeBuilderBlocks = JSON.parse(JSON.stringify(safe.blocks));
-      refreshBuilderDOM();
+    if (source.value !== raw) {
+      showAlert('O JSON foi alterado durante a validação. Revise o conteúdo e tente importar novamente.', 'error');
+      return;
     }
+    if (hasBlocks && (!safe || !Array.isArray(safe.blocks))) throw new Error('A validação não retornou os blocos da página.');
+    if (payload.html !== undefined && safe && !hasMeaningfulSafeHtml(safe.html)) throw new Error('O texto de abertura da cena não pode ficar vazio.');
+    if ((safe && safe.formattingLoss && safe.formattingLoss.discarded)
+      || (safe && safe.blockFormattingLoss && safe.blockFormattingLoss.discarded)) {
+      if (!window.confirm('O servidor precisou remover ou normalizar formatação não permitida. Aplicar a importação mesmo assim?')) {
+        showAlert('Importação cancelada; o formulário não foi alterado.', 'error');
+        return;
+      }
+    }
+    var sceneSnapshot = captureSceneFormState();
+    try {
+      Object.keys(targets).forEach(function(field) { targets[field].value = values[field]; });
+      setSelectValueOrAppend('c-categoria', values.categoria);
+      setSelectValueOrAppend('c-status', values.status);
+      if (editor && safe && !setEditorContent('c-editor', safe.html)) throw new Error('Não foi possível atualizar o editor da cena.');
+      if (theme) {
+        restoreResourceFields(theme, {
+          bannerStyle: 'c-banner-style', layout: 'c-layout',
+          fontFamily: 'c-font', bgEffect: 'c-bg-effect', bgm: 'c-bgm'
+        });
+        if (document.getElementById('c-accent')) {
+          if (theme.accentColor === '') {
+            activeCenaAccentEmpty = true;
+            document.getElementById('c-accent').value = '#ffffff';
+          } else if (theme.accentColor) {
+            activeCenaAccentEmpty = false;
+            document.getElementById('c-accent').value = theme.accentColor;
+          }
+        }
+      }
+      if (infobox) {
+        var mergedInfobox = Object.assign({}, activeCenaInfoboxExtra || {}, infobox);
+        activeCenaInfoboxExtra = {
+          location: typeof mergedInfobox.location === 'string' ? mergedInfobox.location : '',
+          timeline: typeof mergedInfobox.timeline === 'string' ? mergedInfobox.timeline : ''
+        };
+        activeCenaParticipants = Array.isArray(infobox.participants) ? infobox.participants.slice() : activeCenaParticipants;
+        restoreResourceFields({
+          show: infobox.show, title: infobox.title, image: infobox.image, caption: infobox.caption
+        }, {
+          show: 'c-ib-show', title: 'c-ib-title', image: 'c-ib-image', caption: 'c-ib-caption'
+        });
+        if (Array.isArray(infobox.participants)) renderCenaParticipantRows(infobox.participants);
+        if (Array.isArray(infobox.fields)) {
+          var fieldsRoot = document.getElementById('c-infobox-fields');
+          if (!fieldsRoot) throw new Error('A lista de campos da infobox não está disponível.');
+          fieldsRoot.innerHTML = '';
+          infobox.fields.forEach(function(field) {
+            fieldsRoot.insertAdjacentHTML('beforeend', infoboxFieldRowHtml(field.label, field.value));
+          });
+        }
+      }
+      if (hasBlocks) {
+        activeBuilderBlocks = JSON.parse(JSON.stringify(safe.blocks));
+        refreshBuilderDOM();
+      }
+    } catch (applyError) {
+      restoreSceneFormState(sceneSnapshot);
+      throw applyError;
+    }
+    saveActiveResourceFormDraft();
     closeModal();
-    showAlert(safe.formattingLoss && safe.formattingLoss.discarded
+    var successMessage = safe && safe.formattingLoss && safe.formattingLoss.discarded
       ? 'Estrutura carregada; a formatação não permitida foi removida.'
-      : 'Estrutura JSON carregada no construtor.', 'success');
+      : 'Estrutura JSON carregada no construtor.';
+    if (metadataFields.length) successMessage += ' Metadados de identificação foram mantidos pelo servidor.';
+    showAlert(successMessage, 'success');
   }).catch(function(error) {
     showAlert(error.message || 'Não foi possível validar o JSON importado.', 'error');
   }).finally(function() {
@@ -5449,8 +6288,7 @@ function lerFormularioCena() {
     var vl = r.querySelector('.ib-field-val').value.trim();
     if (lb || vl) fields.push({ label: lb, value: vl });
   });
-  var partsRaw = document.getElementById('c-ib-participants').value;
-  var participants = partsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  var participants = readCenaParticipantRows();
 
   return {
     titulo: document.getElementById('c-titulo').value.trim(),
@@ -5461,21 +6299,23 @@ function lerFormularioCena() {
     banner: document.getElementById('c-banner').value.trim(),
     descricao: getEditorContent('c-editor'),
     theme: {
-      accentColor: document.getElementById('c-accent').value,
+      accentColor: activeCenaAccentEmpty && document.getElementById('c-accent').value === '#ffffff'
+        ? ''
+        : document.getElementById('c-accent').value,
       bannerStyle: document.getElementById('c-banner-style').value,
       layout: document.getElementById('c-layout').value,
       fontFamily: document.getElementById('c-font').value,
       bgEffect: document.getElementById('c-bg-effect').value,
       bgm: document.getElementById('c-bgm').value.trim()
     },
-    infobox: {
+    infobox: Object.assign({}, activeCenaInfoboxExtra || {}, {
       show: document.getElementById('c-ib-show').checked,
       title: document.getElementById('c-ib-title').value.trim(),
       image: document.getElementById('c-ib-image').value.trim(),
       caption: document.getElementById('c-ib-caption').value.trim(),
       participants: participants,
       fields: fields
-    },
+    }),
     blocks: activeBuilderBlocks
   };
 }
@@ -5501,8 +6341,7 @@ function submitNovaCena() {
 }
 
 function editarCena(id) {
-  sessionStorage.setItem('editCenaId', id);
-  navigate('novaCena');
+  navigate('novaCena', id);
 }
 
 function salvarEdicaoCena(id) {
@@ -5839,10 +6678,10 @@ function renderPerfil() {
   html += '<div id="prof-avatar-status" class="field-desc" style="margin-top:6px;">' + h(profileAvatarStatusText()) + '</div>';
   html += '</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
-  html += '<div class="form-row"><label>Título Pessoal / Epíteto</label><input type="text" id="prof-title" value="' + ha(u.title || '') + '" placeholder="Ex: Cronista do Vazio"></div>';
-  html += '<div class="form-row"><label>Ou URL Externa do Avatar (HTTPS)</label><input type="text" id="prof-avatar" value="' + ha(initialExternalAvatar) + '" placeholder="https://..." oninput="onProfileAvatarUrlInput()"></div>';
+  html += '<div class="form-row"><label>Título Pessoal / Epíteto</label><input type="text" id="prof-title" maxlength="80" value="' + ha(u.title || '') + '" placeholder="Ex: Cronista do Vazio"></div>';
+  html += '<div class="form-row"><label>Ou URL Externa do Avatar (HTTPS)</label><input type="text" id="prof-avatar" maxlength="500" value="' + ha(initialExternalAvatar) + '" placeholder="https://..." oninput="onProfileAvatarUrlInput()"></div>';
   html += '</div>';
-  html += '<div class="form-row"><label>Biografia / Assinatura de Perfil</label><textarea id="prof-bio" rows="3" placeholder="Escreva uma breve apresentação ou citação do seu perfil...">' + h(u.bio || '') + '</textarea></div>';
+  html += '<div class="form-row"><label>Biografia / Assinatura de Perfil</label><textarea id="prof-bio" rows="3" maxlength="2000" placeholder="Escreva uma breve apresentação ou citação do seu perfil...">' + h(u.bio || '') + '</textarea></div>';
   html += '<div class="form-row"><label>Senha atual (obrigatória para trocar a senha)</label><input type="password" id="prof-current-password" autocomplete="current-password"></div>';
   html += '<div class="form-row"><label>Nova senha (deixe em branco para manter a atual)</label><input type="password" id="prof-password" autocomplete="new-password" placeholder="Nova senha (mín. 6 caracteres)"></div>';
   html += '<button class="btn btn-primary" onclick="salvarEdicaoPerfil()">Salvar Alterações do Perfil</button>';
@@ -5893,16 +6732,18 @@ function salvarEdicaoPerfil() {
   saveActiveResourceFormDraft();
   var finish = beginResourceFormSubmission('profile-update');
   if (!finish) return;
+  var profileRequestRevision = sessionRevision;
   apiRequest('PUT', '/api/auth/profile', payload, function(err, data) {
     finish();
     if (err) {
       showAlert(err, 'error');
       return;
     }
+    if (profileRequestRevision !== sessionRevision) return;
+    if (!applyServerSession(data.user, profileRequestRevision)) return;
     pendingProfileAvatarUpload = null;
     pendingProfileAvatarCleared = false;
     clearResourceFormDraft(descriptor);
-    applyServerSession(data.user);
     syncCachedAuthorData(data.user);
     updateTopBar();
     var curPwdEl = document.getElementById('prof-current-password');
@@ -5919,11 +6760,11 @@ function renderRegistro() {
   var html = '<div class="breadcrumb">Início / Registro</div>';
   html += '<div class="cat-header"><span>Criar Conta no aetherverse vault</span></div>';
   html += '<div class="builder-panel" style="max-width:440px;">';
-  html += '<div class="form-row"><label>Usuário</label><input type="text" id="reg-username" placeholder="Seu nome de usuário"></div>';
-  html += '<div class="form-row"><label>Email</label><input type="email" id="reg-email" placeholder="seu@email.com"></div>';
-  html += '<div class="form-row"><label>Senha</label><input type="password" id="reg-password" placeholder="Mínimo de 6 caracteres"></div>';
-  html += '<div class="form-row"><label>Confirmar Senha</label><input type="password" id="reg-confirm" placeholder="Repita a senha"></div>';
-  html += '<button class="btn btn-primary" onclick="submitRegistro()" style="width:100%;">Cadastrar Conta</button>';
+  html += '<div class="form-row"><label>Usuário</label><input type="text" id="reg-username" maxlength="50" placeholder="Seu nome de usuário"></div>';
+  html += '<div class="form-row"><label>Email</label><input type="email" id="reg-email" maxlength="120" placeholder="seu@email.com"></div>';
+  html += '<div class="form-row"><label>Senha</label><input type="password" id="reg-password" maxlength="200" placeholder="Mínimo de 6 caracteres"></div>';
+  html += '<div class="form-row"><label>Confirmar Senha</label><input type="password" id="reg-confirm" maxlength="200" placeholder="Repita a senha"></div>';
+  html += '<button class="btn btn-primary" id="reg-submit" onclick="submitRegistro()" style="width:100%;">Cadastrar Conta</button>';
   html += '</div>';
   return html;
 }
@@ -5938,6 +6779,7 @@ var timelineFilterSearch = '';
 var timelineFilterChars = [];
 var timelineCharFilterMode = 'any';
 var timelineEditingId = null;
+var timelineEditingUpdatedAt = null;
 
 function carregarTimelineServidor(force) {
   if (timelineLoading || (serverTimelineEvents !== null && !force)) return;
@@ -6207,6 +7049,7 @@ function openTimelineModal(eventId) {
   if (eventId && Array.isArray(serverTimelineEvents)) {
     existing = serverTimelineEvents.find(function(e) { return String(e.id) === String(eventId); });
   }
+  timelineEditingUpdatedAt = existing && existing.updatedAt ? existing.updatedAt : null;
 
   var c = document.getElementById('modal-container');
   if (!c) return;
@@ -6285,6 +7128,7 @@ function openTimelineModal(eventId) {
 
 function closeTimelineModal() {
   timelineEditingId = null;
+  timelineEditingUpdatedAt = null;
   var c = document.getElementById('modal-container');
   if (c) c.innerHTML = '';
 }
@@ -6327,10 +7171,11 @@ function salvarTimelineModal() {
 
   var method = timelineEditingId ? 'PUT' : 'POST';
   var endpoint = timelineEditingId ? ('/api/timeline/' + encodeURIComponent(timelineEditingId)) : '/api/timeline';
+  if (timelineEditingId) payload.expectedUpdatedAt = timelineEditingUpdatedAt;
 
   apiRequest(method, endpoint, payload, function(err, data) {
     if (err) {
-      showAlert(err.message || 'Falha ao salvar evento na linha do tempo.', 'error');
+      showAlert((err && err.message) || err || 'Falha ao salvar evento na linha do tempo.', 'error');
       return;
     }
     closeTimelineModal();
@@ -6346,9 +7191,14 @@ function excluirTimelineEvento(id, title) {
   }
   if (!confirm('Deseja realmente remover o evento "' + (title || id) + '" da linha do tempo?')) return;
 
-  apiRequest('DELETE', '/api/timeline/' + encodeURIComponent(id), {}, function(err) {
+  var existing = Array.isArray(serverTimelineEvents)
+    ? serverTimelineEvents.find(function(e) { return String(e.id) === String(id); })
+    : null;
+  var payload = existing && existing.updatedAt ? { expectedUpdatedAt: existing.updatedAt } : {};
+
+  apiRequest('DELETE', '/api/timeline/' + encodeURIComponent(id), payload, function(err) {
     if (err) {
-      showAlert(err.message || 'Falha ao excluir evento da cronologia.', 'error');
+      showAlert((err && err.message) || err || 'Falha ao excluir evento da cronologia.', 'error');
       return;
     }
     showAlert('Evento removido da cronologia.', 'success');
@@ -6943,7 +7793,7 @@ function commitAdminWikiTransferImport() {
 
 function showModal(title, bodyHtml) {
   var c = document.getElementById('modal-container');
-  c.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-header"><span>' + h(title) + '</span><button onclick="closeModal()">&times;</button></div><div class="modal-body">' + bodyHtml + '</div></div></div>';
+  c.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal" role="dialog" aria-modal="true" aria-label="' + h(title) + '"><div class="modal-header"><span>' + h(title) + '</span><button type="button" aria-label="Fechar" onclick="closeModal()">&times;</button></div><div class="modal-body">' + bodyHtml + '</div></div></div>';
 }
 
 function closeModal() {
@@ -6956,8 +7806,8 @@ function showLoginModal() {
   var bodyHtml = '';
   bodyHtml += '<div class="form-row"><label>Usuário</label><input type="text" id="login-username" placeholder="Seu nome de usuário"></div>';
   bodyHtml += '<div class="form-row"><label>Senha</label><input type="password" id="login-password" placeholder="Sua senha" onkeydown="if(event.key===\'Enter\')doLogin()"></div>';
-  bodyHtml += '<button class="btn btn-primary" style="width:100%;" onclick="doLogin()">Entrar</button>';
-  bodyHtml += '<div style="margin-top:14px;font-size:12px;text-align:center;color:var(--text-secondary);">Não tem conta? <a onclick="closeModal();navigate(\'registro\')">Cadastre-se gratuitamente</a></div>';
+  bodyHtml += '<button class="btn btn-primary" id="login-submit" style="width:100%;" onclick="doLogin()">Entrar</button>';
+  bodyHtml += '<div style="margin-top:14px;font-size:12px;text-align:center;color:var(--text-secondary);">Não tem conta? <a href="/registro" onclick="if(event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey)return true;closeModal();navigate(\'registro\');return false;">Cadastre-se gratuitamente</a></div>';
   showModal('Entrar no aetherverse vault', bodyHtml);
 }
 
@@ -7007,7 +7857,20 @@ function formatJoinDate(iso) {
   return m[3] + '/' + m[2] + '/' + m[1];
 }
 
-function applyServerSession(serverUser) {
+function clearNotificationCache() {
+  DB.notifications = [];
+  DB.unreadCount = 0;
+}
+
+function resetAdminStateCache() {
+  adminLoadSequence += 1;
+  adminState = { users: [], categories: [], events: [], userPage: { limit: 50, offset: 0, hasMore: false }, loading: false, loaded: false, error: null };
+  adminWikiTransferState = createAdminWikiTransferState();
+}
+
+function applyServerSession(serverUser, expectedRevision) {
+  if (expectedRevision !== undefined && expectedRevision !== sessionRevision) return false;
+  sessionRevision += 1;
   var previousId = DB.session && (DB.session.serverId || DB.session.id);
   var previousRole = DB.session && DB.session.role;
   if (!serverUser) {
@@ -7018,9 +7881,13 @@ function applyServerSession(serverUser) {
       clearForumDraftEditors();
       clearWikiTransientState();
     }
+    clearServerForumPendingReply();
+    clearNotificationCache();
+    resetAdminStateCache();
+    if (previousId) authEpoch += 1;
     DB.session = null;
     if (window.Aetherverse) window.Aetherverse.clearSessionUser();
-    return;
+    return true;
   }
   var safeUser = window.Aetherverse.setSessionUser(serverUser);
   if (!safeUser || typeof safeUser.id !== 'string') {
@@ -7031,25 +7898,32 @@ function applyServerSession(serverUser) {
       clearForumDraftEditors();
       clearWikiTransientState();
     }
+    clearServerForumPendingReply();
+    clearNotificationCache();
+    resetAdminStateCache();
+    if (previousId) authEpoch += 1;
     DB.session = null;
-    return;
+    return true;
   }
-  if (previousId && String(previousId) !== safeUser.id) {
+  if (!previousId || String(previousId) !== safeUser.id) authEpoch += 1;
+  if (!previousId || String(previousId) !== safeUser.id || previousRole !== safeUser.role) {
     pendingProfileAvatarUpload = null;
     pendingProfileAvatarCleared = false;
     profileAvatarPreparing = false;
     clearForumDraftEditors();
     clearWikiTransientState();
+    clearNotificationCache();
+    resetAdminStateCache();
   } else if (['admin', 'moderador'].includes(previousRole) && !['admin', 'moderador'].includes(safeUser.role)) {
     clearWikiTransientState();
-  } else if (previousRole === 'admin' && safeUser.role !== 'admin') {
-    adminWikiTransferState = createAdminWikiTransferState();
+    resetAdminStateCache();
   }
   DB.session = Object.assign({}, safeUser, {
     serverId: safeUser.id,
     posts: typeof safeUser.posts === 'number' ? safeUser.posts : 0,
     joinDate: formatJoinDate(safeUser.joinDate),
   });
+  return true;
 }
 
 function syncSessionUser(user) {
@@ -7057,15 +7931,22 @@ function syncSessionUser(user) {
 }
 
 function doLogin() {
+  if (loginSubmissionPending) return;
   var username = document.getElementById('login-username').value.trim();
   var password = document.getElementById('login-password').value;
   if (!username || !password) {
     showAlert('Preencha usuário e senha.', 'error');
     return;
   }
+  loginSubmissionPending = true;
+  var button = document.getElementById('login-submit');
+  if (button) button.disabled = true;
+  var loginRequestRevision = sessionRevision;
   apiPost('/api/auth/login', { username: username, password: password }, function(err, data) {
+    loginSubmissionPending = false;
+    if (button) button.disabled = false;
     if (err) { showAlert(err, 'error'); return; }
-    applyServerSession(data.user);
+    if (!applyServerSession(data.user, loginRequestRevision)) return;
     carregarNotificacoesServidor();
     closeModal();
     navigate('forum');
@@ -7074,16 +7955,17 @@ function doLogin() {
 }
 
 function doLogout() {
+  var logoutAuthEpoch = authEpoch;
   apiPost('/api/auth/logout', {}, function(err) {
     if (err) { showAlert(err, 'error'); return; }
+    if (logoutAuthEpoch !== authEpoch) return;
     applyServerSession(null);
-    DB.notifications = [];
-    DB.unreadCount = 0;
     navigate('forum');
   });
 }
 
 function submitRegistro() {
+  if (signupSubmissionPending) return;
   var username = document.getElementById('reg-username').value.trim();
   var password = document.getElementById('reg-password').value;
   var confirm2 = document.getElementById('reg-confirm').value;
@@ -7098,9 +7980,15 @@ function submitRegistro() {
     return;
   }
 
+  signupSubmissionPending = true;
+  var button = document.getElementById('reg-submit');
+  if (button) button.disabled = true;
+  var signupRequestRevision = sessionRevision;
   apiPost('/api/auth/signup', { username: username, email: email, password: password }, function(err, data) {
+    signupSubmissionPending = false;
+    if (button) button.disabled = false;
     if (err) { showAlert(err, 'error'); return; }
-    applyServerSession(data.user);
+    if (!applyServerSession(data.user, signupRequestRevision)) return;
     carregarNotificacoesServidor();
     navigate('forum');
     showAlert('Cadastro realizado. Bem-vindo(a)!', 'success');
@@ -7108,9 +7996,7 @@ function submitRegistro() {
 }
 
 function startNewThread(catId) {
-  currentCat = catId;
-  editandoThread = null;
-  navigate('novaThread');
+  navigate('novaThread', catId);
 }
 
 function submitThread() {
@@ -7120,6 +8006,7 @@ function submitThread() {
   var content = getEditorContent('thread-editor');
   var catId = document.getElementById('thread-cat').value;
   var tag = document.getElementById('thread-tag').value;
+  if (!catId) { showAlert('Nenhuma categoria disponível para publicar o tópico.', 'error'); return; }
   if (!title || !content || content === '<br>') { showAlert('Preencha o título e o conteúdo!', 'error'); return; }
   var payload = { categoryId: catId, title: title, tag: tag, content: content };
   var serialized = JSON.stringify(payload);
@@ -7147,8 +8034,7 @@ function submitThread() {
 function editarThread(threadId) {
   var thread = serverForumThread && String(serverForumThread.id) === String(threadId) ? serverForumThread : null;
   if (!thread || !canEditForumAuthor(thread.author)) { showAlert('Você não tem permissão para editar este tópico.', 'error'); return; }
-  editandoThread = threadId;
-  navigate('novaThread');
+  navigate('threadEdit', threadId);
 }
 
 function salvarEdicaoThread() {
@@ -7181,30 +8067,81 @@ function deleteThread(threadId) {
   moderateForumThread(threadId, 'archive');
 }
 
+function replyDraftContentFor(threadId, accountId) {
+  var key = forumDraftStorageKey('reply', threadId, accountId);
+  if (!key) return null;
+  try {
+    var raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    var record = JSON.parse(raw);
+    if (!record || typeof record !== 'object' || Array.isArray(record) || !record.values
+      || typeof record.values.content !== 'string') return null;
+    return record.values.content;
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearSubmittedReplyDraft(submission) {
+  if (!submission || !submission.accountId || !submission.values) return false;
+  var storedContent = replyDraftContentFor(submission.threadId, submission.accountId);
+  if (storedContent === null || storedContent !== submission.values.content) return false;
+  clearForumDraft('reply', submission.threadId, submission.accountId);
+  return true;
+}
+
 function submitReply() {
   if (!DB.session) { showAlert('Faça login para responder.', 'error'); return; }
+  var submittingAccountId = forumDraftAccountId();
+  var submittedThreadId = String(currentThread);
   saveActiveForumDraft();
   var content = getEditorContent('reply-editor');
   if (!content || content === '<br>') { showAlert('Escreva algo antes de enviar!', 'error'); return; }
   var payload = { content: content };
   var serialized = JSON.stringify(payload);
-  if (!pendingReplyKey || pendingReplyPayload !== serialized) {
+  if (!pendingReplyKey || pendingReplyPayload !== serialized
+      || pendingReplyThreadId !== submittedThreadId || pendingReplyAccountId !== submittingAccountId) {
     pendingReplyKey = newForumIdempotencyKey();
     pendingReplyPayload = serialized;
+    pendingReplyThreadId = submittedThreadId;
+    pendingReplyAccountId = submittingAccountId;
   }
-  writeForumDraft('reply', currentThread, payload, pendingReplyKey);
+  var submission = {
+    accountId: submittingAccountId,
+    threadId: submittedThreadId,
+    payload: serialized,
+    values: payload,
+    idempotencyKey: pendingReplyKey
+  };
+  writeForumDraft('reply', submittedThreadId, payload, submission.idempotencyKey);
   var button = document.querySelector('#main button[onclick="submitReply()"]');
   if (button) button.disabled = true;
-  forumApi().apiRequest('POST', '/api/forum/threads/' + encodeURIComponent(currentThread) + '/posts', payload, null, {
-    headers: { 'Idempotency-Key': pendingReplyKey }
-  }).then(function() {
-    clearForumDraft('reply', currentThread);
-    pendingReplyKey = null;
-    pendingReplyPayload = null;
-    serverForumThread = null;
-    serverForumPosts = null;
-    loadForumThread(currentThread, { force: true });
+  return forumApi().apiRequest('POST', '/api/forum/threads/' + encodeURIComponent(submittedThreadId) + '/posts', payload, null, {
+    headers: { 'Idempotency-Key': submission.idempotencyKey }
+  }).then(function(response) {
+    var pendingPost = response && response.data ? response.data : null;
+    if (pendingReplyAccountId === submission.accountId && pendingReplyThreadId === submission.threadId
+      && pendingReplyKey === submission.idempotencyKey && pendingReplyPayload === submission.payload) {
+      pendingReplyKey = null;
+      pendingReplyPayload = null;
+      pendingReplyThreadId = null;
+      pendingReplyAccountId = null;
+    }
+    clearSubmittedReplyDraft(submission);
     showAlert('Resposta publicada.', 'success');
+    var ownsDisplayedReply = function() {
+      return String(submission.accountId || '') === String(forumDraftAccountId() || '')
+        && currentPage === 'thread' && String(currentThread) === submission.threadId;
+    };
+    if (!ownsDisplayedReply()) return;
+    serverForumThread = null;
+    serverForumPostsPage = { limit: 20, offset: 0, hasMore: false };
+    return Promise.resolve(loadForumThread(submission.threadId, { force: true, offset: 0, reset: true })).then(function() {
+      if (!ownsDisplayedReply()) return;
+      setServerForumPendingReply(pendingPost);
+      render();
+      if (replyDraftContentFor(submission.threadId, submission.accountId) !== null) restoreForumDraftForCurrentRoute();
+    });
   }).catch(function(error) {
     if (button) button.disabled = false;
     showAlert(error.message || 'Não foi possível publicar a resposta. O texto continua no editor.', 'error');
@@ -7212,7 +8149,7 @@ function submitReply() {
 }
 
 function quotePost(postId) {
-  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  var post = findForumThreadPost(postId);
   if (!post || post.deleted) return;
   var author = post.author;
   var replyEditor = document.getElementById('reply-editor');
@@ -7225,7 +8162,7 @@ function quotePost(postId) {
 }
 
 function editPost(postId) {
-  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  var post = findForumThreadPost(postId);
   if (!post || post.deleted || !canEditForumAuthor(post.author)) return;
   editingForumPostId = String(postId);
   showModal('Editar Post',
@@ -7238,7 +8175,7 @@ function editPost(postId) {
 }
 
 function saveEditPost(postId) {
-  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  var post = findForumThreadPost(postId);
   if (!post || !canEditForumAuthor(post.author)) return;
   var content = getEditorContent('edit-post-editor');
   var summary = document.getElementById('edit-post-summary').value.trim();
@@ -7249,13 +8186,12 @@ function saveEditPost(postId) {
   if (!finish) return;
   forumApi().apiRequest('PATCH', '/api/forum/posts/' + encodeURIComponent(post.id), {
     content: content, summary: summary, expectedVersion: post.version
-  }).then(function() {
+  }).then(function(response) {
     finish();
     clearResourceFormDraft(descriptor);
     closeModal();
-    serverForumThread = null;
-    serverForumPosts = null;
-    loadForumThread(currentThread, { force: true });
+    if (response && response.data) updateForumThreadPostRecord(response.data);
+    render();
     showAlert('Publicação atualizada.', 'success');
   }).catch(function(error) {
     finish();
@@ -7264,7 +8200,7 @@ function saveEditPost(postId) {
 }
 
 function deletePost(postId) {
-  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  var post = findForumThreadPost(postId);
   if (!post || post.deleted || !DB.session) return;
   if (Number(post.postNo) === 1 && !isModOrAdmin()) { showAlert('A publicação de abertura só pode ser ocultada pela equipe.', 'error'); return; }
   if (!confirm('Ocultar esta publicação mantendo o registro recuperável?')) return;
@@ -7273,27 +8209,26 @@ function deletePost(postId) {
   forumApi().apiRequest('POST', '/api/forum/posts/' + encodeURIComponent(post.id) + '/hide', {
     reason: reason.trim(), expectedVersion: post.version
   }).then(function(response) {
-    serverForumPosts = serverForumPosts.map(function(item) { return String(item.id) === String(post.id) ? response.data : item; });
+    updateForumThreadPostRecord(response.data);
     render();
   }).catch(function(error) { showAlert(error.message || 'Não foi possível ocultar a publicação.', 'error'); });
 }
 
 function restoreForumPost(postId) {
-  var post = (serverForumPosts || []).find(function(p) { return String(p.id) === String(postId); });
+  var post = findForumThreadPost(postId);
   if (!isModOrAdmin() || !post || !post.deleted) return;
   var reason = window.prompt('Informe o motivo para restaurar esta publicação:');
   if (!reason || !reason.trim()) return;
   forumApi().apiRequest('POST', '/api/forum/posts/' + encodeURIComponent(post.id) + '/restore', {
     reason: reason.trim(), expectedVersion: post.version
   }).then(function(response) {
-    serverForumPosts = serverForumPosts.map(function(item) { return String(item.id) === String(post.id) ? response.data : item; });
+    updateForumThreadPostRecord(response.data);
     render();
   }).catch(function(error) { showAlert(error.message || 'Não foi possível restaurar a publicação.', 'error'); });
 }
 
 function editarPersonagem(id) {
-  sessionStorage.setItem('editPersonagemId', id);
-  navigate('novoPersonagem');
+  navigate('novoPersonagem', id);
 }
 
 function lerStatsDoFormulario() {
@@ -7342,6 +8277,11 @@ function lerSkillsDoFormulario() {
 
 function lerFormPersonagem() {
   syncBuilderBlocksFromDOM();
+  var theme = activePersonagemTheme ? JSON.parse(JSON.stringify(activePersonagemTheme)) : {};
+  var accentValue = (document.getElementById('p-accent-color') || {}).value || '';
+  theme.accentColor = activePersonagemAccentEmpty && accentValue === '#ffffff'
+    ? ''
+    : (accentValue || theme.accentColor || '#ffffff');
   return {
     nome: document.getElementById('p-nome').value.trim(),
     categoria: document.getElementById('p-categoria').value,
@@ -7354,9 +8294,7 @@ function lerFormPersonagem() {
     stats: lerStatsDoFormulario(),
     skills: lerSkillsDoFormulario(),
     mascaraTier: document.getElementById('p-mascara-tier').value.trim(),
-    theme: {
-      accentColor: (document.getElementById('p-accent-color') || {}).value || '#ffffff'
-    },
+    theme: theme,
     blocks: activeBuilderBlocks
   };
 }
@@ -7443,8 +8381,10 @@ function loadAdminData(force) {
 }
 
 function adminMutation(method, url, payload, successMessage) {
+  var mutationSessionRevision = sessionRevision;
   apiRequest(method, url, payload).then(function() {
     return apiRequest('GET', '/api/auth/me').then(function(identity) {
+      if (mutationSessionRevision !== sessionRevision) return;
       applyServerSession(identity.user || null);
       if (!isAdmin()) {
         adminState = { users: [], categories: [], events: [], userPage: { limit: 50, offset: 0, hasMore: false }, loading: false, loaded: false, error: null };
@@ -7458,7 +8398,8 @@ function adminMutation(method, url, payload, successMessage) {
       loadAdminData(true);
     });
   }).catch(function(error) {
-    if (error && /sessão expirou/i.test(error.message || '')) {
+    if (mutationSessionRevision === sessionRevision
+        && error && /sessão expirou/i.test(error.message || '')) {
       applyServerSession(null);
       updateTopBar();
       navigate('forum');
@@ -7527,6 +8468,27 @@ function changeAdminCategoryArchive(categoryId, expectedVersion, archive) {
   }, archive ? 'Categoria arquivada; os tópicos foram preservados.' : 'Categoria restaurada.');
 }
 
+if (document.addEventListener) document.addEventListener('keydown', function(event) {
+  if (event.key !== 'Escape') return;
+  var modal = document.getElementById('modal-container');
+  if (modal && modal.innerHTML) { closeModal(); return; }
+  var lightbox = document.getElementById('lightbox-container');
+  if (lightbox && lightbox.innerHTML) closeLightbox();
+});
+
+window.addEventListener('aetherverse:session-expired', function() {
+  if (!DB.session) return;
+  applyServerSession(null);
+  var modalContainer = document.getElementById('modal-container');
+  if (modalContainer && modalContainer.querySelector
+    && modalContainer.querySelector('.notifications-panel')) {
+    closeModal();
+  }
+  updateTopBar();
+  render();
+  showAlert('Sua sessão expirou. Faça login novamente.', 'error');
+});
+
 window.addEventListener('DOMContentLoaded', function() {
   loadDB();
   parseRouteFromLocation();
@@ -7537,7 +8499,9 @@ window.addEventListener('DOMContentLoaded', function() {
   carregarPersonagensServidor();
   carregarWikiPostsServidor();
 
+  var bootSessionRevision = sessionRevision;
   apiRequest('GET', '/api/auth/me', undefined, function(err, data) {
+      if (bootSessionRevision !== sessionRevision) return;
       if (err) {
         applyServerSession(null);
         if (err !== 'Sua sessão expirou. Faça login novamente.') {

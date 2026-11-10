@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0017_timeline_events';
 const PASSWORD = 'Synthetic-wiki-browser-password-42';
 let sql;
 let server;
@@ -160,8 +160,8 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
     await expect(articleLink).toHaveCount(1);
     await expect(reader.locator('#wiki-page-search')).toBeVisible();
     await expect(reader.getByRole('navigation', { name: 'Seções da Wiki' })).toBeVisible();
-    await expect(reader.getByRole('button', { name: '+ Novo artigo', exact: true })).toHaveCount(0);
-    await expect(reader.getByRole('button', { name: 'Propostas', exact: true })).toHaveCount(0);
+    await expect(reader.getByRole('link', { name: '+ Novo artigo', exact: true })).toHaveCount(0);
+    await expect(reader.getByRole('link', { name: 'Propostas', exact: true })).toHaveCount(0);
     await assertMobilePage(reader, 'leitor anônimo na lista da wiki');
     await assertMobileControl(reader, reader.locator('#wiki-page-search'), 'busca da wiki');
     await assertMobileControl(reader, reader.getByRole('navigation', { name: 'Seções da Wiki' }).getByRole('link', { name: 'Percepção', exact: true }), 'seção da Wiki');
@@ -170,7 +170,7 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
     await reader.goto(articleUrl);
     await expect(reader.locator('.wiki-content-area')).toContainText(fixture.initialText);
     await expect(reader.locator('#wiki-proposal-summary')).toHaveCount(0);
-    await expect(reader.getByRole('button', { name: 'Editar artigo', exact: true })).toHaveCount(0);
+    await expect(reader.getByRole('link', { name: 'Editar artigo', exact: true })).toHaveCount(0);
     const anonymousLogin = reader.locator('#main .builder-panel').filter({ hasText: 'Entre na sua conta para propor uma edição deste artigo.' })
       .getByRole('button', { name: 'Entrar', exact: true });
     await assertMobilePage(reader, 'leitor anônimo no artigo');
@@ -183,7 +183,7 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
     await expect(member.locator('#wiki-proposal-heading')).toBeVisible();
     await expect(member.locator('#wiki-proposal-body')).toBeVisible();
     await expect(member.getByRole('button', { name: 'Enviar proposta para revisão', exact: true })).toBeVisible();
-    await expect(member.getByRole('button', { name: 'Editar artigo', exact: true })).toHaveCount(0);
+    await expect(member.getByRole('link', { name: 'Editar artigo', exact: true })).toHaveCount(0);
     await assertMobilePage(member, 'propositor');
     await assertMobileControl(member, member.locator('#wiki-proposal-summary'), 'resumo da proposta');
     await assertMobileControl(member, member.locator('#wiki-proposal-body'), 'conteúdo da proposta');
@@ -191,10 +191,10 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
 
     await login(staff, fixture.users.staff);
     await staff.goto(`${origin}/wiki`);
-    await expect(staff.getByRole('button', { name: '+ Novo artigo', exact: true })).toBeVisible();
-    await expect(staff.locator('#nav-admin-btn button')).toHaveCount(0);
+    await expect(staff.getByRole('link', { name: '+ Novo artigo', exact: true })).toBeVisible();
+    await expect(staff.locator('#nav-admin-btn a')).toHaveCount(0);
     await assertMobilePage(staff, 'moderador na lista da wiki');
-    await assertMobileControl(staff, staff.getByRole('button', { name: '+ Novo artigo', exact: true }), 'criar artigo');
+    await assertMobileControl(staff, staff.getByRole('link', { name: '+ Novo artigo', exact: true }), 'criar artigo');
     await staff.goto(`${origin}/wiki/editor/${fixture.pageId}`);
     await expect(staff.locator('#wiki-editor-title')).toHaveValue(fixture.title);
     const saveDraft = staff.getByRole('button', { name: 'Salvar rascunho', exact: true });
@@ -207,7 +207,7 @@ test('UI-03 wiki reader, proposer, staff editor, and admin controls fit a mobile
     await assertMobileControl(staff, publish, 'publicar revisão');
 
     await login(admin, fixture.users.admin);
-    const adminNav = admin.locator('#nav-admin-btn').getByRole('button', { name: 'Admin', exact: true });
+    const adminNav = admin.locator('#nav-admin-btn').getByRole('link', { name: 'Admin', exact: true });
     await expect(adminNav).toBeVisible();
     await assertMobileControl(admin, adminNav, 'navegação administrativa');
     await adminNav.click();
@@ -423,7 +423,7 @@ test('staff discovers shared drafts, reads indexed content and explicitly publis
     }, { id: fixture.pageId, snapshot: candidate });
     expect(result.data.head.snapshot.accessLevel).toBe('staff');
     await staff.goto(`${origin}/wiki`);
-    await staff.getByRole('button', { name: 'Rascunhos da equipe', exact: true }).click();
+    await staff.getByRole('link', { name: 'Rascunhos da equipe', exact: true }).click();
     await staff.getByRole('link', { name: candidate.title, exact: true }).click();
     await expect(staff.locator('#main')).toContainText('Private indexed synthetic content');
     const toc = staff.getByRole('navigation', { name: 'Índice do artigo' });
@@ -445,7 +445,7 @@ test('staff discovers shared drafts, reads indexed content and explicitly publis
     await expect(member.locator('#main')).toContainText('restrita à staff');
     await expect(member.locator('#main')).not.toContainText('Private indexed synthetic content');
     expect((await memberContext.request.get(`${origin}/api/staff/wiki/pages/${fixture.pageId}`)).status()).toBe(403);
-    await staff.getByRole('button', { name: 'Editar artigo', exact: true }).click();
+    await staff.getByRole('link', { name: 'Editar artigo', exact: true }).click();
     await expect(staff.locator('#wiki-editor-title')).toHaveValue(candidate.title);
     await staff.locator('#wiki-editor-summary').fill('Latest synthetic saved head');
     const savedResponse = staff.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === `/api/staff/wiki/pages/${fixture.pageId}/revisions`);
@@ -457,7 +457,7 @@ test('staff discovers shared drafts, reads indexed content and explicitly publis
     await expect(staff.getByRole('button', { name: 'Publicar para todos', exact: true })).toBeEnabled();
     await staff.goBack();
     await expect(staff.locator('#main')).toContainText('Latest synthetic saved head');
-    await staff.getByRole('button', { name: 'Editar artigo', exact: true }).click();
+    await staff.getByRole('link', { name: 'Editar artigo', exact: true }).click();
     staff.once('dialog', dialog => dialog.dismiss());
     await staff.getByRole('button', { name: 'Publicar para todos', exact: true }).click();
     const [beforePublic] = await sql`SELECT r.snapshot FROM wiki_pages p JOIN wiki_revisions r ON r.id=p.published_revision_id WHERE p.id=${fixture.pageId}`;
@@ -492,7 +492,7 @@ test('wiki sections remain visible without articles and navigate as forum-style 
     await expect(page.locator('#main')).toContainText('Ainda não há artigos nesta seção com os filtros atuais.');
     await page.reload();
     await expect(sections.getByRole('link', { name: 'Percepção', exact: true })).toHaveAttribute('aria-current', 'page');
-    await page.getByRole('button', { name: 'Todas as seções', exact: true }).click();
+    await page.getByRole('link', { name: 'Todas as seções', exact: true }).click();
     await expect(page).toHaveURL(`${origin}/wiki`);
     await page.goBack();
     await expect(sections.getByRole('link', { name: 'Percepção', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -565,7 +565,7 @@ test('staff imports Work JSON through preview, exports and revises it without pu
     expect(JSON.stringify(exported)).not.toMatch(/password|session|actorId|importedBy/);
     exported.pages[0].summary = 'Edited externally with AI';
     exported.pages[0].sections[0].html = '<p>Revised external synthetic prose.</p>';
-    await staff.getByRole('button', { name: 'Editar artigo', exact: true }).click();
+    await staff.getByRole('link', { name: 'Editar artigo', exact: true }).click();
     await staff.locator('.wiki-article-file-panel > summary').click();
     await staff.locator('#wiki-article-file').setInputFiles(upload(exported));
     await expect(staff.locator('.wiki-file-preview')).toContainText('Edited externally with AI');

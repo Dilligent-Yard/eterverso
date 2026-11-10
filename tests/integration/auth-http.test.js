@@ -128,6 +128,7 @@ test('AUTH-01 signup, CSRF, profile versioning, password rotation, and disabled 
   assert.equal(previewBlocks.status, 200, JSON.stringify(previewBlocks.body));
   assert.match(previewBlocks.body.blocks[0].content, /<p>Visible<\/p>/);
   assert.doesNotMatch(previewBlocks.body.blocks[0].content, /onerror|alert\(1\)/i);
+  assert.equal(previewBlocks.body.blockFormattingLoss.discarded, true);
 
   const unexpectedField = await request(anonymous, 'PUT', '/api/auth/profile', {
     token: anonymous.token,

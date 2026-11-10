@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0017_timeline_events';
 const PASSWORD = 'Synthetic-ui-drafts-browser-password-42';
 let sql;
 let server;
@@ -107,26 +107,24 @@ test('UI-02 profile, character, and scene drafts restore after reload and stay a
     await expect(page.locator('#prof-password')).toHaveValue('');
 
     await page.goto(`${origin}/personagens`);
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Personagem', exact: true }).click();
     const characterName = `Personagem em rascunho ${fixture.suffix}`;
     await page.locator('#p-nome').fill(characterName);
     await page.locator('#p-editor').fill(`Descrição em rascunho ${fixture.suffix}`);
     const characterKey = resourceDraftKey(fixture.users[0].id, 'character', 'new');
     await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), characterKey)).not.toBeNull();
     await page.reload();
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
     await expect(page.locator('#p-nome')).toHaveValue(characterName);
     await expect(page.locator('#p-editor')).toContainText(`Descrição em rascunho ${fixture.suffix}`);
 
     await page.goto(`${origin}/cenas`);
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
+    await page.getByRole('link', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     const sceneTitle = `Cena em rascunho ${fixture.suffix}`;
     await page.locator('#c-titulo').fill(sceneTitle);
     await page.locator('#c-editor').fill(`Abertura em rascunho ${fixture.suffix}`);
     const sceneKey = resourceDraftKey(fixture.users[0].id, 'scene', 'new');
     await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), sceneKey)).not.toBeNull();
     await page.reload();
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     await expect(page.locator('#c-titulo')).toHaveValue(sceneTitle);
     await expect(page.locator('#c-editor')).toContainText(`Abertura em rascunho ${fixture.suffix}`);
 
@@ -137,11 +135,605 @@ test('UI-02 profile, character, and scene drafts restore after reload and stay a
     await expect(page.locator('#prof-title')).toHaveValue('');
     await expect(page.locator('#prof-bio')).toHaveValue('');
     await page.goto(`${origin}/personagens`);
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Personagem', exact: true }).click();
     await expect(page.locator('#p-nome')).toHaveValue('');
     await page.goto(`${origin}/cenas`);
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
+    await page.getByRole('link', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     await expect(page.locator('#c-titulo')).toHaveValue('');
+  } finally {
+    await context.close();
+  }
+});
+
+test('character JSON import and export preserve blocks, stats, skills, and theme', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    await page.goto(`${origin}/personagens/${fixture.characterId}`);
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    await expect(page.locator('#p-nome')).toHaveValue(fixture.characterName);
+
+    const imported = {
+      nome: `Imported character ${fixture.suffix}`,
+      categoria: 'Personagem Principal',
+      titulo: 'Título importado',
+      raca: 'Humana',
+      faccao: 'Facção importada',
+      status: 'Viva',
+      imagem: '',
+      descricao: '<p>Descrição importada</p>',
+      stats: { alma: 77 },
+      skills: [{ nome: 'Skill importada', descricao: 'Efeito importado', tipo: 'skill' }],
+      mascaraTier: 'Grã-Mestra',
+      theme: { accentColor: '#cc0000', bannerStyle: 'cinematic', layout: 'sidebar-left', fontFamily: 'serif', bgEffect: 'aura', bgm: '' },
+      blocks: [
+        { type: 'quote', title: '', text: 'Frase importada', author: 'Autora importada', avatar: '' },
+        { type: 'datalist', title: 'Dados importados', items: [{ label: 'Nome', value: 'Valor' }] }
+      ]
+    };
+
+    await page.getByRole('button', { name: 'Importar JSON' }).click();
+    await page.locator('#import-char-json').fill(JSON.stringify(imported));
+    await page.getByRole('button', { name: 'Carregar Dados' }).click();
+    await expect(page.locator('#import-char-json')).toHaveCount(0);
+    await expect(page.locator('#p-nome')).toHaveValue(imported.nome);
+    await expect(page.locator('#p-stat-alma')).toHaveValue('77');
+    await expect(page.locator('#p-mascara-tier')).toHaveValue('Grã-Mestra');
+    await expect(page.locator('#p-accent-color')).toHaveValue('#cc0000');
+    await expect(page.locator('#p-skills-list .skill-form-item')).toHaveCount(1);
+    await expect(page.locator('#modular-blocks-container .block-builder-card')).toHaveCount(2);
+    await expect(page.locator('#modular-blocks-container .bb-dl-label')).toHaveValue('Nome');
+    await expect(page.locator('#modular-blocks-container .bb-dl-val')).toHaveValue('Valor');
+
+    await page.getByRole('button', { name: 'Salvar Alterações' }).click();
+    await page.waitForURL(`**/personagens/${fixture.characterId}`);
+    await expect(page.locator('.mod-quote-box')).toContainText('Frase importada');
+    await expect(page.locator('.mod-datalist-item')).toContainText('Nome');
+    await expect(page.locator('.skill-grid .skill-item')).toContainText('Skill importada');
+
+    const rows = await sql`SELECT nome, stats, skills, blocks, theme, mascara_tier
+      FROM personagens WHERE id = ${fixture.characterId}`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].nome).toBe(imported.nome);
+    expect(rows[0].stats).toEqual({ alma: 77 });
+    expect(rows[0].skills).toEqual([{ nome: 'Skill importada', descricao: 'Efeito importado', tipo: 'skill' }]);
+    expect(rows[0].blocks).toHaveLength(2);
+    expect(rows[0].theme).toEqual(imported.theme);
+    expect(rows[0].mascara_tier).toBe('Grã-Mestra');
+
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Exportar JSON' }).click()
+    ]);
+    const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+    expect(exported.nome).toBe(imported.nome);
+    expect(exported.stats).toEqual({ alma: 77 });
+    expect(exported.skills).toHaveLength(1);
+    expect(exported.blocks).toHaveLength(2);
+    expect(exported.theme).toEqual(imported.theme);
+  } finally {
+    await context.close();
+  }
+});
+
+test('character JSON legacy and expanded artifacts round-trip, preserve rich sheets, and preview blocks', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    const legacy = {
+      schemaVersion: 1,
+      nome: 'Ficha Legada Sintética',
+      categoria: 'Personagem Principal',
+      titulo: 'Guardiã de Teste',
+      raca: 'Humana Sintética',
+      faccao: 'Facção Legada',
+      status: 'Ativa',
+      imagem: '',
+      descricao: '<p>Marcador legado sintetico LGC-8842.</p>',
+      stats: { ataque: 37, defesa: 52, alma: 64, inteligencia: 45 },
+      skills: [
+        { nome: 'Habilidade Sintética Um', descricao: 'Efeito sintético um.', tipo: 'skill' },
+        { nome: 'Habilidade Sintética Dois', descricao: 'Efeito sintético dois.', tipo: 'skill' },
+        { nome: 'Equipamento Sintético Três', descricao: 'Efeito sintético três.', tipo: 'equipamento' },
+        { nome: 'Habilidade Sintética Quatro', descricao: 'Efeito sintético quatro.', tipo: 'skill' }
+      ],
+      mascaraTier: 'Camada Sintética',
+      theme: {
+        accentColor: '#1a2b3c',
+        bannerStyle: 'standard',
+        layout: 'full',
+        fontFamily: 'mono',
+        bgEffect: 'grid',
+        bgm: ''
+      },
+      blocks: []
+    };
+    const expanded = {
+      schemaVersion: 1,
+      nome: 'Ficha Expandida Sintética',
+      categoria: 'Sub-Personagem',
+      titulo: 'Exploradora de Teste',
+      raca: 'Constructo Sintético',
+      faccao: 'Facção Expandida',
+      status: 'Em Observação',
+      imagem: '',
+      descricao: '<p>Marcador expandido sintetico EXP-7319.</p>',
+      stats: { destreza: 26, reserva: 48, controle: 59, refino: 31, emissao: 22, habilidade: 40 },
+      skills: [],
+      mascaraTier: 'Camada Expandida',
+      theme: {
+        accentColor: '#204060',
+        bannerStyle: 'compact',
+        layout: 'book',
+        fontFamily: 'sans',
+        bgEffect: 'dots',
+        bgm: 'Synthetic theme cue'
+      },
+      blocks: [
+        { type: 'section', title: 'Seção Sintética Um', content: '<p>Conteúdo sintético da primeira seção.</p>' },
+        { type: 'tabs', title: 'Abas Sintéticas', items: [{ label: 'Aba Um', content: '<p>Conteúdo sintético da aba.</p>' }] },
+        { type: 'gallery', title: 'Galeria Sintética', cols: '2', items: [{ url: 'https://example.test/synthetic-gallery.png', caption: 'Legenda sintética' }] },
+        {
+          type: 'cards', title: 'Cartões Sintéticos', items: [{
+            title: 'Cartão Um', badge: 'Sintético', color: '#abcdef',
+            image: 'https://example.test/synthetic-card.png', desc: 'Descrição sintética do cartão.'
+          }]
+        },
+        { type: 'quote', title: 'Citação Sintética', text: 'Texto de citação sintética EXP-QUOTE-7319.', author: 'Autoria Sintética', avatar: '' },
+        { type: 'stats', title: 'Estatísticas Sintéticas', items: [{ label: 'Indicador Sintético', value: 42, color: '#123456' }] },
+        { type: 'accordion', title: 'Acordeão Sintético', items: [{ title: 'Item Sintético', content: '<p>Conteúdo sintético do acordeão.</p>' }] },
+        { type: 'timeline', title: 'Cronologia Sintética', items: [{ date: 'Marco Sintético', title: 'Evento Sintético', desc: 'Descrição sintética do evento.' }] },
+        {
+          type: 'datalist', title: 'Dados Sintéticos', items: [
+            { label: 'Chave Um', value: 'Valor Um' },
+            { label: 'Chave Dois', value: 'Valor Dois' },
+            { label: 'Chave Três', value: 'Valor Três' },
+            { label: 'Chave Quatro', value: 'Valor Quatro' },
+            { label: 'Chave Cinco', value: 'Valor Cinco' },
+            { label: 'Chave Seis', value: 'Valor Seis' },
+            { label: 'Chave Sete', value: 'Valor Sete' },
+            { label: 'Chave Oito', value: 'Valor Oito' }
+          ]
+        },
+        { type: 'section', title: 'Seção Sintética Dois', content: '<p>Conteúdo sintético da segunda seção.</p>' },
+        { type: 'accordion', title: 'Acordeão Sintético Dois', items: [{ title: 'Item Sintético Dois', content: '<p>Conteúdo sintético do segundo acordeão.</p>' }] }
+      ]
+    };
+
+    async function openImport(payload) {
+      await page.getByRole('button', { name: 'Importar JSON' }).click();
+      await page.locator('#import-char-json').fill(JSON.stringify(payload));
+      await page.getByRole('button', { name: 'Carregar Dados' }).click();
+      await expect(page.locator('#import-char-json')).toHaveCount(0);
+    }
+
+    async function saveCharacter() {
+      const responsePromise = page.waitForResponse((response) => response.request().method() === 'PUT'
+        && new URL(response.url()).pathname === `/api/personagens/${fixture.characterId}`);
+      await page.getByRole('button', { name: 'Salvar Alterações' }).click();
+      const response = await responsePromise;
+      expect(response.status()).toBe(200);
+      await expect(page.locator('#p-nome')).toHaveCount(0);
+    }
+
+    await page.goto(`${origin}/personagens/${fixture.characterId}`);
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    await openImport(legacy);
+    await expect(page.locator('#p-nome')).toHaveValue(legacy.nome);
+    await expect(page.locator('#p-skills-list .skill-form-item')).toHaveCount(4);
+    await expect(page.locator('#modular-blocks-container .block-builder-card')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Pré-visualizar', exact: true }).first().click();
+    await expect(page.locator('#modal-container .char-sheet-body')).toContainText('LGC-8842');
+    await page.locator('#modal-container .modal-header button').click();
+    await saveCharacter();
+
+    const legacyRow = (await sql`SELECT nome, descricao, stats, skills, blocks, theme, mascara_tier
+      FROM personagens WHERE id = ${fixture.characterId}`)[0];
+    expect(legacyRow.nome).toBe(legacy.nome);
+    expect(legacyRow.descricao).toBe(legacy.descricao);
+    expect(legacyRow.stats).toEqual(legacy.stats);
+    expect(legacyRow.skills).toEqual(legacy.skills);
+    expect(legacyRow.blocks).toEqual([]);
+    expect(legacyRow.theme).toEqual(legacy.theme);
+    expect(legacyRow.mascara_tier).toBe(legacy.mascaraTier);
+
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    await openImport(expanded);
+    await expect(page.locator('#modular-blocks-container .block-builder-card')).toHaveCount(11);
+    await page.getByRole('button', { name: 'Pré-visualizar', exact: true }).first().click();
+    await expect(page.locator('#modal-container .mod-quote-box')).toContainText('EXP-QUOTE-7319');
+    await expect(page.locator('#modal-container .mod-datalist-item')).toHaveCount(8);
+    await page.locator('#modal-container .modal-header button').click();
+    await saveCharacter();
+
+    await expect(page.locator('.mod-quote-box')).toContainText('EXP-QUOTE-7319');
+    const expandedRow = (await sql`SELECT nome, descricao, stats, skills, blocks, theme, mascara_tier
+      FROM personagens WHERE id = ${fixture.characterId}`)[0];
+    expect(expandedRow.blocks).toHaveLength(11);
+    expect(expandedRow.skills).toEqual([]);
+    expect(expandedRow.stats).toEqual(expanded.stats);
+    expect(expandedRow.theme).toEqual(expanded.theme);
+    expect(expandedRow.descricao).toBe(expanded.descricao);
+
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    await saveCharacter();
+    const noOpRow = (await sql`SELECT descricao, blocks, theme FROM personagens WHERE id = ${fixture.characterId}`)[0];
+    expect(noOpRow.descricao).toBe(expandedRow.descricao);
+    expect(noOpRow.blocks).toEqual(expandedRow.blocks);
+    expect(noOpRow.theme).toEqual(expandedRow.theme);
+
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Exportar JSON' }).click()
+    ]);
+    const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+    expect(exported.schemaVersion).toBe(1);
+    expect(exported.blocks).toHaveLength(11);
+    expect(exported.stats).toEqual(expanded.stats);
+    expect(exported.skills).toEqual([]);
+    expect(exported.theme).toEqual(expanded.theme);
+    expect(exported.descricao).toContain('EXP-7319');
+  } finally {
+    await context.close();
+  }
+});
+
+test('character JSON import preserves supported builder items with empty display labels', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    const payload = {
+      schemaVersion: 1,
+      nome: `Builder fidelity ${fixture.suffix}`,
+      descricao: '<p>Builder fidelity</p>',
+      blocks: [
+        { type: 'cards', title: 'Cards', items: [{ title: '', badge: 'Relic', color: '#ffffff', image: 'https://example.test/relic.png', desc: '' }] },
+        { type: 'stats', title: 'Stats', items: [{ label: '', value: 25, color: '#ffffff' }] },
+        { type: 'tabs', title: 'Tabs', items: [{ label: '', content: '<p>Unlabelled tab</p>' }] }
+      ]
+    };
+    await page.goto(`${origin}/personagens/${fixture.characterId}`);
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    await page.getByRole('button', { name: 'Importar JSON' }).click();
+    await page.locator('#import-char-json').fill(JSON.stringify(payload));
+    await page.getByRole('button', { name: 'Carregar Dados' }).click();
+    await expect(page.locator('#import-char-json')).toHaveCount(0);
+    const responsePromise = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/personagens/${fixture.characterId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações' }).click();
+    expect((await responsePromise).status()).toBe(200);
+    const row = (await sql`SELECT blocks FROM personagens WHERE id = ${fixture.characterId}`)[0];
+    expect(row.blocks).toHaveLength(3);
+    expect(row.blocks[0].items[0]).toEqual({ title: '', badge: 'Relic', color: '#ffffff', image: 'https://example.test/relic.png', desc: '' });
+    expect(row.blocks[1].items[0]).toEqual({ label: '', value: 25, color: '#ffffff' });
+    expect(row.blocks[2].items[0]).toEqual({ label: '', content: '<p>Unlabelled tab</p>' });
+  } finally {
+    await context.close();
+  }
+});
+
+test('character JSON rejects unsupported or unsafe payloads without changing the form', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    await page.goto(`${origin}/personagens/${fixture.characterId}`);
+    await page.getByRole('link', { name: 'Editar Ficha' }).click();
+    const before = {
+      nome: await page.inputValue('#p-nome'),
+      tier: await page.inputValue('#p-mascara-tier'),
+      stats: await page.inputValue('#p-stat-alma'),
+      skills: await page.locator('#p-skills-list .skill-form-item').count(),
+      blocks: await page.locator('#modular-blocks-container .block-builder-card').count(),
+      editor: await page.locator('#p-editor').innerText()
+    };
+
+    const invalidPayloads = [
+      { schemaVersion: 2, nome: 'Unsupported' },
+      { nome: 'Unknown field', campoInexistente: true },
+      { nome: 'Bad stat', stats: { alma: 101 } },
+      { nome: 'Bad image', imagem: 'https://example.test/a%20b.png' },
+      { nome: 'Zero width', descricao: '<p>\u200b</p>' },
+      { nome: 'Bad skill', skills: [{ nome: 'a', descricao: 'b', tipo: 'skill', lost: true }] },
+      { nome: 'Bad block', blocks: [{ type: 'not-a-block' }] }
+    ];
+    for (const payload of invalidPayloads) {
+      await page.getByRole('button', { name: 'Importar JSON' }).click();
+      await page.locator('#import-char-json').fill(JSON.stringify(payload));
+      await page.getByRole('button', { name: 'Carregar Dados' }).click();
+      await expect(page.locator('#toast-container .toast-error').last()).toBeVisible();
+      await expect(page.locator('#import-char-json')).toHaveCount(1);
+      await page.getByRole('button', { name: 'Cancelar' }).click();
+      expect(await page.inputValue('#p-nome')).toBe(before.nome);
+      expect(await page.inputValue('#p-mascara-tier')).toBe(before.tier);
+      expect(await page.inputValue('#p-stat-alma')).toBe(before.stats);
+      await expect(page.locator('#p-skills-list .skill-form-item')).toHaveCount(before.skills);
+      await expect(page.locator('#modular-blocks-container .block-builder-card')).toHaveCount(before.blocks);
+      await expect(page.locator('#p-editor')).toContainText(before.editor.slice(0, 40));
+    }
+    const row = (await sql`SELECT nome, descricao, stats, skills, blocks FROM personagens WHERE id = ${fixture.characterId}`)[0];
+    expect(row.nome).toBe(fixture.characterName);
+    expect(row.descricao).toBe(fixture.characterDescription);
+    expect(row.stats).toEqual({});
+    expect(row.skills).toEqual([]);
+    expect(row.blocks).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});
+
+test('scene JSON import and export preserve theme, infobox hidden fields, participants, and blocks', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    const sceneId = fixture.sceneIds[0];
+    const payload = {
+      schemaVersion: 1,
+      titulo: `Scene roundtrip ${fixture.suffix}`,
+      subtitulo: 'Subtitle',
+      categoria: 'Evento / Arco',
+      status: 'Hiato',
+      resumo: 'Summary',
+      banner: '',
+      descricao: '<p>Opening scene</p>',
+      theme: { accentColor: '#cc0000', bannerStyle: 'standard', layout: 'full', fontFamily: 'serif', bgEffect: 'dots', bgm: 'Theme' },
+      infobox: {
+        show: true, title: 'Info', image: '', caption: 'Caption', location: 'Hidden location', timeline: 'Hidden timeline',
+        participants: ['Doe, Jane'], fields: [{ label: 'Local', value: 'Rio' }]
+      },
+      blocks: [{ type: 'section', title: 'Extra', content: '<p>Section body</p>' }]
+    };
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await expect(page.locator('#c-titulo')).toHaveValue(fixture.sceneTitle);
+    await page.getByRole('button', { name: 'Importar JSON' }).click();
+    await page.locator('#import-cena-json').fill(JSON.stringify(payload));
+    await page.getByRole('button', { name: 'Carregar Página' }).click();
+    await expect(page.locator('#import-cena-json')).toHaveCount(0);
+    await page.evaluate(() => toggleParticipanteInput('Alice'));
+    const responsePromise = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await responsePromise).status()).toBe(200);
+    const row = (await sql`SELECT titulo, categoria, status, theme, infobox, blocks FROM wiki_posts WHERE id = ${sceneId}`)[0];
+    expect(row.titulo).toBe(payload.titulo);
+    expect(row.categoria).toBe(payload.categoria);
+    expect(row.status).toBe(payload.status);
+    expect(row.theme).toEqual(payload.theme);
+    expect(row.infobox.participants).toEqual(['Doe, Jane', 'Alice']);
+    expect(row.infobox).toEqual(Object.assign({}, payload.infobox, { participants: ['Doe, Jane', 'Alice'] }));
+    expect(row.blocks).toHaveLength(1);
+    await page.getByRole('link', { name: 'Customizar Página', exact: true }).click();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Exportar JSON' }).click()
+    ]);
+    const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+    expect(exported.schemaVersion).toBe(1);
+    expect(exported.categoria).toBe(payload.categoria);
+    expect(exported.status).toBe(payload.status);
+    expect(exported.theme).toEqual(payload.theme);
+    expect(exported.infobox).toEqual(Object.assign({}, payload.infobox, { participants: ['Doe, Jane', 'Alice'] }));
+    expect(exported.blocks).toHaveLength(1);
+  } finally {
+    await context.close();
+  }
+});
+
+test('scene participant editing preserves comma-bearing identities through add, remove, draft, save and export', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    const sceneId = fixture.sceneIds[0];
+    const rows = page.locator('#c-ib-participants-list .infobox-participant-row');
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await page.getByRole('button', { name: 'Importar JSON' }).click();
+    await page.locator('#import-cena-json').fill(JSON.stringify(sceneParticipantPayload(fixture, ['Doe, Jane'])));
+    await page.getByRole('button', { name: 'Carregar Página' }).click();
+    await expect(page.locator('#import-cena-json')).toHaveCount(0);
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0).locator('.ib-participant-name')).toHaveValue('Doe, Jane');
+
+    // Add and remove through the ordinary controls.
+    await page.getByRole('button', { name: '+ Adicionar Participante', exact: true }).click();
+    await expect(rows).toHaveCount(2);
+    await rows.nth(1).locator('.ib-participant-name').fill('Bob');
+    await expect(rows.nth(1).locator('.ib-participant-name')).toHaveValue('Bob');
+    await rows.nth(1).getByRole('button', { name: 'Remover', exact: true }).click();
+    await expect(rows).toHaveCount(1);
+
+    // The existing quick-add shortcut toggles one row, not a comma-split identity.
+    await page.evaluate(() => toggleParticipanteInput('Alice'));
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(1).locator('.ib-participant-name')).toHaveValue('Alice');
+    await page.evaluate(() => toggleParticipanteInput('Alice'));
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0).locator('.ib-participant-name')).toHaveValue('Doe, Jane');
+
+    // A comma-bearing participant and an unsaved draft survive a reload.
+    await page.getByRole('button', { name: '+ Adicionar Participante', exact: true }).click();
+    await rows.nth(1).locator('.ib-participant-name').fill('Bob, Jr.');
+    const sceneKey = resourceDraftKey(fixture.users[0].id, 'scene', sceneId);
+    await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), sceneKey)).not.toBeNull();
+    const storedDraft = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)), sceneKey);
+    expect(storedDraft.values.infobox.participants).toEqual(['Doe, Jane', 'Bob, Jr.']);
+    await page.reload();
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator('.ib-participant-name')).toHaveValue('Doe, Jane');
+    await expect(rows.nth(1).locator('.ib-participant-name')).toHaveValue('Bob, Jr.');
+
+    const saveResponse = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await saveResponse).status()).toBe(200);
+    const fresh = await (await context.request.get(`${origin}/api/wiki-posts/${sceneId}`)).json();
+    expect(fresh.wikiPost.infobox.participants).toEqual(['Doe, Jane', 'Bob, Jr.']);
+
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator('.ib-participant-name')).toHaveValue('Doe, Jane');
+    await expect(rows.nth(1).locator('.ib-participant-name')).toHaveValue('Bob, Jr.');
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Exportar JSON' }).click()
+    ]);
+    const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+    expect(exported.infobox.participants).toEqual(['Doe, Jane', 'Bob, Jr.']);
+
+    await page.getByRole('button', { name: 'Importar JSON' }).click();
+    await page.locator('#import-cena-json').fill(JSON.stringify(exported));
+    await page.getByRole('button', { name: 'Carregar Página' }).click();
+    await expect(page.locator('#import-cena-json')).toHaveCount(0);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator('.ib-participant-name')).toHaveValue('Doe, Jane');
+    await expect(rows.nth(1).locator('.ib-participant-name')).toHaveValue('Bob, Jr.');
+    const reimportResponse = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await reimportResponse).status()).toBe(200);
+    const afterReimport = await (await context.request.get(`${origin}/api/wiki-posts/${sceneId}`)).json();
+    expect(afterReimport.wikiPost.infobox.participants).toEqual(['Doe, Jane', 'Bob, Jr.']);
+  } finally {
+    await context.close();
+  }
+});
+
+test('scene participant editing preserves duplicates and hostile text, allows an empty list and defers limits to the server', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    const sceneId = fixture.sceneIds[0];
+    const rows = page.locator('#c-ib-participants-list .infobox-participant-row');
+    const hostile = '"><img src=x onerror=alert(1)>';
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await page.getByRole('button', { name: 'Importar JSON' }).click();
+    await page.locator('#import-cena-json').fill(JSON.stringify(
+      sceneParticipantPayload(fixture, ['Doe, Jane', 'Doe, Jane', hostile])));
+    await page.getByRole('button', { name: 'Carregar Página' }).click();
+    await expect(page.locator('#import-cena-json')).toHaveCount(0);
+    await expect(rows).toHaveCount(3);
+    const savedDuplicates = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await savedDuplicates).status()).toBe(200);
+    const firstRead = await (await context.request.get(`${origin}/api/wiki-posts/${sceneId}`)).json();
+    expect(firstRead.wikiPost.infobox.participants).toEqual(['Doe, Jane', 'Doe, Jane', hostile]);
+    await expect(page.locator('.custom-wiki-page .tag').filter({ hasText: hostile })).toHaveCount(1);
+    expect(await page.locator('.custom-wiki-page img[src="x"], .custom-wiki-page [onerror]').count()).toBe(0);
+
+    // Empty participant lists are valid and stay empty.
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await expect(rows).toHaveCount(3);
+    while (await rows.count()) await rows.nth(0).getByRole('button', { name: 'Remover', exact: true }).click();
+    const emptySaveResponse = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await emptySaveResponse).status()).toBe(200);
+    const emptyRead = await (await context.request.get(`${origin}/api/wiki-posts/${sceneId}`)).json();
+    expect(emptyRead.wikiPost.infobox.participants).toEqual([]);
+
+    // The client does not invent a smaller or larger limit than the server.
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await expect(page.locator('#c-ib-participants-list')).toBeAttached();
+    await page.evaluate(() => {
+      for (let index = 1; index <= 30; index += 1) addParticipanteRow(`Limit ${index}`);
+    });
+    await expect(rows).toHaveCount(30);
+    const thirtySaveResponse = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await thirtySaveResponse).status()).toBe(200);
+    const thirtyRead = await (await context.request.get(`${origin}/api/wiki-posts/${sceneId}`)).json();
+    expect(thirtyRead.wikiPost.infobox.participants).toHaveLength(30);
+
+    await page.goto(`${origin}/cenas/${sceneId}/editar`);
+    await expect(page.locator('#c-ib-participants-list')).toBeAttached();
+    await page.evaluate(() => addParticipanteRow('Overflow participant'));
+    await expect(rows).toHaveCount(31);
+    await clearToasts(page);
+    const overflowResponse = page.waitForResponse((response) => response.request().method() === 'PUT'
+      && new URL(response.url()).pathname === `/api/wiki-posts/${sceneId}`);
+    await page.getByRole('button', { name: 'Salvar Alterações da Página' }).click();
+    expect((await overflowResponse).status()).toBe(400);
+    await expect(page.locator('#toast-container .toast-error').last()).toBeVisible();
+    const unchanged = await sql`SELECT infobox FROM wiki_posts WHERE id = ${sceneId}`;
+    expect(unchanged[0].infobox.participants).toHaveLength(30);
+    expect(unchanged[0].infobox.participants).not.toContain('Overflow participant');
+  } finally {
+    await context.close();
+  }
+});
+
+function sceneParticipantPayload(f, participants) {
+  return {
+    schemaVersion: 1,
+    titulo: `Participant scene ${f.suffix}`,
+    subtitulo: 'Participant identity test',
+    categoria: 'Cena de RPG',
+    status: 'Em Andamento',
+    resumo: 'Synthetic participant fixture',
+    banner: '',
+    descricao: '<p>Synthetic participant opening.</p>',
+    theme: { accentColor: '#ffffff', bannerStyle: 'none', layout: 'sidebar-left', fontFamily: 'serif', bgEffect: 'none', bgm: '' },
+    infobox: { show: true, title: 'Participantes', image: '', caption: '', participants, fields: [] },
+    blocks: []
+  };
+}
+
+test('navigation controls expose real URLs, open in new tabs, and survive direct reloads', async ({ browser }) => {
+  const context = await isolatedContext(browser);
+  try {
+    const page = await context.newPage();
+    await login(page, fixture.users[0]);
+    await page.goto(`${origin}/personagens`);
+    await expect(page.locator('#nav-bar a[href="/wiki"]')).toHaveCount(1);
+    const charLink = page.locator(`a.char-card[href="/personagens/${fixture.characterId}"]`);
+    await expect(charLink).toHaveCount(1);
+    await expect(charLink).toHaveAttribute('href', `/personagens/${fixture.characterId}`);
+
+    const [newTab] = await Promise.all([
+      context.waitForEvent('page'),
+      charLink.click({ button: 'middle' })
+    ]);
+    await newTab.waitForLoadState('domcontentloaded');
+    expect(new URL(newTab.url()).pathname).toBe(`/personagens/${fixture.characterId}`);
+    await newTab.close();
+
+    await charLink.click();
+    await expect(page).toHaveURL(`${origin}/personagens/${fixture.characterId}`);
+
+    await page.goto(`${origin}/perfil`);
+    await expect(page.locator('#prof-title')).toBeVisible();
+    await page.goto(`${origin}/personagens/novo`);
+    await expect(page.locator('#p-nome')).toHaveValue('');
+    await page.goto(`${origin}/personagens/${fixture.characterId}/editar`);
+    await expect(page.locator('#p-nome')).toHaveValue(fixture.characterName);
+    await page.goto(`${origin}/cenas/nova`);
+    await expect(page.locator('#c-titulo')).toBeVisible();
+    await page.goto(`${origin}/cenas/${fixture.sceneIds[0]}/editar`);
+    await expect(page.locator('#c-titulo')).toHaveValue(fixture.sceneTitle);
+    await page.goto(`${origin}/forum/categorias/${fixture.categoryId}/novo`);
+    await expect(page.locator('#thread-title')).toBeVisible();
+    await page.goto(`${origin}/forum/topicos/${fixture.threadId}/editar`);
+    await expect(page.locator('#thread-title')).toHaveValue(fixture.threadTitle);
+
+    const guest = await browser.newContext();
+    try {
+      const guestPage = await guest.newPage();
+      await guestPage.goto(`${origin}/sobre`);
+      await expect(guestPage.locator('.cat-header').first()).toContainText('Sobre o Projeto');
+      await guestPage.goto(`${origin}/registro`);
+      await expect(guestPage.locator('#reg-username')).toBeVisible();
+    } finally {
+      await guest.close();
+    }
   } finally {
     await context.close();
   }
@@ -196,7 +788,7 @@ test('UI-02 turn drafts are per scene and hostile character drafts are sanitized
     const previewResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/content/preview');
     await page.goto(`${origin}/personagens`);
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Personagem', exact: true }).click();
     const previewResponse = await previewResponsePromise;
     expect(previewResponse.status()).toBe(200);
     const safePreview = await previewResponse.json();
@@ -219,7 +811,7 @@ test('UI-02 rapid double clicks send at most one create POST for each resource f
 
     const characterPost = await countDelayedPost(page, '**/api/personagens');
     await page.goto(`${origin}/personagens`);
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Personagem', exact: true }).click();
     await page.locator('#p-nome').fill(`Single character ${fixture.suffix}`);
     await page.locator('#p-editor').fill(`Character content ${fixture.suffix}`);
     const characterResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
@@ -232,7 +824,7 @@ test('UI-02 rapid double clicks send at most one create POST for each resource f
 
     const scenePost = await countDelayedPost(page, '**/api/wiki-posts');
     await page.goto(`${origin}/cenas`);
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
+    await page.getByRole('link', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     await page.locator('#c-titulo').fill(`Single scene ${fixture.suffix}`);
     await page.locator('#c-editor').fill(`Scene opening ${fixture.suffix}`);
     const sceneResponsePromise = page.waitForResponse((response) => response.request().method() === 'POST'
@@ -292,7 +884,7 @@ test('UI-02 failed profile, create, turn, and post-edit requests report errors a
 
     const characterName = `Character rejected ${fixture.suffix}`;
     await page.goto(`${origin}/personagens`);
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Personagem', exact: true }).click();
     await page.locator('#p-nome').fill(characterName);
     await page.locator('#p-editor').fill(`Character draft ${fixture.suffix}`);
     const characterKey = resourceDraftKey(fixture.users[0].id, 'character', 'new');
@@ -307,7 +899,6 @@ test('UI-02 failed profile, create, turn, and post-edit requests report errors a
     await page.unroute('**/api/personagens', characterFailure.handler);
     await expectStoredDraft(page, characterKey, fixture.users[0].id, 'character');
     await page.reload();
-    await page.getByRole('button', { name: '+ Novo Personagem', exact: true }).click();
     await expect(page.locator('#p-nome')).toHaveValue(characterName);
     await expect(page.locator('#p-editor')).toContainText(`Character draft ${fixture.suffix}`);
     const createdCharacters = await sql`SELECT id FROM personagens WHERE author_id = ${fixture.users[0].id} AND nome = ${characterName}`;
@@ -315,7 +906,7 @@ test('UI-02 failed profile, create, turn, and post-edit requests report errors a
 
     const sceneTitle = `Scene rejected ${fixture.suffix}`;
     await page.goto(`${origin}/cenas`);
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
+    await page.getByRole('link', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     await page.locator('#c-titulo').fill(sceneTitle);
     await page.locator('#c-editor').fill(`Scene draft ${fixture.suffix}`);
     const sceneKey = resourceDraftKey(fixture.users[0].id, 'scene', 'new');
@@ -330,7 +921,6 @@ test('UI-02 failed profile, create, turn, and post-edit requests report errors a
     await page.unroute('**/api/wiki-posts', sceneFailure.handler);
     await expectStoredDraft(page, sceneKey, fixture.users[0].id, 'scene');
     await page.reload();
-    await page.getByRole('button', { name: '+ Nova Cena / Post Customizável', exact: true }).click();
     await expect(page.locator('#c-titulo')).toHaveValue(sceneTitle);
     await expect(page.locator('#c-editor')).toContainText(`Scene draft ${fixture.suffix}`);
     const createdScenes = await sql`SELECT id FROM wiki_posts WHERE author_id = ${fixture.users[0].id} AND titulo = ${sceneTitle}`;
@@ -399,7 +989,7 @@ test('UI-02 failed character, scene, and turn edits keep drafts without changing
 
     const characterName = `Edited character draft ${fixture.suffix}`;
     await page.goto(`${origin}/personagens/${fixture.characterId}`);
-    await page.getByRole('button', { name: 'Editar Ficha', exact: true }).click();
+    await page.getByRole('link', { name: 'Editar Ficha', exact: true }).click();
     await page.locator('#p-nome').fill(characterName);
     await page.locator('#p-editor').fill(`Edited character description ${fixture.suffix}`);
     const characterKey = resourceDraftKey(fixture.users[0].id, 'character', fixture.characterId);
@@ -416,7 +1006,7 @@ test('UI-02 failed character, scene, and turn edits keep drafts without changing
     await expectStoredDraft(page, characterKey, fixture.users[0].id, 'character');
     await page.reload();
     await page.goto(`${origin}/personagens/${fixture.characterId}`);
-    await page.getByRole('button', { name: 'Editar Ficha', exact: true }).click();
+    await page.getByRole('link', { name: 'Editar Ficha', exact: true }).click();
     await expect(page.locator('#p-nome')).toHaveValue(characterName);
     await expect(page.locator('#p-editor')).toContainText(`Edited character description ${fixture.suffix}`);
     const unchangedCharacter = await sql`SELECT nome, descricao, version FROM personagens WHERE id = ${fixture.characterId}`;
@@ -425,7 +1015,7 @@ test('UI-02 failed character, scene, and turn edits keep drafts without changing
     const sceneTitle = `Edited scene draft ${fixture.suffix}`;
     const scenePath = `/api/wiki-posts/${fixture.sceneIds[0]}`;
     await page.goto(`${origin}/cenas/${fixture.sceneIds[0]}`);
-    await page.getByRole('button', { name: 'Customizar Página', exact: true }).click();
+    await page.getByRole('link', { name: 'Customizar Página', exact: true }).click();
     await page.locator('#c-titulo').fill(sceneTitle);
     await page.locator('#c-editor').fill(`Edited scene opening ${fixture.suffix}`);
     const sceneKey = resourceDraftKey(fixture.users[0].id, 'scene', fixture.sceneIds[0]);
@@ -441,7 +1031,7 @@ test('UI-02 failed character, scene, and turn edits keep drafts without changing
     await expectStoredDraft(page, sceneKey, fixture.users[0].id, 'scene');
     await page.reload();
     await page.goto(`${origin}/cenas/${fixture.sceneIds[0]}`);
-    await page.getByRole('button', { name: 'Customizar Página', exact: true }).click();
+    await page.getByRole('link', { name: 'Customizar Página', exact: true }).click();
     await expect(page.locator('#c-titulo')).toHaveValue(sceneTitle);
     await expect(page.locator('#c-editor')).toContainText(`Edited scene opening ${fixture.suffix}`);
     const unchangedScene = await sql`SELECT titulo, descricao, version FROM wiki_posts WHERE id = ${fixture.sceneIds[0]}`;
@@ -490,7 +1080,7 @@ test('UI-02 failed forum topic, topic edit, and reply submissions restore accoun
     const topicTitle = `Rejected topic ${fixture.suffix}`;
     const topicContent = `Topic body draft ${fixture.suffix}`;
     await page.goto(`${origin}/forum/categorias/${fixture.categoryId}`);
-    await page.getByRole('button', { name: '+ Novo Tópico', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Tópico', exact: true }).click();
     await page.locator('#thread-title').fill(topicTitle);
     await page.locator('#thread-tag').selectOption('rp');
     await page.locator('#thread-editor').fill(topicContent);
@@ -508,7 +1098,7 @@ test('UI-02 failed forum topic, topic edit, and reply submissions restore accoun
     await expectStoredForumDraft(page, topicKey, fixture.users[0].id, 'topic', 'new');
     await page.reload();
     await page.goto(`${origin}/forum/categorias/${fixture.categoryId}`);
-    await page.getByRole('button', { name: '+ Novo Tópico', exact: true }).click();
+    await page.getByRole('link', { name: '+ Novo Tópico', exact: true }).click();
     await expect(page.locator('#thread-title')).toHaveValue(topicTitle);
     await expect(page.locator('#thread-tag')).toHaveValue('rp');
     await expect(page.locator('#thread-editor')).toContainText(topicContent);
@@ -517,7 +1107,7 @@ test('UI-02 failed forum topic, topic edit, and reply submissions restore accoun
 
     const editedTopicTitle = `Edited topic draft ${fixture.suffix}`;
     await page.goto(`${origin}/forum/topicos/${fixture.threadId}`);
-    await page.locator('#main').getByRole('button', { name: 'Editar', exact: true }).click();
+    await page.locator('#main').getByRole('link', { name: 'Editar', exact: true }).click();
     await page.locator('#thread-title').fill(editedTopicTitle);
     await page.locator('#thread-tag').selectOption('wiki');
     const topicEditKey = forumDraftKey(fixture.users[0].id, 'topic-edit', fixture.threadId);
@@ -533,7 +1123,7 @@ test('UI-02 failed forum topic, topic edit, and reply submissions restore accoun
     await expectStoredForumDraft(page, topicEditKey, fixture.users[0].id, 'topic-edit', fixture.threadId);
     await page.reload();
     await page.goto(`${origin}/forum/topicos/${fixture.threadId}`);
-    await page.locator('#main').getByRole('button', { name: 'Editar', exact: true }).click();
+    await page.locator('#main').getByRole('link', { name: 'Editar', exact: true }).click();
     await expect(page.locator('#thread-title')).toHaveValue(editedTopicTitle);
     await expect(page.locator('#thread-tag')).toHaveValue('wiki');
     const unchangedTopic = await sql`SELECT title, tag, version FROM threads WHERE id = ${fixture.threadId}`;
@@ -742,6 +1332,7 @@ async function makeFixture() {
     sceneDescription: '<p>Synthetic browser fixture.</p>',
     categoryId: null,
     threadId: null,
+    threadTitle: `UI drafts topic ${suffix}`,
     postId: randomUUID(),
     forumOpening: `Synthetic forum opening ${suffix}`,
   };
@@ -804,7 +1395,7 @@ async function makeFixture() {
         VALUES (${`UI drafts forum ${suffix}`}, 'Synthetic fixture for UI draft error recovery') RETURNING id`;
       f.categoryId = categoryRows[0].id;
       const threadRows = await tx`INSERT INTO threads (category_id, author_id, title, tag)
-        VALUES (${f.categoryId}, ${f.users[0].id}, ${`UI drafts topic ${suffix}`}, 'draft') RETURNING id`;
+        VALUES (${f.categoryId}, ${f.users[0].id}, ${f.threadTitle}, 'draft') RETURNING id`;
       f.threadId = threadRows[0].id;
       await tx`INSERT INTO posts (id, thread_id, author_id, content, post_no)
         VALUES (${f.postId}, ${f.threadId}, ${f.users[0].id}, ${`<p>${f.forumOpening}</p>`}, 1)`;
