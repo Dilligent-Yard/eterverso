@@ -132,6 +132,8 @@ label {
 }
 
 #logo-bar {
+  text-decoration: none;
+  color: inherit;
   cursor: pointer;
   user-select: none;
 }
@@ -150,7 +152,7 @@ label {
   flex-wrap: wrap;
 }
 
-#nav-bar button {
+#nav-bar a, #nav-bar button {
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-secondary);
@@ -160,12 +162,12 @@ label {
   font-weight: 500;
 }
 
-#nav-bar button:hover {
+#nav-bar a:hover, #nav-bar button:hover {
   color: #ffffff;
   background: rgba(255, 255, 255, 0.05);
 }
 
-#nav-bar button.active {
+#nav-bar a.active, #nav-bar button.active {
   background: #ffffff;
   color: #000000;
   border-color: #ffffff;
@@ -685,6 +687,11 @@ label {
 
 .char-grid .char-card {
   margin-bottom: 0;
+}
+
+a.char-card, a.cena-card, a.tag {
+  text-decoration: none;
+  color: inherit;
 }
 
 .char-card:hover {

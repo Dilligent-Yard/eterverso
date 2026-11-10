@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '../..');
 const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+const bundleSource = fs.readFileSync(path.join(ROOT, 'generated/client/vault.js'), 'utf8');
 const editorSource = fs.readFileSync(path.join(ROOT, 'editor.js'), 'utf8');
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
@@ -45,9 +46,10 @@ function makeFrontend(options = {}) {
     querySelector: () => null,
     querySelectorAll: () => [],
   };
-  const context = { window, document, URL, console, setTimeout, clearTimeout };
+  const context = { window, document, URL, URLSearchParams, console, setTimeout, clearTimeout };
   vm.createContext(context);
   vm.runInContext(editorSource, context, { filename: 'editor.js' });
+  vm.runInContext(bundleSource, context, { filename: 'vault.js' });
   vm.runInContext(appSource, context, { filename: 'app.js' });
   context.__storage = storage;
   context.__elements = elements;

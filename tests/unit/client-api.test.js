@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const sourcePath = path.join(__dirname, '..', '..', 'client', 'api.js');
 const source = fs.readFileSync(sourcePath, 'utf8');
+const bundleSource = fs.readFileSync(path.join(__dirname, '..', '..', 'generated', 'client', 'vault.js'), 'utf8');
 const TOKEN_A = 'a'.repeat(43);
 const TOKEN_B = 'b'.repeat(43);
 const TOKEN_C = 'c'.repeat(43);
@@ -36,6 +37,7 @@ function loadApi(fetch) {
     location: { href: 'http://localhost:3000/forum' },
   };
   const context = { window, URL, Promise, Error, setTimeout };
+  vm.runInNewContext(bundleSource, context, { filename: 'vault.js' });
   const globalsBefore = Object.keys(context).sort();
   vm.runInNewContext(source, context, { filename: 'client/api.js' });
   assert.deepEqual(Object.keys(context).sort(), globalsBefore, 'script should not add global exports');
@@ -225,4 +227,29 @@ test('API errors preserve bounded public status/code for conflict handling witho
   assert.deepEqual(callback.calls, [['A prévia mudou.', undefined]]);
   const unsafe = loadApi(async () => response(400, { error: 'Erro público.', code: 'invalid\nprivate' }));
   await assert.rejects(unsafe.apiRequest('GET', '/api/wiki/pages'), error => error.status === 400 && error.code === undefined);
+});
+
+test('a stale 401 cannot clear a session established after the request started', async () => {
+  let resolveResponse;
+  const api = loadApi((url) => new Promise((resolve) => {
+    resolveResponse = () => resolve(response(401, { error: 'Sessão antiga.' }));
+  }));
+  api.setSessionUser({ id: 'user-a', username: 'Ana', role: 'member' });
+  const pending = api.apiRequest('GET', '/api/private').catch((error) => error);
+  await Promise.resolve();
+  await Promise.resolve();
+  api.setSessionUser({ id: 'user-b', username: 'Bia', role: 'member' });
+  resolveResponse();
+  const error = await pending;
+
+  assert.equal(error.status, 401);
+  assert.equal(api.getSessionUser().id, 'user-b', 'the new session must survive an old request failure');
+});
+
+test('a current 401 still expires the active session', async () => {
+  const api = loadApi(async () => response(401, { error: 'Sessão atual.' }));
+  api.setSessionUser({ id: 'user-b', username: 'Bia', role: 'member' });
+
+  await assert.rejects(api.apiRequest('GET', '/api/private'), (error) => error.status === 401);
+  assert.equal(api.getSessionUser(), null);
 });

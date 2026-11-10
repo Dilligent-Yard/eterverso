@@ -125,14 +125,14 @@ test('injected app serves allowlisted recovery assets and preserves existing API
   assert.equal(queries.length, 2);
 });
 
-test('startup schema readiness accepts the exact isolated 0015 schema using read-only checks', async (context) => {
+test('startup schema readiness accepts the exact isolated 0017 schema using read-only checks', async (context) => {
   const databaseUrl = process.env.ETERVERSO_TEST_DATABASE_URL;
   assert.ok(databaseUrl, 'the guarded runner must provide the isolated test database');
   const sql = postgres(databaseUrl, { prepare: false, max: 1, connect_timeout: 5, idle_timeout: 1, connection: { timezone: 'UTC' } });
   context.after(async () => sql.end({ timeout: 5 }));
 
   const readiness = await verifySchemaReadiness(sql);
-  assert.deepEqual(readiness, { migration: '0015_wiki_sections', verifiedColumns: 33 });
+  assert.deepEqual(readiness, { migration: '0017_timeline_events', verifiedColumns: 36 });
 });
 
 test('signup maps the postgres constraint_name from a concurrent uniqueness violation', async (context) => {

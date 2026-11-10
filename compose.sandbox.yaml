@@ -1,0 +1,27 @@
+name: eterverso-public-sandbox
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: eterverso-public-sandbox-db-1
+    environment:
+      POSTGRES_DB: eterverso_public_sandbox
+      POSTGRES_USER: eterverso_sandbox
+      POSTGRES_PASSWORD: ${ETERVERSO_SANDBOX_DB_PASSWORD:?run node scripts/public-sandbox.js provision first}
+    ports:
+      - "127.0.0.1:55434:5432"
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eterverso_sandbox -d eterverso_public_sandbox"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    labels:
+      io.eterverso.purpose: public-sandbox
+
+volumes:
+  sandbox-data:
+    name: eterverso-public-sandbox-data
+    labels:
+      io.eterverso.purpose: public-sandbox

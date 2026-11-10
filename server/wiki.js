@@ -1177,6 +1177,7 @@ module.exports = {
   lockPage,
   normalizeSlug,
   publicPageDto,
+  retainedRevisionCitations,
   revisionDiff,
   saveRevisionIndexes,
   validateWikiSnapshot,

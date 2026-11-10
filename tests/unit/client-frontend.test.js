@@ -9,6 +9,7 @@ const test = require('node:test');
 const ROOT = path.resolve(__dirname, '../..');
 const editorSource = fs.readFileSync(path.join(ROOT, 'editor.js'), 'utf8');
 const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+const bundleSource = fs.readFileSync(path.join(ROOT, 'generated/client/vault.js'), 'utf8');
 const USER_A = '11111111-1111-4111-8111-111111111111';
 const USER_B = '22222222-2222-4222-8222-222222222222';
 
@@ -26,6 +27,7 @@ function makeFrontend(options = {}) {
     querySelector: () => null,
     querySelectorAll: () => [],
   };
+  const listeners = {};
   const window = {
     location: { href: 'http://localhost:3000/forum' },
     localStorage: {
@@ -39,21 +41,108 @@ function makeFrontend(options = {}) {
       setSessionUser: (user) => Object.assign({}, user),
       clearSessionUser: () => {},
     }, options.api || {}),
-    addEventListener: () => {},
+    addEventListener: (type, handler) => { listeners[type] = handler; },
     scrollTo: () => {},
+    confirm: () => true,
   };
   const context = { window, document, URL, console, setTimeout, clearTimeout };
   vm.createContext(context);
   vm.runInContext(editorSource, context, { filename: 'editor.js' });
+  vm.runInContext(bundleSource, context, { filename: 'vault.js' });
   vm.runInContext(appSource, context, { filename: 'app.js' });
   context.__elements = elements;
   context.__store = store;
   context.__main = main;
+  context.__listeners = listeners;
   return context;
 }
 
 function field(value = '') {
   return { value, innerHTML: '', textContent: '', style: { display: 'block' }, disabled: false };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+function flushMicrotasks() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function replyRequestContext() {
+  const requests = [];
+  const context = makeFrontend({
+    apiRequest: (method, route, body, callback, requestOptions) => {
+      const request = deferred();
+      requests.push(Object.assign({ method, route, body, requestOptions }, request));
+      return request.promise;
+    },
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana' };
+  context.currentPage = 'thread';
+  context.currentThread = 'thread-a';
+  context.__elements['reply-editor'] = field();
+  context.__elements['reply-editor'].innerHTML = '<p>Resposta A.</p>';
+  context.showAlert = () => {};
+  context.render = () => {};
+  return { context, requests };
+}
+
+function forumPost(postNo, extra = {}) {
+  return Object.assign({
+    id: `post-${postNo}`,
+    threadId: 'thread-a',
+    postNo,
+    version: 1,
+    content: `<p>Post ${postNo}</p>`,
+    deleted: false,
+    edited: false,
+    author: { id: USER_A, username: 'Ana', role: 'member' },
+  }, extra);
+}
+
+function forumThreadContext() {
+  const requests = [];
+  const context = makeFrontend({
+    apiRequest: (method, route, body) => {
+      const request = deferred();
+      requests.push(Object.assign({ method, route, body }, request));
+      return request.promise;
+    },
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana', role: 'member' };
+  context.currentPage = 'thread';
+  context.currentThread = 'thread-a';
+  context.serverForumThread = { id: 'thread-a', title: 'Conversa A', locked: false };
+  context.serverForumPosts = Array.from({ length: 20 }, (_, index) => forumPost(index + 1));
+  context.serverForumPendingReply = forumPost(41, { content: '<p>Resposta 41</p>' });
+  context.serverForumPendingReplyAccountId = USER_A;
+  context.serverForumPostsPage = { limit: 20, offset: 0, hasMore: true };
+  context.showAlert = () => {};
+  context.render = () => {};
+  context.closeModal = () => {};
+  context.getEditorContent = () => '<p>Resposta 41 editada</p>';
+  context.resourceFormDraftDescriptor = () => null;
+  context.saveActiveResourceFormDraft = () => null;
+  context.beginResourceFormSubmission = () => () => {};
+  context.__elements['edit-post-summary'] = field('Resumo sintético');
+  context.confirm = () => true;
+  context.window.prompt = () => 'Motivo sintético';
+  return { context, requests };
+}
+
+function resolveForumReads(requests, threadId, offset) {
+  const threadRead = requests.find((request) => request.method === 'GET'
+    && request.route === `/api/forum/threads/${threadId}`);
+  const postsRead = requests.find((request) => request.method === 'GET'
+    && request.route === `/api/forum/threads/${threadId}/posts?limit=20&offset=${offset}`);
+  assert.ok(threadRead, `expected a thread read for ${threadId}`);
+  assert.ok(postsRead, `expected a posts read for offset ${offset}`);
+  threadRead.resolve({ data: { id: threadId, title: `Conversa ${threadId}`, locked: false } });
+  return postsRead;
 }
 
 test('rich-text editor URLs allow intended HTTP(S)/local links and HTTPS/allowlisted images only', () => {
@@ -168,6 +257,412 @@ test('reply drafts survive failed requests and clear after a successful post', a
   assert.equal(context.readForumDraft('reply', 'thread-1'), null);
 });
 
+test('reply completion clears only the submitting draft and leaves another thread cache intact', async () => {
+  const { context, requests } = replyRequestContext();
+  const keyA = `aetherverse:forum-draft:v1:${USER_A}:reply:thread-a`;
+  const keyB = `aetherverse:forum-draft:v1:${USER_A}:reply:thread-b`;
+  context.writeForumDraft('reply', 'thread-b', { content: '<p>Rascunho da conversa B.</p>' });
+
+  context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+  assert.ok(postRequest, 'submitReply must issue the POST');
+  assert.equal(postRequest.route, '/api/forum/threads/thread-a/posts');
+
+  // The user opens another conversation while A's POST is still pending.
+  context.currentThread = 'thread-b';
+  context.serverForumThread = { id: 'thread-b' };
+  context.serverForumPosts = [{ id: 'post-b1', threadId: 'thread-b', postNo: 1 }];
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41 } });
+  await flushMicrotasks();
+
+  assert.equal(context.__store.has(keyA), false, 'the successfully submitted draft is cleared');
+  const storedB = JSON.parse(context.__store.get(keyB));
+  assert.equal(storedB.values.content, '<p>Rascunho da conversa B.</p>');
+  assert.equal(context.serverForumThread.id, 'thread-b');
+  assert.deepEqual(context.serverForumPosts.map((post) => post.id), ['post-b1']);
+  assert.equal(context.serverForumPendingReply, null);
+  assert.equal(context.pendingReplyKey, null);
+  assert.equal(context.pendingReplyPayload, null);
+});
+
+test('reply completion checks ownership again after the follow-up read', async () => {
+  const { context, requests } = replyRequestContext();
+  const completion = context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41 } });
+  await flushMicrotasks();
+
+  const threadRead = requests.find((request) => request.method === 'GET' && request.route === '/api/forum/threads/thread-a');
+  const postsRead = requests.find((request) => request.method === 'GET' && request.route.includes('/posts?'));
+  assert.ok(threadRead && postsRead, 'the successful reply must trigger a fresh thread read');
+
+  // Navigation happens after the POST completed but before its GETs resolve.
+  context.currentThread = 'thread-b';
+  context.serverForumThread = { id: 'thread-b' };
+  context.serverForumPosts = [{ id: 'post-b1', threadId: 'thread-b', postNo: 1 }];
+  threadRead.resolve({ data: { id: 'thread-a', title: 'Conversa A' } });
+  postsRead.resolve({
+    data: [{ id: 'post-a1', threadId: 'thread-a', postNo: 1 }],
+    page: { limit: 20, offset: 0, hasMore: false },
+  });
+  await completion;
+  await flushMicrotasks();
+
+  assert.equal(context.serverForumThread.id, 'thread-b');
+  assert.deepEqual(context.serverForumPosts.map((post) => post.id), ['post-b1']);
+  assert.equal(context.serverForumPendingReply, null);
+  const html = context.renderThread();
+  assert.equal(html.includes('post-a41'), false);
+  assert.equal(html.includes('Resposta A.'), false);
+});
+
+test('reply completion does not reuse or clear another account pending submission', async () => {
+  const { context, requests } = replyRequestContext();
+  const keyA = `aetherverse:forum-draft:v1:${USER_A}:reply:thread-a`;
+  const keyB = `aetherverse:forum-draft:v1:${USER_B}:reply:thread-b`;
+  context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+
+  context.DB.session = { id: USER_B, serverId: USER_B, username: 'Bia' };
+  context.currentThread = 'thread-b';
+  context.serverForumThread = { id: 'thread-b' };
+  context.serverForumPosts = [{ id: 'post-b1', threadId: 'thread-b', postNo: 1 }];
+  context.pendingReplyKey = '22222222-2222-4222-8222-222222222222';
+  context.pendingReplyPayload = '{"content":"<p>Pendente de B.</p>"}';
+  context.pendingReplyThreadId = 'thread-b';
+  context.pendingReplyAccountId = USER_B;
+  context.writeForumDraft('reply', 'thread-b', { content: '<p>Pendente de B.</p>' });
+
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41 } });
+  await flushMicrotasks();
+
+  assert.equal(context.pendingReplyKey, '22222222-2222-4222-8222-222222222222');
+  assert.equal(context.pendingReplyPayload, '{"content":"<p>Pendente de B.</p>"}');
+  assert.equal(context.pendingReplyThreadId, 'thread-b');
+  assert.equal(context.pendingReplyAccountId, USER_B);
+  assert.equal(JSON.parse(context.__store.get(keyB)).values.content, '<p>Pendente de B.</p>');
+  assert.equal(context.__store.has(keyA), false);
+  assert.equal(context.serverForumThread.id, 'thread-b');
+  assert.deepEqual(context.serverForumPosts.map((post) => post.id), ['post-b1']);
+});
+
+test('a late reply read failure does not throw and keeps the published reply recoverable', async () => {
+  const { context, requests } = replyRequestContext();
+  const keyA = `aetherverse:forum-draft:v1:${USER_A}:reply:thread-a`;
+  const completion = context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41 } });
+  await flushMicrotasks();
+
+  const threadRead = requests.find((request) => request.method === 'GET' && request.route === '/api/forum/threads/thread-a');
+  const postsRead = requests.find((request) => request.method === 'GET' && request.route.includes('/posts?'));
+  threadRead.reject(new Error('offline'));
+  postsRead.reject(new Error('offline'));
+  await completion;
+  await flushMicrotasks();
+
+  assert.equal(context.__store.has(keyA), false);
+  assert.match(context.forumLoadError, /offline/);
+  assert.equal(context.serverForumPosts, null);
+  assert.equal(context.serverForumPendingReply.id, 'post-a41');
+
+  context.loadForumThread('thread-a', { force: true, offset: 0, reset: true });
+  const retriedThreadRead = requests.filter((request) => request.method === 'GET' && request.route === '/api/forum/threads/thread-a').pop();
+  const retriedPostsRead = requests.filter((request) => request.method === 'GET' && request.route.includes('/posts?')).pop();
+  retriedThreadRead.resolve({ data: { id: 'thread-a', title: 'Conversa A' } });
+  retriedPostsRead.resolve({
+    data: [{ id: 'post-a1', threadId: 'thread-a', postNo: 1 }],
+    page: { limit: 20, offset: 0, hasMore: false },
+  });
+  await flushMicrotasks();
+  assert.equal(context.serverForumPendingReply.id, 'post-a41');
+  assert.deepEqual(context.serverForumPosts.map((post) => post.id), ['post-a1']);
+});
+
+test('a newer same-thread reply draft survives an older reply completing', async () => {
+  const { context, requests } = replyRequestContext();
+  const keyA = `aetherverse:forum-draft:v1:${USER_A}:reply:thread-a`;
+  const completion = context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+
+  context.__elements['reply-editor'].innerHTML = '<p>Rascunho mais novo.</p>';
+  context.saveActiveForumDraft();
+  assert.equal(context.pendingReplyKey, null, 'editing after submit ends the old retry identity');
+
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41 } });
+  await flushMicrotasks();
+  const threadRead = requests.find((request) => request.method === 'GET' && request.route === '/api/forum/threads/thread-a');
+  const postsRead = requests.find((request) => request.method === 'GET' && request.route.includes('/posts?'));
+  threadRead.resolve({ data: { id: 'thread-a', title: 'Conversa A' } });
+  postsRead.resolve({
+    data: [{ id: 'post-a1', threadId: 'thread-a', postNo: 1 }],
+    page: { limit: 20, offset: 0, hasMore: false },
+  });
+  await completion;
+  await flushMicrotasks();
+
+  const stored = JSON.parse(context.__store.get(keyA));
+  assert.equal(stored.values.content, '<p>Rascunho mais novo.</p>');
+  assert.equal(context.pendingReplyKey, null);
+  assert.equal(context.serverForumPendingReply.id, 'post-a41');
+});
+
+test('an ordinary reply success clears its draft and renders the pending reply once', async () => {
+  const { context, requests } = replyRequestContext();
+  const keyA = `aetherverse:forum-draft:v1:${USER_A}:reply:thread-a`;
+  const completion = context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41, content: '<p>Resposta A.</p>' } });
+  await flushMicrotasks();
+
+  const threadRead = requests.find((request) => request.method === 'GET' && request.route === '/api/forum/threads/thread-a');
+  const postsRead = requests.find((request) => request.method === 'GET' && request.route.includes('/posts?'));
+  threadRead.resolve({ data: { id: 'thread-a', title: 'Conversa A' } });
+  postsRead.resolve({
+    data: [{ id: 'post-a1', threadId: 'thread-a', postNo: 1 }],
+    page: { limit: 20, offset: 0, hasMore: false },
+  });
+  await completion;
+  await flushMicrotasks();
+
+  assert.equal(context.__store.has(keyA), false);
+  assert.equal(context.serverForumThread.id, 'thread-a');
+  assert.deepEqual(context.serverForumPosts.map((post) => post.id), ['post-a1']);
+  assert.equal(context.serverForumPendingReply.id, 'post-a41');
+  const html = context.renderThread();
+  assert.equal((html.match(/post-number">#41</g) || []).length, 1);
+  assert.equal((html.match(/Resposta A\./g) || []).length, 1);
+});
+
+test('a reloaded page that already contains the reply does not render it twice', async () => {
+  const { context, requests } = replyRequestContext();
+  const completion = context.submitReply();
+  const postRequest = requests.find((request) => request.method === 'POST');
+  postRequest.resolve({ data: { id: 'post-a41', threadId: 'thread-a', postNo: 41 } });
+  await flushMicrotasks();
+
+  const threadRead = requests.find((request) => request.method === 'GET' && request.route === '/api/forum/threads/thread-a');
+  const postsRead = requests.find((request) => request.method === 'GET' && request.route.includes('/posts?'));
+  threadRead.resolve({ data: { id: 'thread-a', title: 'Conversa A' } });
+  postsRead.resolve({
+    data: [{ id: 'post-a1', threadId: 'thread-a', postNo: 1 }, { id: 'post-a41', threadId: 'thread-a', postNo: 41 }],
+    page: { limit: 20, offset: 0, hasMore: false },
+  });
+  await completion;
+  await flushMicrotasks();
+
+  assert.equal(context.serverForumPendingReply, null);
+  const html = context.renderThread();
+  assert.equal((html.match(/post-number">#41</g) || []).length, 1);
+});
+
+test('reply retries keep the idempotency key for the same account and thread but not across threads', async () => {
+  const { context, requests } = replyRequestContext();
+  const firstCompletion = context.submitReply();
+  const firstPost = requests.find((request) => request.method === 'POST');
+  const firstKey = firstPost.requestOptions.headers['Idempotency-Key'];
+  assert.match(firstKey, /^[0-9a-f-]{36}$/i);
+  firstPost.reject(new Error('offline'));
+  await firstCompletion;
+  assert.equal(context.readForumDraft('reply', 'thread-a').idempotencyKey, firstKey);
+
+  const secondCompletion = context.submitReply();
+  const secondPost = requests.filter((request) => request.method === 'POST').pop();
+  assert.equal(secondPost.requestOptions.headers['Idempotency-Key'], firstKey);
+
+  context.currentThread = 'thread-b';
+  context.__elements['reply-editor'].innerHTML = '<p>Resposta A.</p>';
+  context.submitReply();
+  const thirdPost = requests.filter((request) => request.method === 'POST').pop();
+  assert.notEqual(thirdPost.requestOptions.headers['Idempotency-Key'], firstKey);
+  secondPost.resolve({});
+  thirdPost.resolve({});
+  await secondCompletion;
+  await flushMicrotasks();
+});
+
+test('forum pagination derives the next offset from the fetched page range, not the pending reply', () => {
+  const context = makeFrontend();
+  context.serverForumThread = { id: 'thread-a' };
+  context.serverForumPosts = Array.from({ length: 20 }, (_, index) => ({
+    id: `post-${index + 1}`, threadId: 'thread-a', postNo: index + 1,
+  }));
+  context.serverForumPendingReply = { id: 'post-41', threadId: 'thread-a', postNo: 41 };
+  context.serverForumPostsPage = { limit: 20, offset: 0, hasMore: true };
+  let loaded = null;
+  context.loadForumThread = (threadId, options) => { loaded = { threadId, options }; };
+  context.loadMoreForumPosts();
+  assert.equal(loaded.threadId, 'thread-a');
+  assert.equal(loaded.options.force, true);
+  assert.equal(loaded.options.offset, 20);
+});
+
+test('a stale pagination page cannot revert a just-edited pending reply', async () => {
+  const { context, requests } = forumThreadContext();
+  const loading = context.loadForumThread('thread-a', { force: true, offset: 40 });
+  const postsRead = resolveForumReads(requests, 'thread-a', 40);
+
+  context.saveEditPost('post-41');
+  const patch = requests.find((request) => request.method === 'PATCH');
+  assert.ok(patch, 'editing the pending reply must issue PATCH');
+  assert.equal(patch.body.expectedVersion, 1);
+  patch.resolve({ data: forumPost(41, { version: 2, edited: true, content: '<p>Resposta 41 editada</p>' }) });
+  await flushMicrotasks();
+  assert.equal(context.findForumThreadPost('post-41').version, 2);
+  assert.equal(context.findForumThreadPost('post-41').edited, true);
+
+  // The page was produced before the edit; it still carries version 1.
+  postsRead.resolve({
+    data: [forumPost(41, { content: '<p>Resposta 41</p>' })],
+    page: { limit: 20, offset: 40, hasMore: false },
+  });
+  await loading;
+  await flushMicrotasks();
+
+  const replies = context.forumThreadPostRecords('thread-a').filter((item) => item.id === 'post-41');
+  assert.equal(replies.length, 1, 'the record must appear exactly once');
+  assert.equal(replies[0].version, 2);
+  assert.equal(replies[0].edited, true);
+  assert.equal(replies[0].content, '<p>Resposta 41 editada</p>');
+  assert.equal(replies[0].deleted, false);
+  assert.equal(context.serverForumPendingReply.version, 2);
+  assert.equal(context.serverForumPendingReplyAccountId, USER_A);
+  assert.equal(context.serverForumPostsPage.offset, 40);
+
+  const html = context.renderThread();
+  assert.equal((html.match(/post-number">#41</g) || []).length, 1);
+  assert.match(html, /Resposta 41 editada/);
+  assert.equal(html.includes('<p>Resposta 41</p>'), false, 'stale visible content must not return');
+  assert.equal((html.match(/>editado</g) || []).length, 1);
+});
+
+test('a stale pagination page cannot revert a just-hidden pending reply', async () => {
+  const { context, requests } = forumThreadContext();
+  const loading = context.loadForumThread('thread-a', { force: true, offset: 40 });
+  const postsRead = resolveForumReads(requests, 'thread-a', 40);
+
+  context.deletePost('post-41');
+  const hide = requests.find((request) => request.method === 'POST' && request.route.endsWith('/hide'));
+  assert.ok(hide, 'hiding the pending reply must issue its POST');
+  assert.equal(hide.body.expectedVersion, 1);
+  hide.resolve({ data: forumPost(41, {
+    version: 2, deleted: true, deletedAt: '2026-11-08T12:00:00Z', content: '<p>Resposta 41</p>',
+  }) });
+  await flushMicrotasks();
+  assert.equal(context.findForumThreadPost('post-41').deleted, true);
+  assert.equal(context.findForumThreadPost('post-41').version, 2);
+
+  postsRead.resolve({
+    data: [forumPost(41, { content: '<p>Resposta 41</p>' })],
+    page: { limit: 20, offset: 40, hasMore: false },
+  });
+  await loading;
+  await flushMicrotasks();
+
+  const replies = context.forumThreadPostRecords('thread-a').filter((item) => item.id === 'post-41');
+  assert.equal(replies.length, 1, 'the hidden record must appear exactly once');
+  assert.equal(replies[0].version, 2);
+  assert.equal(replies[0].deleted, true);
+  assert.equal(replies[0].deletedAt, '2026-11-08T12:00:00Z');
+  assert.equal(context.serverForumPendingReply.version, 2);
+
+  const html = context.renderThread();
+  assert.equal((html.match(/post-number">#41</g) || []).length, 1);
+  assert.match(html, /Esta publicação foi ocultada\./);
+  assert.equal(html.includes('Resposta 41</p>'), false, 'stale visible content must not return');
+  assert.equal(html.includes('onclick="editPost(\'post-41\')"'), false);
+});
+
+test('post record updates keep the newest version and hidden state', () => {
+  const context = makeFrontend();
+  context.serverForumPosts = [forumPost(21, { version: 2, edited: true, content: '<p>Versão 2</p>' })];
+  context.updateForumThreadPostRecord(forumPost(21, { version: 1, content: '<p>Versão 1</p>' }));
+  assert.equal(context.serverForumPosts[0].version, 2);
+  assert.equal(context.serverForumPosts[0].content, '<p>Versão 2</p>');
+
+  context.updateForumThreadPostRecord(forumPost(21, { version: 3, deleted: true, content: '<p>Ocultada 3</p>' }));
+  assert.equal(context.serverForumPosts[0].version, 3);
+  assert.equal(context.serverForumPosts[0].deleted, true);
+
+  // A same-version copy without the hidden state must not make it visible again.
+  context.updateForumThreadPostRecord(forumPost(21, { version: 3, content: '<p>Visível 3</p>' }));
+  assert.equal(context.serverForumPosts[0].version, 3);
+  assert.equal(context.serverForumPosts[0].deleted, true);
+  assert.equal(context.serverForumPosts[0].content, '<p>Ocultada 3</p>');
+});
+
+test('session end and account change clear the pending reply scope', () => {
+  const { context } = forumThreadContext();
+  context.applyServerSession({ id: USER_B, username: 'Bia', role: 'member' });
+  assert.equal(context.serverForumPendingReply, null);
+  assert.equal(context.serverForumPendingReplyAccountId, null);
+
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana', role: 'member' };
+  context.setServerForumPendingReply(forumPost(41, { content: '<p>Resposta 41</p>' }));
+  assert.equal(context.serverForumPendingReply.id, 'post-41');
+  context.applyServerSession(null);
+  assert.equal(context.serverForumPendingReply, null);
+  assert.equal(context.serverForumPendingReplyAccountId, null);
+});
+
+test('a pending reply renders only for its own account and thread and survives navigation', async () => {
+  const { context, requests } = forumThreadContext();
+
+  context.currentThread = 'thread-b';
+  const loadingB = context.loadForumThread('thread-b', { force: true, offset: 0, reset: true });
+  const postsB = resolveForumReads(requests, 'thread-b', 0);
+  postsB.resolve({
+    data: Array.from({ length: 20 }, (_, index) => forumPost(index + 1, {
+      id: `b-post-${index + 1}`, threadId: 'thread-b', postNo: index + 1,
+    })),
+    page: { limit: 20, offset: 0, hasMore: true },
+  });
+  await loadingB;
+  await flushMicrotasks();
+
+  assert.equal(context.serverForumPendingReply.id, 'post-41', 'the other thread must not erase the recoverable reply');
+  const htmlB = context.renderThread();
+  assert.equal(htmlB.includes('post-number">#41'), false);
+  assert.equal(htmlB.includes('Resposta 41'), false);
+
+  context.currentThread = 'thread-a';
+  const loadingA = context.loadForumThread('thread-a', { force: true, offset: 0, reset: true });
+  const postsA = resolveForumReads(requests, 'thread-a', 0);
+  postsA.resolve({
+    data: Array.from({ length: 20 }, (_, index) => forumPost(index + 1)),
+    page: { limit: 20, offset: 0, hasMore: true },
+  });
+  await loadingA;
+  await flushMicrotasks();
+
+  const htmlA = context.renderThread();
+  assert.equal((htmlA.match(/post-number">#41</g) || []).length, 1);
+  assert.match(htmlA, /Resposta 41/);
+
+  // Defense in depth: even if another account's record were still in memory,
+  // the render/lookup path must not expose it under this session.
+  context.DB.session = { id: USER_B, serverId: USER_B, username: 'Bia', role: 'member' };
+  context.serverForumPendingReply = forumPost(41, { content: '<p>Resposta 41</p>' });
+  context.serverForumPendingReplyAccountId = USER_A;
+  assert.equal(context.findForumThreadPost('post-41'), null);
+  assert.equal(context.renderThread().includes('post-number">#41'), false);
+});
+
+test('scene participant rows preserve commas, trim entries, and ignore empty rows', () => {
+  const context = makeFrontend();
+  const rows = [
+    { querySelector: () => ({ value: 'Doe, Jane' }) },
+    { querySelector: () => ({ value: ' Bob ' }) },
+    { querySelector: () => ({ value: '   ' }) },
+  ];
+  context.__elements['c-ib-participants-list'] = {
+    querySelectorAll: (selector) => selector === '.infobox-participant-row' ? rows : [],
+  };
+  assert.deepEqual(Array.from(context.readCenaParticipantRows()), ['Doe, Jane', 'Bob']);
+  context.activeCenaParticipants = ['stale shadow value'];
+  assert.deepEqual(Array.from(context.readCenaParticipantRows()), ['Doe, Jane', 'Bob']);
+});
+
 test('character JSON import waits for safe server HTML before changing form fields', async () => {
   let resolvePreview;
   const requestBodies = [];
@@ -213,6 +708,7 @@ test('scene JSON import waits for safe HTML and blocks before changing the build
   context.__elements['c-titulo'] = field('Cena anterior');
   context.__elements['c-editor'] = field();
   context.__elements['c-editor'].innerHTML = 'HTML anterior';
+  context.__elements['modular-blocks-container'] = { innerHTML: '' };
   context.activeBuilderBlocks = [{ type: 'section', content: 'Bloco anterior' }];
   context.closeModal = () => {};
   context.showAlert = () => {};
@@ -475,4 +971,401 @@ test('user profile avatars render across RPG turns, character sheets, and wiki p
   };
   const proposalHtml = context.renderWikiProposal();
   assert.equal(proposalHtml.includes(avatarUrl), true);
+});
+
+test('scene accent swatches clear an imported empty accent and save the chosen color draft', () => {
+  const context = makeFrontend();
+  context.sessionStorage = {
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {},
+  };
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana' };
+  context.currentPage = 'novaCena';
+  context.showAlert = () => {};
+  const accent = field('');
+  context.__elements['c-accent'] = accent;
+  context.__elements['c-titulo'] = field('Cena');
+  context.__elements['c-subtitulo'] = field('');
+  context.__elements['c-categoria'] = field('Cena de RPG');
+  context.__elements['c-status'] = field('Em Andamento');
+  context.__elements['c-resumo'] = field('');
+  context.__elements['c-banner'] = field('');
+  context.__elements['c-editor'] = field();
+  context.__elements['c-banner-style'] = field('cinematic');
+  context.__elements['c-layout'] = field('sidebar-left');
+  context.__elements['c-font'] = field('serif');
+  context.__elements['c-bg-effect'] = field('none');
+  context.__elements['c-bgm'] = field('');
+  context.__elements['c-ib-show'] = { checked: true };
+  context.__elements['c-ib-title'] = field('');
+  context.__elements['c-ib-image'] = field('');
+  context.__elements['c-ib-caption'] = field('');
+  context.activeCenaAccentEmpty = true;
+  accent.value = '#ffffff';
+
+  assert.equal(context.lerFormularioCena().theme.accentColor, '');
+
+  context.aplicarCorDestaqueCena('#404040');
+  assert.equal(context.activeCenaAccentEmpty, false);
+  assert.equal(accent.value, '#404040');
+  assert.equal(context.lerFormularioCena().theme.accentColor, '#404040');
+  assert.equal(context.readResourceFormDraft(context.resourceFormDraftDescriptor()).theme.accentColor, '#404040');
+
+  context.aplicarCorDestaqueCena('#ffffff');
+  assert.equal(accent.value, '#ffffff');
+  assert.equal(context.lerFormularioCena().theme.accentColor, '#ffffff');
+  assert.equal(context.readResourceFormDraft(context.resourceFormDraftDescriptor()).theme.accentColor, '#ffffff');
+
+  context.DB.session.role = 'admin';
+  context.serverWikiPosts = [];
+  context.serverPersonagens = [];
+  const formHtml = context.renderNovaCena();
+  assert.equal((formHtml.match(/onclick="aplicarCorDestaqueCena\('/g) || []).length, 6);
+  assert.equal(formHtml.includes("document.getElementById('c-accent').value="), false);
+});
+
+test('a late character like response is ignored after the account changes', async () => {
+  let complete;
+  let alerts = 0;
+  let toggles = 0;
+  const context = makeFrontend({
+    apiRequest: (method, route, body, callback) => new Promise((resolve) => {
+      complete = () => { callback(null, { liked: true, likeCount: 3 }); resolve({}); };
+    }),
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana' };
+  context.currentPage = 'personagemView';
+  context.currentPersonagem = 'char-1';
+  context.showAlert = () => { alerts += 1; };
+  const button = {
+    id: 'like-char-char-1',
+    classList: { toggle: () => { toggles += 1; } },
+    innerHTML: '',
+  };
+  context.__elements[button.id] = button;
+  context.toggleLikePersonagem('char-1', button);
+  context.DB.session = { id: USER_B, serverId: USER_B, username: 'Bia' };
+  complete();
+  await flushMicrotasks();
+  assert.equal(toggles, 0);
+  assert.equal(alerts, 0);
+  assert.equal(button.innerHTML, '');
+});
+
+test('a late scene like response is ignored after leaving the scene', async () => {
+  let complete;
+  let alerts = 0;
+  let toggles = 0;
+  const context = makeFrontend({
+    apiRequest: (method, route, body, callback) => new Promise((resolve) => {
+      complete = () => { callback(null, { liked: true, likeCount: 4 }); resolve({}); };
+    }),
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana' };
+  context.currentPage = 'cenaView';
+  context.currentCena = 'scene-1';
+  context.showAlert = () => { alerts += 1; };
+  const button = {
+    id: 'like-cena-scene-1',
+    classList: { toggle: () => { toggles += 1; } },
+    innerHTML: '',
+  };
+  context.__elements[button.id] = button;
+  context.toggleLikeCena('scene-1', button);
+  context.currentPage = 'forum';
+  context.currentCena = null;
+  complete();
+  await flushMicrotasks();
+  assert.equal(toggles, 0);
+  assert.equal(alerts, 0);
+  assert.equal(button.innerHTML, '');
+});
+
+test('a late turn like response is ignored when the turn leaves the scene', async () => {
+  let complete;
+  let alerts = 0;
+  let toggles = 0;
+  const context = makeFrontend({
+    apiRequest: (method, route, body, callback) => new Promise((resolve) => {
+      complete = () => { callback(null, { liked: true, likeCount: 2 }); resolve({}); };
+    }),
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana' };
+  context.currentPage = 'cenaView';
+  context.currentCena = 'scene-1';
+  context.serverWikiPosts = [{ id: 'scene-1', turns: [{ id: 'turn-1' }] }];
+  context.showAlert = () => { alerts += 1; };
+  const button = {
+    id: 'like-turn-turn-1',
+    classList: { toggle: () => { toggles += 1; } },
+    innerHTML: '',
+  };
+  context.__elements[button.id] = button;
+  context.toggleLikeTurno('scene-1', 'turn-1', button);
+  context.serverWikiPosts = [{ id: 'scene-1', turns: [] }];
+  complete();
+  await flushMicrotasks();
+  assert.equal(toggles, 0);
+  assert.equal(alerts, 0);
+  assert.equal(button.innerHTML, '');
+});
+
+test('a late notification read response is ignored after the account changes', async () => {
+  let complete;
+  const context = makeFrontend({
+    apiRequest: (method, route, body, callback) => new Promise((resolve) => {
+      complete = () => { callback(null, {}); resolve({}); };
+    }),
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana' };
+  context.DB.notifications = [{ id: 'notif-1', read: false }];
+  context.DB.unreadCount = 1;
+  context.updateTopBar = () => {};
+  context.showAlert = () => {};
+  context.marcarNotificacaoLida('notif-1');
+  context.DB.session = { id: USER_B, serverId: USER_B, username: 'Bia' };
+  complete();
+  await flushMicrotasks();
+  assert.equal(context.DB.notifications[0].read, false);
+  assert.equal(context.DB.unreadCount, 1);
+});
+
+function timelineContext(apiRequest) {
+  const requests = [];
+  const alerts = [];
+  const context = makeFrontend({
+    apiRequest: (method, route, body, callback) => {
+      requests.push({ method, route, body: Object.assign({}, body) });
+      if (apiRequest) apiRequest(callback);
+      return Promise.resolve({});
+    },
+  });
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana', role: 'admin' };
+  context.showAlert = (message, type) => alerts.push({ message, type });
+  context.confirm = () => true;
+  context.__elements['modal-container'] = field();
+  context.timelineEditingId = null;
+  context.timelineEditingUpdatedAt = null;
+  context.serverTimelineEvents = [{
+    id: 'event-1',
+    title: 'Evento',
+    startDate: 'Marco Zero',
+    updatedAt: '2026-04-01T12:00:00.000Z',
+  }];
+  return { context, requests, alerts };
+}
+
+function timelineFormFields(context) {
+  context.__elements['tm-title'] = field('Evento');
+  context.__elements['tm-start-date'] = field('Marco Zero');
+  context.__elements['tm-end-date'] = field('');
+  context.__elements['tm-era'] = field('Marco Zero');
+  context.__elements['tm-color'] = field('Green');
+  context.__elements['tm-story-arc'] = field('');
+  context.__elements['tm-characters'] = field('');
+  context.__elements['tm-group'] = field('');
+  context.__elements['tm-location'] = field('');
+  context.__elements['tm-summary'] = field('');
+}
+
+test('timeline edit captures updatedAt, sends it on PUT, and surfaces stale errors', () => {
+  const { context, requests, alerts } = timelineContext((callback) => {
+    callback('O evento foi alterado por outra pessoa. Recarregue e tente novamente.', undefined);
+  });
+  timelineFormFields(context);
+  context.openTimelineModal('event-1');
+  assert.equal(context.timelineEditingUpdatedAt, '2026-04-01T12:00:00.000Z');
+
+  context.salvarTimelineModal();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'PUT');
+  assert.equal(requests[0].route, '/api/timeline/event-1');
+  assert.equal(requests[0].body.expectedUpdatedAt, '2026-04-01T12:00:00.000Z');
+  assert.deepEqual(alerts, [{
+    message: 'O evento foi alterado por outra pessoa. Recarregue e tente novamente.',
+    type: 'error',
+  }]);
+  context.closeTimelineModal();
+  assert.equal(context.timelineEditingUpdatedAt, null);
+});
+
+test('timeline creation does not send expectedUpdatedAt', () => {
+  const { context, requests } = timelineContext();
+  timelineFormFields(context);
+  context.openTimelineModal();
+  assert.equal(context.timelineEditingId, null);
+  assert.equal(context.timelineEditingUpdatedAt, null);
+
+  context.salvarTimelineModal();
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'POST');
+  assert.equal(requests[0].route, '/api/timeline');
+  assert.equal(Object.hasOwn(requests[0].body, 'expectedUpdatedAt'), false);
+});
+
+test('timeline deletion sends captured updatedAt and surfaces stale errors', () => {
+  const { context, requests, alerts } = timelineContext((callback) => {
+    callback('O evento foi alterado por outra pessoa. Recarregue e tente novamente.', undefined);
+  });
+  context.excluirTimelineEvento('event-1', 'Evento');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'DELETE');
+  assert.equal(requests[0].route, '/api/timeline/event-1');
+  assert.deepEqual(requests[0].body, { expectedUpdatedAt: '2026-04-01T12:00:00.000Z' });
+  assert.deepEqual(alerts, [{
+    message: 'O evento foi alterado por outra pessoa. Recarregue e tente novamente.',
+    type: 'error',
+  }]);
+
+  context.serverTimelineEvents = [{ id: 'event-2', title: 'Outro evento' }];
+  context.excluirTimelineEvento('event-2', 'Outro evento');
+  assert.equal(requests[1].method, 'DELETE');
+  assert.equal(requests[1].route, '/api/timeline/event-2');
+  assert.deepEqual(requests[1].body, {});
+});
+
+test('account switch and logout clear cached notifications before the next fetch', () => {
+  const context = makeFrontend();
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana', role: 'member' };
+  context.DB.notifications = [{ id: 'notification-a', title: 'Da conta A' }];
+  context.DB.unreadCount = 1;
+
+  context.applyServerSession({ id: USER_B, username: 'Bia', role: 'member' });
+
+  assert.deepEqual(Array.from(context.DB.notifications), []);
+  assert.equal(context.DB.unreadCount, 0);
+  assert.equal(context.DB.session.serverId, USER_B);
+
+  context.DB.notifications = [{ id: 'notification-b', title: 'Da conta B' }];
+  context.DB.unreadCount = 1;
+  context.applyServerSession(null);
+
+  assert.deepEqual(Array.from(context.DB.notifications), []);
+  assert.equal(context.DB.unreadCount, 0);
+  assert.equal(context.DB.session, null);
+});
+
+
+test('forum drafts accept the server-supported 20-character tag limit', () => {
+  const context = makeFrontend();
+  context.showAlert = () => {};
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana', role: 'member' };
+
+  assert.equal(context.writeForumDraft('topic-edit', 'thread-long', {
+    title: 'Título não salvo', tag: 'discussion',
+  }), true);
+  const restored = context.readForumDraft('topic-edit', 'thread-long');
+  assert.equal(restored.values.title, 'Título não salvo');
+  assert.equal(restored.values.tag, 'discussion');
+});
+
+test('a stale admin identity error cannot clear a same-account relogin', async () => {
+  let resolveMutation;
+  let rejectIdentity;
+  const context = makeFrontend({ apiRequest: (method) => {
+    if (method === 'GET') return new Promise((resolve, reject) => { rejectIdentity = reject; });
+    return new Promise((resolve) => { resolveMutation = resolve; });
+  } });
+  context.showAlert = () => {};
+  context.updateTopBar = () => {};
+  context.navigate = () => {};
+  context.loadAdminData = () => {};
+  const admin = { id: USER_A, username: 'Ana', role: 'admin' };
+
+  context.applyServerSession(admin);
+  context.adminMutation('PATCH', '/api/admin/users/example', {}, 'Alterado.');
+  resolveMutation({});
+  await flushMicrotasks();
+  context.applyServerSession(null);
+  context.applyServerSession(admin);
+  rejectIdentity(new Error('Sua sessão expirou. Faça login novamente.'));
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  assert.equal(context.DB.session.id, USER_A, 'the new same-account session must survive');
+});
+
+test('a stale boot identity success cannot restore a session after logout', async () => {
+  let bootCallback;
+  const context = makeFrontend({ apiRequest: (method, route, body, callback) => {
+    if (route === '/api/auth/me') bootCallback = callback;
+    return Promise.resolve({});
+  } });
+  for (const name of ['parseRouteFromLocation', 'initializeResourceFormDraftPersistence',
+    'initializeForumDraftPersistence', 'updateTopBar', 'render',
+    'carregarPersonagensServidor', 'carregarWikiPostsServidor', 'carregarNotificacoesServidor']) {
+    context[name] = () => {};
+  }
+  const admin = { id: USER_A, username: 'Ana', role: 'admin' };
+  context.__listeners.DOMContentLoaded();
+  context.applyServerSession(admin);
+  context.applyServerSession(null);
+  bootCallback(null, { user: admin });
+  await flushMicrotasks();
+
+  assert.equal(context.DB.session, null, 'the stale boot response must be ignored');
+});
+
+test('character category options preserve a server-valid custom value', () => {
+  const context = makeFrontend();
+  context.sessionStorage = { getItem: () => '22222222-2222-4222-8222-222222222222', setItem: () => {}, removeItem: () => {} };
+  context.DB.session = { id: USER_A, serverId: USER_A, username: 'Ana', role: 'admin' };
+  context.serverPersonagens = [{
+    id: '22222222-2222-4222-8222-222222222222', nome: 'Registro legado', categoria: 'NPC',
+    titulo: '', raca: '', faccao: '', status: '', imagem: '', descricao: '<p>Texto.</p>',
+    stats: {}, skills: [],
+  }];
+  context.renderBlockBuilderSection = () => '';
+  const html = context.renderNovoPersonagem();
+  assert.match(html, /<option value="NPC" selected>NPC<\/option>/);
+  assert.match(html, /<option value="Personagem Principal">Personagem Principal<\/option>/);
+});
+
+test('character JSON import accepts and appends a server-valid custom category', async () => {
+  const context = makeFrontend({ apiRequest: () => Promise.resolve({ html: '<p>Seguro.</p>' }) });
+  const source = field(JSON.stringify({
+    nome: 'Registro importado', categoria: 'NPC', descricao: '<p>Texto.</p>',
+  }));
+  const select = {
+    value: '', options: [], appendChild(option) { this.options.push(option); },
+  };
+  context.document.createElement = (tag) => ({ tagName: String(tag).toUpperCase(), value: '', textContent: '' });
+  context.__elements['import-char-json'] = source;
+  context.__elements['p-nome'] = field('Nome anterior');
+  context.__elements['p-categoria'] = select;
+  context.__elements['p-editor'] = field();
+  context.__elements['p-editor'].innerHTML = '';
+  context.closeModal = () => {};
+  const alerts = [];
+  context.showAlert = (message) => alerts.push(message);
+  context.setEditorContent = (id, html) => { context.__elements[id].innerHTML = html; return true; };
+
+  await context.confirmImportPersonagemJson();
+  assert.equal(select.value, 'NPC');
+  assert.equal(select.options.some((option) => option.value === 'NPC'), true);
+  assert.equal(context.__elements['p-nome'].value, 'Registro importado');
+  assert.equal(alerts.some((message) => /categoria deve ser/i.test(message)), false);
+});
+
+test('changing the JSON textarea during preview prevents stale apply', async () => {
+  let resolvePreview;
+  const context = makeFrontend({ apiRequest: () => new Promise((resolve) => { resolvePreview = resolve; }) });
+  const source = field(JSON.stringify({ nome: 'Original', descricao: '<p>Original.</p>' }));
+  context.__elements['import-char-json'] = source;
+  context.__elements['p-nome'] = field('Nome anterior');
+  context.__elements['p-editor'] = field();
+  context.__elements['p-editor'].innerHTML = '';
+  context.closeModal = () => {};
+  const alerts = [];
+  context.showAlert = (message) => alerts.push(message);
+  context.setEditorContent = (id, html) => { context.__elements[id].innerHTML = html; return true; };
+
+  const pending = context.confirmImportPersonagemJson();
+  source.value = JSON.stringify({ nome: 'Alterado', descricao: '<p>Alterado.</p>' });
+  resolvePreview({ html: '<p>Original seguro.</p>' });
+  await pending;
+
+  assert.equal(context.__elements['p-nome'].value, 'Nome anterior');
+  assert.equal(alerts.some((message) => /alterado durante a validação/i.test(message)), true);
 });

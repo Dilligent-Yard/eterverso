@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": false,
+    "declaration": false,
+    "types": [
+      "node"
+    ],
+    "noUncheckedIndexedAccess": true,
+    "noEmitOnError": true
+  },
+  "include": [
+    "src/node/**/*.ts",
+    "src/shared/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    ".generated",
+    "src/browser/**/*"
+  ]
+}

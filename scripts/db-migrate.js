@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const dotenv = require('dotenv');
 const postgres = require('postgres');
+const { assertBuildOutput } = require('./check-build');
 
 const ROOT = path.resolve(__dirname, '..');
 const LOCAL_TEST = path.join(ROOT, '.local', 'test');
@@ -266,6 +267,77 @@ const SECTION_CONSTRAINTS = [
   'wiki_sections.wiki_sections_pkey:p',
   'wiki_sections.wiki_sections_sort_order_check:c',
 ].sort();
+const INTERACTIONS_COLUMNS = {
+  ...SECTION_COLUMNS,
+  likes: ['id', 'user_id', 'target_type', 'target_id', 'created_at'],
+  notifications: ['id', 'user_id', 'actor_id', 'type', 'reference_id', 'reference_type', 'title', 'message', 'read', 'created_at'],
+};
+const INTERACTIONS_TYPES = {
+  likes: {
+    id: 'uuid',
+    user_id: 'uuid',
+    target_type: 'character varying',
+    target_id: 'character varying',
+    created_at: 'timestamp with time zone',
+  },
+  notifications: {
+    id: 'uuid',
+    user_id: 'uuid',
+    actor_id: 'uuid',
+    type: 'character varying',
+    reference_id: 'character varying',
+    reference_type: 'character varying',
+    title: 'character varying',
+    message: 'text',
+    read: 'boolean',
+    created_at: 'timestamp with time zone',
+  },
+};
+const INTERACTIONS_INDEXES = {
+  likes: ['idx_likes_target', 'likes_pkey', 'likes_unique'],
+  notifications: ['idx_notifications_user_id', 'idx_notifications_user_read', 'notifications_pkey'],
+};
+const INTERACTIONS_CONSTRAINTS = [
+  ...SECTION_CONSTRAINTS,
+  'likes.likes_pkey:p',
+  'likes.likes_unique:u',
+  'likes.likes_user_id_fkey:f',
+  'notifications.notifications_actor_id_fkey:f',
+  'notifications.notifications_pkey:p',
+  'notifications.notifications_user_id_fkey:f',
+].sort();
+const TIMELINE_COLUMNS = {
+  ...INTERACTIONS_COLUMNS,
+  timeline_events: ['id', 'internal_id', 'title', 'short_title', 'summary', 'color', 'era', 'start_date', 'end_date', 'order_index', 'tags', 'story_arc', 'characters', 'character_group', 'location', 'created_at', 'updated_at'],
+};
+const TIMELINE_TYPES = {
+  timeline_events: {
+    id: 'uuid',
+    internal_id: 'character varying',
+    title: 'character varying',
+    short_title: 'character varying',
+    summary: 'text',
+    color: 'character varying',
+    era: 'character varying',
+    start_date: 'character varying',
+    end_date: 'character varying',
+    order_index: 'integer',
+    tags: 'character varying',
+    story_arc: 'character varying',
+    characters: 'text',
+    character_group: 'character varying',
+    location: 'character varying',
+    created_at: 'timestamp with time zone',
+    updated_at: 'timestamp with time zone',
+  },
+};
+const TIMELINE_INDEXES = {
+  timeline_events: ['idx_timeline_events_era', 'idx_timeline_events_internal_id', 'idx_timeline_events_order', 'timeline_events_pkey'],
+};
+const TIMELINE_CONSTRAINTS = [
+  ...INTERACTIONS_CONSTRAINTS,
+  'timeline_events.timeline_events_pkey:p',
+].sort();
 
 function readDotEnv(file) {
   if (!fs.existsSync(file)) return {};
@@ -291,6 +363,22 @@ function quoteIdentifier(name) {
 
 function sameList(left, right) {
   return JSON.stringify([...(left || [])].sort()) === JSON.stringify([...(right || [])].sort());
+}
+
+function exactColumnTypes(report, expected) {
+  return Object.entries(expected).every(([table, columns]) => (
+    Object.entries(columns).every(([column, type]) => report.columnTypes?.[table]?.[column] === type)
+  ));
+}
+
+function exactTableIndexes(report, table, names) {
+  return sameList((report.indexes || []).filter((index) => index.table === table).map((index) => index.name), names);
+}
+
+function hasIndexDefinition(report, table, name, pattern) {
+  return (report.indexes || []).some((index) => (
+    index.table === table && index.name === name && pattern.test(index.definition)
+  ));
 }
 
 function classifySchema(report, history) {
@@ -418,6 +506,56 @@ function classifySchema(report, history) {
     return { state: 'verified-0015-wiki-sections', supported: true };
   }
 
+  const hasPriorReviewedIndexes = hasCaseInsensitiveUsernameIndex && forumTimestampsUseTimezone
+    && hasSceneIndexes && hasWikiNameIndex && hasWikiRevisionImmutability && hasSectionIndex
+    && exactSectionTypes;
+
+  const exactInteractionColumns = sameList(appTables, Object.keys(INTERACTIONS_COLUMNS).sort())
+    && Object.keys(INTERACTIONS_COLUMNS).every((table) => (
+      sameList(report.columns[table] || [], INTERACTIONS_COLUMNS[table])
+    ));
+  const exactInteractionTypes = exactColumnTypes(report, INTERACTIONS_TYPES);
+  const exactInteractionConstraints = sameList(report.constraints, INTERACTIONS_CONSTRAINTS);
+  const exactInteractionIndexes = exactTableIndexes(report, 'notifications', INTERACTIONS_INDEXES.notifications)
+    && exactTableIndexes(report, 'likes', INTERACTIONS_INDEXES.likes)
+    && hasIndexDefinition(report, 'notifications', 'notifications_pkey',
+      /^CREATE UNIQUE INDEX notifications_pkey ON public\.notifications USING btree \(id\)$/)
+    && hasIndexDefinition(report, 'notifications', 'idx_notifications_user_id',
+      /^CREATE INDEX idx_notifications_user_id ON public\.notifications USING btree \(user_id\)$/)
+    && hasIndexDefinition(report, 'notifications', 'idx_notifications_user_read',
+      /^CREATE INDEX idx_notifications_user_read ON public\.notifications USING btree \(user_id,\s*"?read"?\)$/)
+    && hasIndexDefinition(report, 'likes', 'likes_pkey',
+      /^CREATE UNIQUE INDEX likes_pkey ON public\.likes USING btree \(id\)$/)
+    && hasIndexDefinition(report, 'likes', 'likes_unique',
+      /^CREATE UNIQUE INDEX likes_unique ON public\.likes USING btree \(user_id, target_type, target_id\)$/)
+    && hasIndexDefinition(report, 'likes', 'idx_likes_target',
+      /^CREATE INDEX idx_likes_target ON public\.likes USING btree \(target_type, target_id\)$/);
+  if (knownLedger && ledger.length === 17 && exactInteractionColumns && exactInteractionTypes
+      && exactInteractionConstraints && exactInteractionIndexes && hasPriorReviewedIndexes) {
+    return { state: 'verified-0016-notifications-and-likes', supported: true };
+  }
+
+  const exactTimelineColumns = sameList(appTables, Object.keys(TIMELINE_COLUMNS).sort())
+    && Object.keys(TIMELINE_COLUMNS).every((table) => (
+      sameList(report.columns[table] || [], TIMELINE_COLUMNS[table])
+    ));
+  const exactTimelineTypes = exactColumnTypes(report, TIMELINE_TYPES);
+  const exactTimelineConstraints = sameList(report.constraints, TIMELINE_CONSTRAINTS);
+  const exactTimelineIndexes = exactTableIndexes(report, 'timeline_events', TIMELINE_INDEXES.timeline_events)
+    && hasIndexDefinition(report, 'timeline_events', 'timeline_events_pkey',
+      /^CREATE UNIQUE INDEX timeline_events_pkey ON public\.timeline_events USING btree \(id\)$/)
+    && hasIndexDefinition(report, 'timeline_events', 'idx_timeline_events_era',
+      /^CREATE INDEX idx_timeline_events_era ON public\.timeline_events USING btree \(era\)$/)
+    && hasIndexDefinition(report, 'timeline_events', 'idx_timeline_events_order',
+      /^CREATE INDEX idx_timeline_events_order ON public\.timeline_events USING btree \(order_index\)$/)
+    && hasIndexDefinition(report, 'timeline_events', 'idx_timeline_events_internal_id',
+      /^CREATE UNIQUE INDEX idx_timeline_events_internal_id ON public\.timeline_events USING btree \(internal_id\)$/);
+  if (knownLedger && ledger.length === 18 && exactTimelineColumns && exactTimelineTypes
+      && exactInteractionTypes && exactInteractionIndexes && exactTimelineConstraints
+      && exactTimelineIndexes && hasPriorReviewedIndexes) {
+    return { state: 'verified-0017-timeline-events', supported: true };
+  }
+
   return {
     state: 'unsupported-or-divergent',
     supported: false,
@@ -449,6 +587,14 @@ function classifySchema(report, history) {
       hasWikiNameIndex,
       hasWikiRevisionImmutability,
       hasSectionIndex,
+      exactInteractionColumns,
+      exactInteractionTypes,
+      exactInteractionConstraints,
+      exactInteractionIndexes,
+      exactTimelineColumns,
+      exactTimelineTypes,
+      exactTimelineConstraints,
+      exactTimelineIndexes,
     },
   };
 }
@@ -485,15 +631,41 @@ async function readTarget(targetName) {
     };
   }
 
-  throw new Error('Choose an explicit target: --target=test or --target=development.');
+  if (targetName === 'sandbox') {
+    const publicSandboxTarget = require('./public-sandbox-target');
+    const target = publicSandboxTarget.resolveSandboxTarget({ root: ROOT });
+    return {
+      databaseUrl: target.databaseUrl,
+      label: 'sandbox',
+      host: target.host,
+      port: target.port,
+      containerPort: target.containerPort,
+      database: target.database,
+      role: target.role,
+      containerAddresses: target.containerAddresses,
+    };
+  }
+
+  throw new Error('Choose an explicit target: --target=test, --target=development, or --target=sandbox.');
 }
 
 async function inspectDatabase(target, history) {
   const dbUrl = new URL(target.databaseUrl);
   const sql = postgres(target.databaseUrl, { prepare: false, max: 1, connect_timeout: 5, idle_timeout: 1, connection: { timezone: 'UTC' } });
   try {
-    const identity = await sql`SELECT current_database() AS database, inet_server_port() AS server_port`;
+    const identity = await sql`SELECT current_database() AS database, current_user AS role,
+      inet_server_addr()::text AS address, inet_server_port() AS server_port,
+      current_setting('server_version_num') AS version`;
     if (identity[0].database !== target.database) throw new Error('Connected database name does not match the selected target.');
+    if (target.label === 'sandbox') {
+      publicSandboxTarget.assertConnectedIdentityRow({
+        database: identity[0].database,
+        role: identity[0].role,
+        address: identity[0].address,
+        port: identity[0].server_port,
+        version: identity[0].version,
+      }, target);
+    }
 
     const publicTables = (await sql`
       SELECT table_name FROM information_schema.tables
@@ -565,10 +737,13 @@ async function inspectDatabase(target, history) {
 }
 
 function saveReport(report) {
-  fs.mkdirSync(REPORT_DIR, { recursive: true, mode: 0o700 });
-  fs.chmodSync(REPORT_DIR, 0o700);
+  const reportDirectory = report.target.name === 'sandbox'
+    ? path.join(ROOT, '.local', 'public-sandbox', 'reports')
+    : REPORT_DIR;
+  fs.mkdirSync(reportDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(reportDirectory, 0o700);
   const date = new Date().toISOString().replaceAll(':', '-');
-  const file = path.join(REPORT_DIR, `db-preflight-${report.target.name}-${date}.json`);
+  const file = path.join(reportDirectory, `db-preflight-${report.target.name}-${date}.json`);
   fs.writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
   fs.chmodSync(file, 0o600);
   return file;
@@ -576,7 +751,7 @@ function saveReport(report) {
 
 function targetArgument(args) {
   const value = args.find((arg) => arg.startsWith('--target='));
-  if (!value) throw new Error('Choose an explicit target: --target=test or --target=development.');
+  if (!value) throw new Error('Choose an explicit target: --target=test, --target=development, or --target=sandbox.');
   return value.slice('--target='.length);
 }
 
@@ -598,7 +773,7 @@ async function preflight(targetName) {
 
 async function migrate(targetName) {
   const { report, target } = await preflight(targetName);
-  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections'].includes(report.classification.state)) {
+  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections', 'verified-0016-notifications-and-likes', 'verified-0017-timeline-events'].includes(report.classification.state)) {
     throw new Error('Automatic migration is supported only from an empty database or an exact reviewed schema state.');
   }
   if (report.pendingMigrations.length === 0) {
@@ -703,11 +878,14 @@ function archiveListBelongsToDevelopment(output) {
 }
 
 async function main() {
+  // Direct CLI use has no npm pre-hook. Fail before target resolution or a
+  // database connection if the generated sandbox target adapter is absent.
+  assertBuildOutput({ required: ['publicSandboxTarget'] });
   const command = process.argv[2];
   const target = targetArgument(process.argv.slice(3));
   if (command === 'preflight') return preflight(target);
   if (command === 'migrate') return migrate(target);
-  throw new Error('Usage: node scripts/db-migrate.js <preflight|migrate> --target=<test|development>');
+  throw new Error('Usage: node scripts/db-migrate.js <preflight|migrate> --target=<test|development|sandbox>');
 }
 
 module.exports = {
@@ -730,6 +908,14 @@ module.exports = {
   SECTION_COLUMNS,
   SECTION_TYPES,
   SECTION_CONSTRAINTS,
+  INTERACTIONS_COLUMNS,
+  INTERACTIONS_TYPES,
+  INTERACTIONS_INDEXES,
+  INTERACTIONS_CONSTRAINTS,
+  TIMELINE_COLUMNS,
+  TIMELINE_TYPES,
+  TIMELINE_INDEXES,
+  TIMELINE_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,
@@ -737,6 +923,7 @@ module.exports = {
   verifyDevelopmentBackupArchive,
   inspectDatabase,
   migrationHistory,
+  readTarget,
 };
 
 if (require.main === module) {

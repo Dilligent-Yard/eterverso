@@ -5,9 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const postgres = require('postgres');
 const { createApp } = require('./server/app');
+const { readConfig } = require('./.generated/node/runtime/config.js');
 
 const ROOT = __dirname;
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0017_timeline_events';
 const REQUIRED_FORUM_TIMESTAMP_COLUMNS = [
   'categories.created_at', 'categories.updated_at',
   'posts.created_at', 'posts.updated_at',
@@ -16,11 +17,11 @@ const REQUIRED_FORUM_TIMESTAMP_COLUMNS = [
 ];
 const REQUIRED_COLUMNS = {
   users: ['id', 'username', 'email', 'password_hash', 'avatar', 'title', 'bio', 'role', 'posts_count', 'adm_tentativa_usada', 'join_date', 'disabled_at', 'auth_version', 'version'],
-  personagens: ['id', 'author_id', 'nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'descricao', 'stats', 'skills', 'mascara_tier', 'blocks', 'theme', 'created_at', 'updated_at'],
+  personagens: ['id', 'author_id', 'nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'descricao', 'stats', 'skills', 'mascara_tier', 'blocks', 'theme', 'hidden_at', 'version', 'created_at', 'updated_at'],
   categories: ['id', 'name', 'description', 'archived_at', 'version', 'created_at', 'updated_at'],
   threads: ['id', 'category_id', 'author_id', 'author_label', 'legacy_reference', 'title', 'tag', 'pinned', 'views', 'locked', 'archived_at', 'quarantined_at', 'quarantine_reason', 'version', 'last_activity_at', 'next_post_no', 'created_at', 'updated_at'],
   posts: ['id', 'thread_id', 'author_id', 'author_label', 'legacy_reference', 'content', 'edited', 'post_no', 'deleted_at', 'version', 'created_at', 'updated_at'],
-  wiki_posts: ['id', 'author_id', 'titulo', 'subtitulo', 'categoria', 'status', 'resumo', 'banner', 'descricao', 'theme', 'infobox', 'blocks', 'turns', 'created_at', 'updated_at'],
+  wiki_posts: ['id', 'author_id', 'titulo', 'subtitulo', 'categoria', 'status', 'resumo', 'banner', 'descricao', 'theme', 'infobox', 'blocks', 'turns', 'hidden_at', 'version', 'created_at', 'updated_at'],
   audit_events: ['id', 'actor_id', 'actor_label', 'action', 'target_type', 'target_id', 'reason', 'before_state', 'after_state', 'created_at'],
   forum_migration_issues: ['id', 'thread_id', 'reason', 'details', 'created_at', 'resolved_at'],
   post_revisions: ['id', 'post_id', 'version', 'content', 'actor_id', 'summary', 'created_at'],
@@ -48,6 +49,9 @@ const REQUIRED_COLUMNS = {
   legacy_import_targets: ['import_id', 'resource_type', 'legacy_id', 'target_id', 'author_id', 'author_label', 'legacy_created_at_text', 'legacy_updated_at_text', 'created_at'],
   legacy_imports: ['id', 'content_digest', 'first_source_id', 'first_export_id', 'first_raw_snapshot_sha256', 'first_origin_label', 'imported_by', 'created_at'],
   wiki_sections: ['key', 'name', 'description', 'parent_key', 'sort_order'],
+  notifications: ['id', 'user_id', 'actor_id', 'type', 'reference_id', 'reference_type', 'title', 'message', 'read', 'created_at'],
+  likes: ['id', 'user_id', 'target_type', 'target_id', 'created_at'],
+  timeline_events: ['id', 'internal_id', 'title', 'short_title', 'summary', 'color', 'era', 'start_date', 'end_date', 'order_index', 'tags', 'story_arc', 'characters', 'character_group', 'location', 'created_at', 'updated_at'],
 };
 
 function expectedMigrationPrefix(rootDirectory) {
@@ -122,51 +126,6 @@ async function verifySchemaReadiness(sql, options = {}) {
   return { migration: REQUIRED_MIGRATION, verifiedColumns: Object.keys(REQUIRED_COLUMNS).length };
 }
 
-function readConfig(env) {
-  if (!env.DATABASE_URL) throw new Error('DATABASE_URL não definida. Configure o .env antes de iniciar.');
-  if (!env.SESSION_SECRET) throw new Error('SESSION_SECRET não definida. Configure o .env antes de iniciar.');
-  let databaseUrl;
-  try {
-    databaseUrl = new URL(env.DATABASE_URL);
-  } catch {
-    throw new Error('DATABASE_URL inválida. Configure uma URL PostgreSQL antes de iniciar.');
-  }
-  if (!['postgres:', 'postgresql:'].includes(databaseUrl.protocol)) {
-    throw new Error('DATABASE_URL deve usar PostgreSQL.');
-  }
-  const port = env.PORT === undefined || env.PORT === '' ? 3000 : Number(env.PORT);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error('PORT deve ser um número entre 1 e 65535.');
-  }
-  const production = env.NODE_ENV === 'production' || !!env.RENDER;
-  const configuredOrigin = env.APP_ORIGIN || '';
-  if (production && !configuredOrigin) throw new Error('APP_ORIGIN must be explicitly configured in production.');
-  let publicOrigin = configuredOrigin || `http://localhost:${port}`;
-  try {
-    const parsedOrigin = new URL(publicOrigin);
-    if (!['http:', 'https:'].includes(parsedOrigin.protocol)
-        || parsedOrigin.origin === 'null'
-        || parsedOrigin.pathname !== '/'
-        || parsedOrigin.search
-        || parsedOrigin.hash
-        || parsedOrigin.username
-        || parsedOrigin.password) {
-      throw new Error('invalid origin');
-    }
-    publicOrigin = parsedOrigin.origin;
-  } catch {
-    throw new Error('APP_ORIGIN must be an HTTP(S) origin without a path or credentials.');
-  }
-
-  return {
-    databaseUrl: env.DATABASE_URL,
-    sessionSecret: env.SESSION_SECRET,
-    secureCookies: production,
-    production,
-    publicOrigin,
-    port,
-  };
-}
 
 async function startServer(options = {}) {
   const rootDirectory = options.rootDirectory || ROOT;

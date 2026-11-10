@@ -19,7 +19,7 @@ const { createSourceRouter } = require('./sources');
 const { createLegacyImportRouter } = require('./legacy-import');
 const { createWikiTransfersRouter } = require('./wiki-transfers');
 const { createInteractionsRouter, createNotification } = require('./interactions');
-const { createTimelineRouter, ensureTimelineSchema } = require('./timeline');
+const { createTimelineRouter } = require('./timeline');
 
 function createApp(options) {
   if (!options || typeof options.sql !== 'function' || typeof options.sql.json !== 'function') {
@@ -65,7 +65,12 @@ function createApp(options) {
     '/wiki/editor': 'index.html',
     '/wiki/propostas': 'index.html',
     '/personagens': 'index.html',
+    '/personagens/novo': 'index.html',
     '/cenas': 'index.html',
+    '/cenas/nova': 'index.html',
+    '/sobre': 'index.html',
+    '/perfil': 'index.html',
+    '/registro': 'index.html',
     '/timeline': 'index.html',
     '/admin': 'index.html',
     '/app.js': 'app.js',
@@ -74,6 +79,7 @@ function createApp(options) {
     '/style.css': 'style.css',
     '/legacy-recovery.html': 'legacy-recovery.html',
     '/legacy-recovery.js': 'legacy-recovery.js',
+    '/generated/vault.js': 'generated/client/vault.js',
   };
   Object.keys(STATIC_FILES).forEach(function (route) {
     app.get(route, function (req, res) {
@@ -86,14 +92,19 @@ function createApp(options) {
   // from API and static paths.
   app.get([
     /^\/forum\/categorias\/[0-9a-f-]{36}$/i,
+    /^\/forum\/categorias\/[0-9a-f-]{36}\/novo$/i,
     /^\/forum\/topicos\/[0-9a-f-]{36}$/i,
+    /^\/forum\/topicos\/[0-9a-f-]{36}\/editar$/i,
     /^\/wiki(?:\/[a-z0-9][a-z0-9_-]{0,119})?$/i,
     /^\/personagens\/[0-9a-f-]{36}$/i,
+    /^\/personagens\/[0-9a-f-]{36}\/editar$/i,
     /^\/wiki\/editor\/[0-9a-f-]{36}$/i,
     /^\/wiki\/rascunhos\/[0-9a-f-]{36}$/i,
     /^\/wiki\/propostas\/[0-9a-f-]{36}$/i,
     /^\/cenas$/i,
+    /^\/cenas\/nova$/i,
     /^\/cenas\/[0-9a-f-]{36}$/i,
+    /^\/cenas\/[0-9a-f-]{36}\/editar$/i,
   ], function (_req, res) {
     res.sendFile(path.join(staticRoot, 'index.html'));
   });
@@ -119,7 +130,20 @@ function createApp(options) {
         result.html = html.html;
         result.formattingLoss = html.formattingLoss;
       }
-      if (Object.hasOwn(req.body, 'blocks')) result.blocks = sanitizeSafeBlocks(req.body.blocks);
+      if (Object.hasOwn(req.body, 'blocks')) {
+        const blockFormattingLoss = { discarded: false, items: [] };
+        result.blocks = sanitizeSafeBlocks(req.body.blocks, {
+          onFormattingLoss: function (report) {
+            blockFormattingLoss.discarded = true;
+            if (report && Array.isArray(report.items)) {
+              report.items.forEach(function (item) {
+                blockFormattingLoss.items.push(Object.assign({}, item, { path: report.path || '' }));
+              });
+            }
+          },
+        });
+        result.blockFormattingLoss = blockFormattingLoss;
+      }
       return res.json(result);
     } catch (err) {
       return sendError(res, err);

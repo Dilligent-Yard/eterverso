@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const ROOT = path.resolve(__dirname, '../..');
 const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+const bundleSource = fs.readFileSync(path.join(ROOT, 'generated/client/vault.js'), 'utf8');
 const editorSource = fs.readFileSync(path.join(ROOT, 'editor.js'), 'utf8');
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const PAGE_ID = '33333333-3333-4333-8333-333333333333';
@@ -45,6 +46,7 @@ function makeFrontend(apiRequest = () => Promise.resolve({ data: [] })) {
   const context = { window, document, URL, URLSearchParams, console, setTimeout, clearTimeout };
   vm.createContext(context);
   vm.runInContext(editorSource, context, { filename: 'editor.js' });
+  vm.runInContext(bundleSource, context, { filename: 'vault.js' });
   vm.runInContext(appSource, context, { filename: 'app.js' });
   context.__elements = elements;
   context.__main = main;

@@ -36,7 +36,7 @@ let server;
 let baseUrl;
 
 test.before(async () => {
-  assert.ok(testDatabaseUrl, 'Run npm run test:env:up and migrate the isolated test database to 0015 first.');
+  assert.ok(testDatabaseUrl, 'Run npm run test:env:up and migrate the isolated test database to 0017 first.');
   assert.equal(process.env.DATABASE_URL, undefined, 'The integration test process must not inherit the development DSN.');
   assert.equal(process.env.DEV_DATABASE_URL, undefined, 'The integration test process must not inherit the development DSN.');
   const verified = JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'scripts/test-env.js'), 'assert'], {

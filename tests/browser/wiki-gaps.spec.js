@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0017_timeline_events';
 const PASSWORD = 'Synthetic-wiki-gaps-browser-password-42';
 let sql;
 let server;
@@ -103,7 +103,7 @@ test('WIKI-M5/M6 public category, backlinks, revision comparison, and discussion
       expect(directArticleResponse.status()).toBe(200);
       expect((await directArticleResponse.json()).data.id).toBe(fixture.targetPageId);
       await expect(directReader.locator('.wiki-content-area')).toContainText(fixture.initialText);
-      await expect(directReader.getByRole('button', { name: 'Abrir discussão', exact: true })).toHaveCount(0);
+      await expect(directReader.getByRole('link', { name: 'Abrir discussão', exact: true })).toHaveCount(0);
       await expect(directApiEvents).toContainEqual(expect.stringMatching(/GET \/api\/wiki\/pages\/.* 200/));
     } finally {
       await directReaderContext.close();
@@ -162,7 +162,7 @@ test('WIKI-M5/M6 public category, backlinks, revision comparison, and discussion
       expect(linkedArticleResponse.status()).toBe(200);
       expect((await linkedArticleResponse.json()).data.discussionThreadId).toBe(fixture.threadId);
       await expect(linkedReader.locator('.wiki-content-area')).toContainText(fixture.initialText);
-      await expect(linkedReader.getByRole('button', { name: 'Abrir discussão', exact: true })).toBeVisible();
+      await expect(linkedReader.getByRole('link', { name: 'Abrir discussão', exact: true })).toBeVisible();
       expect(linkedApiEvents).toContainEqual(expect.stringMatching(/GET \/api\/wiki\/pages\/.* 200/));
     } finally {
       await linkedReaderContext.close();
@@ -182,7 +182,7 @@ test('WIKI-M5/M6 public category, backlinks, revision comparison, and discussion
       const unlinkedReader = await unlinkedReaderContext.newPage();
       await unlinkedReader.goto(`${origin}/wiki/${fixture.targetSlug}`);
       await expect(unlinkedReader.locator('.wiki-content-area')).toContainText(fixture.initialText);
-      await expect(unlinkedReader.getByRole('button', { name: 'Abrir discussão', exact: true })).toHaveCount(0);
+      await expect(unlinkedReader.getByRole('link', { name: 'Abrir discussão', exact: true })).toHaveCount(0);
     } finally {
       await unlinkedReaderContext.close();
     }
