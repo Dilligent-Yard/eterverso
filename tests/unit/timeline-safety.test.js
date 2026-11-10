@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const path = require('node:path');
 const express = require('express');
 const { ApiError, sendError } = require('../../server/errors');
 const {
@@ -804,4 +805,37 @@ test('falha de auditoria reverte a mutação de PUT e DELETE na transação de a
       assert.equal(auth.state.actorReads, 1);
     });
   }
+});
+
+test('timeline seed is atomic and propagates a mid-run insert failure', async () => {
+  const rows = [];
+  let inserts = 0;
+  const sql = async (strings, ...values) => {
+    const query = strings.join(' ');
+    if (query.includes('count(*)::int AS total FROM timeline_events')) return [{ total: rows.length }];
+    if (query.includes('INSERT INTO timeline_events')) {
+      inserts += 1;
+      if (inserts === 2) throw new Error('intentional seed failure');
+      rows.push({ internal_id: values[0] });
+      return [];
+    }
+    throw new Error(`unexpected seed query: ${query}`);
+  };
+  sql.begin = async (callback) => {
+    const snapshot = rows.slice();
+    try {
+      return await callback(sql);
+    } catch (error) {
+      rows.length = 0;
+      rows.push(...snapshot);
+      throw error;
+    }
+  };
+
+  await assert.rejects(
+    seedTimelineIfEmpty(sql, { repoRoot: path.resolve(__dirname, '../..') }),
+    /intentional seed failure/,
+  );
+  assert.equal(rows.length, 0, 'a failed seed must leave no partial rows');
+  assert.equal(inserts, 2);
 });

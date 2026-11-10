@@ -162,22 +162,29 @@ export async function ensureTimelineSchema(sql: QueryExecutor): Promise<void> {
 }
 
 export async function seedTimelineIfEmpty(
-  sql: QueryExecutor,
+  sql: TimelineQueryExecutor,
   options: TimelineSeedOptions,
 ): Promise<void> {
-  try {
-    const existing = await sql<TimelineCountRow>`SELECT count(*)::int AS total FROM timeline_events`;
+  const seedFile = path.join(options.repoRoot, 'server', 'timeline-seed.json');
+  if (!fs.existsSync(seedFile)) return;
+  const items: unknown = JSON.parse(fs.readFileSync(seedFile, 'utf8'));
+  if (!Array.isArray(items) || items.length === 0) return;
+  if (typeof sql.begin !== 'function') {
+    throw new Error('Timeline seeding requires a transactional PostgreSQL client.');
+  }
+
+  // The empty check, all inserts and any failure share one transaction. A
+  // failed seed therefore leaves the table unchanged instead of creating a
+  // partial public timeline that the explicit-empty guard would then refuse to
+  // repair.
+  await sql.begin(async (tx) => {
+    const existing = await tx<TimelineCountRow>`SELECT count(*)::int AS total FROM timeline_events`;
     const existingRow = existing[0];
     if (existingRow && existingRow.total > 0) return;
 
-    const seedFile = path.join(options.repoRoot, 'server', 'timeline-seed.json');
-    if (!fs.existsSync(seedFile)) return;
-    const items: unknown = JSON.parse(fs.readFileSync(seedFile, 'utf8'));
-    if (!Array.isArray(items) || items.length === 0) return;
-
     for (const rawItem of items) {
       const item = isRecord(rawItem) ? rawItem : {};
-      await sql`
+      await tx`
         INSERT INTO timeline_events (
           internal_id, title, short_title, summary, color, era,
           start_date, end_date, order_index, tags, story_arc,
@@ -190,8 +197,6 @@ export async function seedTimelineIfEmpty(
           ${item.characterGroup || ''}, ${item.location || ''}
         ) ON CONFLICT (internal_id) DO NOTHING`;
     }
-    console.log(`[Timeline] Seed de ${items.length} eventos executado com sucesso.`);
-  } catch (error) {
-    console.warn('[Timeline] Falha ao popular seed inicial da timeline:', warningMessage(error));
-  }
+  });
+  console.log(`[Timeline] Seed de ${items.length} eventos executado com sucesso.`);
 }

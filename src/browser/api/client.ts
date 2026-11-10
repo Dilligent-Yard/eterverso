@@ -246,12 +246,15 @@ export function createApi(root: ApiRoot) {
           code: isRecord(data) && typeof data.code === 'string' ? data.code : undefined,
         });
       }
-      if (authEndpoint(verb, parsedUrl.pathname)) {
+      if (requestAuthGeneration === authGeneration && authEndpoint(verb, parsedUrl.pathname)) {
         invalidateCsrf();
         if (verb === 'POST' && parsedUrl.pathname === '/api/auth/logout') clearSessionUser();
         else if (isRecord(data) && data.user) setSessionUser(data.user);
       }
-      if (verb === 'PUT' && parsedUrl.pathname === '/api/auth/profile' && isRecord(data) && data.csrfToken) invalidateCsrf();
+      if (requestAuthGeneration === authGeneration && verb === 'PUT'
+          && parsedUrl.pathname === '/api/auth/profile' && isRecord(data) && data.csrfToken) {
+        invalidateCsrf();
+      }
       return data;
     }));
   }

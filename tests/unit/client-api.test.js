@@ -253,3 +253,20 @@ test('a current 401 still expires the active session', async () => {
   await assert.rejects(api.apiRequest('GET', '/api/private'), (error) => error.status === 401);
   assert.equal(api.getSessionUser(), null);
 });
+
+test('a stale login success cannot replace a session established later', async () => {
+  let resolveLogin;
+  const api = loadApi((url) => {
+    if (String(url).endsWith('/api/auth/csrf')) return Promise.resolve(response(200, { csrfToken: TOKEN_A }));
+    return new Promise((resolve) => {
+      resolveLogin = () => resolve(response(200, { user: { id: 'user-a', username: 'Ana', role: 'member' } }));
+    });
+  });
+  api.setSessionUser({ id: 'user-b', username: 'Bia', role: 'member' });
+  const pending = api.apiRequest('POST', '/api/auth/login', { username: 'Ana', password: 'synthetic-password' });
+  await new Promise((resolve) => setImmediate(resolve));
+  api.setSessionUser({ id: 'user-b', username: 'Bia', role: 'member' });
+  resolveLogin();
+  await pending;
+  assert.equal(api.getSessionUser().id, 'user-b', 'the newer login must survive a stale login response');
+});

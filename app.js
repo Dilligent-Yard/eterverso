@@ -6731,16 +6731,18 @@ function salvarEdicaoPerfil() {
   saveActiveResourceFormDraft();
   var finish = beginResourceFormSubmission('profile-update');
   if (!finish) return;
+  var profileRequestRevision = sessionRevision;
   apiRequest('PUT', '/api/auth/profile', payload, function(err, data) {
     finish();
     if (err) {
       showAlert(err, 'error');
       return;
     }
+    if (profileRequestRevision !== sessionRevision) return;
+    if (!applyServerSession(data.user, profileRequestRevision)) return;
     pendingProfileAvatarUpload = null;
     pendingProfileAvatarCleared = false;
     clearResourceFormDraft(descriptor);
-    applyServerSession(data.user);
     syncCachedAuthorData(data.user);
     updateTopBar();
     var curPwdEl = document.getElementById('prof-current-password');
@@ -7860,11 +7862,13 @@ function clearNotificationCache() {
 }
 
 function resetAdminStateCache() {
+  adminLoadSequence += 1;
   adminState = { users: [], categories: [], events: [], userPage: { limit: 50, offset: 0, hasMore: false }, loading: false, loaded: false, error: null };
   adminWikiTransferState = createAdminWikiTransferState();
 }
 
-function applyServerSession(serverUser) {
+function applyServerSession(serverUser, expectedRevision) {
+  if (expectedRevision !== undefined && expectedRevision !== sessionRevision) return false;
   sessionRevision += 1;
   var previousId = DB.session && (DB.session.serverId || DB.session.id);
   var previousRole = DB.session && DB.session.role;
@@ -7881,7 +7885,7 @@ function applyServerSession(serverUser) {
     resetAdminStateCache();
     DB.session = null;
     if (window.Aetherverse) window.Aetherverse.clearSessionUser();
-    return;
+    return true;
   }
   var safeUser = window.Aetherverse.setSessionUser(serverUser);
   if (!safeUser || typeof safeUser.id !== 'string') {
@@ -7896,7 +7900,7 @@ function applyServerSession(serverUser) {
     clearNotificationCache();
     resetAdminStateCache();
     DB.session = null;
-    return;
+    return true;
   }
   if (!previousId || String(previousId) !== safeUser.id || previousRole !== safeUser.role) {
     pendingProfileAvatarUpload = null;
@@ -7915,6 +7919,7 @@ function applyServerSession(serverUser) {
     posts: typeof safeUser.posts === 'number' ? safeUser.posts : 0,
     joinDate: formatJoinDate(safeUser.joinDate),
   });
+  return true;
 }
 
 function syncSessionUser(user) {
@@ -7932,11 +7937,12 @@ function doLogin() {
   loginSubmissionPending = true;
   var button = document.getElementById('login-submit');
   if (button) button.disabled = true;
+  var loginRequestRevision = sessionRevision;
   apiPost('/api/auth/login', { username: username, password: password }, function(err, data) {
     loginSubmissionPending = false;
     if (button) button.disabled = false;
     if (err) { showAlert(err, 'error'); return; }
-    applyServerSession(data.user);
+    if (!applyServerSession(data.user, loginRequestRevision)) return;
     carregarNotificacoesServidor();
     closeModal();
     navigate('forum');
@@ -7945,9 +7951,10 @@ function doLogin() {
 }
 
 function doLogout() {
+  var logoutRequestRevision = sessionRevision;
   apiPost('/api/auth/logout', {}, function(err) {
     if (err) { showAlert(err, 'error'); return; }
-    applyServerSession(null);
+    if (!applyServerSession(null, logoutRequestRevision)) return;
     navigate('forum');
   });
 }
@@ -7971,11 +7978,12 @@ function submitRegistro() {
   signupSubmissionPending = true;
   var button = document.getElementById('reg-submit');
   if (button) button.disabled = true;
+  var signupRequestRevision = sessionRevision;
   apiPost('/api/auth/signup', { username: username, email: email, password: password }, function(err, data) {
     signupSubmissionPending = false;
     if (button) button.disabled = false;
     if (err) { showAlert(err, 'error'); return; }
-    applyServerSession(data.user);
+    if (!applyServerSession(data.user, signupRequestRevision)) return;
     carregarNotificacoesServidor();
     navigate('forum');
     showAlert('Cadastro realizado. Bem-vindo(a)!', 'success');

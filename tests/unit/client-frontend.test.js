@@ -1369,3 +1369,40 @@ test('changing the JSON textarea during preview prevents stale apply', async () 
   assert.equal(context.__elements['p-nome'].value, 'Nome anterior');
   assert.equal(alerts.some((message) => /alterado durante a validação/i.test(message)), true);
 });
+
+test('a stale profile success cannot restore the previous account after relogin', async () => {
+  let profileCallback;
+  const context = makeFrontend({ apiRequest: (method, route, body, callback) => {
+    if (route === '/api/auth/profile') profileCallback = callback;
+    return Promise.resolve({});
+  } });
+  for (const id of ['prof-title', 'prof-avatar', 'prof-bio', 'prof-current-password', 'prof-password']) {
+    context.__elements[id] = field('');
+  }
+  context.__elements['prof-title'].value = 'Cronista';
+  context.DB.session = {
+    id: USER_A, serverId: USER_A, username: 'Ana', role: 'admin',
+    title: 'Cronista', avatar: '', bio: '', version: 1,
+  };
+  let finished = 0;
+  context.resourceFormDraftDescriptor = () => null;
+  context.saveActiveResourceFormDraft = () => {};
+  context.beginResourceFormSubmission = () => () => { finished += 1; };
+  context.clearResourceFormDraft = () => {};
+  context.syncCachedAuthorData = () => {};
+  context.updateTopBar = () => {};
+  context.render = () => {};
+  const alerts = [];
+  context.showAlert = (message) => alerts.push(message);
+
+  context.salvarEdicaoPerfil();
+  assert.equal(typeof profileCallback, 'function');
+  context.applyServerSession(null);
+  context.applyServerSession({ id: USER_B, username: 'Bia', role: 'member' });
+  profileCallback(null, { user: { id: USER_A, username: 'Ana', role: 'admin' } });
+  await flushMicrotasks();
+
+  assert.equal(context.DB.session.id, USER_B, 'the stale profile response must be ignored');
+  assert.equal(finished, 1);
+  assert.equal(alerts.includes('Perfil atualizado com sucesso.'), false);
+});
