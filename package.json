@@ -33,6 +33,8 @@
     "typecheck:browser": "tsc --noEmit -p tsconfig.browser.json",
     "typecheck": "npm run typecheck:legacy && npm run typecheck:node && npm run typecheck:browser",
     "lint:typed": "eslint src/browser src/node",
+    "check:js": "node scripts/check-js.js",
+    "verify:static": "npm run typecheck && npm run build:node && npm run build:client && npm run lint:typed && npm run check:js && npm run --ignore-scripts test:unit",
     "build:node": "tsc -p tsconfig.node-build.json",
     "build:client": "esbuild src/browser/index.ts --bundle --format=iife --global-name=VaultModules --target=es2020 --outfile=generated/client/vault.js",
     "pretest:unit": "npm run build:node && npm run build:client",
