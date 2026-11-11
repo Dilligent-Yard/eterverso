@@ -7,7 +7,9 @@
 > [`docs/development/architecture.md`](../development/architecture.md) and
 > [`docs/development/verification.md`](../development/verification.md). Model,
 > worker and capacity choices below record that task's requested configuration;
-> they do not bind new contributors.
+> they do not bind new contributors. The read order and checkpoint-update
+> instructions below belong to that historical task; do not follow them for new
+> work.
 
 Prepared 19 October 2026. This document authorizes no deployment by itself.
 Arthur's subsequent instruction to execute it authorizes the local branch

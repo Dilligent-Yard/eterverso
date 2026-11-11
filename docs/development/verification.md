@@ -74,7 +74,7 @@ excludes generated, dependency and private local trees; it is also part of
 | `npm run lint:typed` | Strict typed lint for `src/browser` and `src/node` | Dependencies installed; no database |
 | `npm run build:node` | Compile Node islands to `.generated/node/` | Dependencies installed |
 | `npm run build:client` | Bundle the browser facade to `generated/client/vault.js` | Dependencies installed |
-| `npm run check:js` | Parse repository JavaScript with Node 24; never execute it | Dependencies installed; excludes generated/private/dependency trees |
+| `npm run check:js` | Parse repository JavaScript with Node 24; never execute it | Dependencies installed; lower-case `.js`/`.cjs`/`.mjs`; excludes `.git`, dependency, generated, build-output and `.local` directories by name at every depth; skips symlinks |
 | `npm run verify:static` | Typecheck, build, typed lint, JS syntax and unit tests | Dependencies installed; no database or private inputs |
 | `node scripts/check-build.js` | Check that required generated outputs exist | Run after a build; does not check freshness |
 | `npm start` | Run `node server.js` | Existing `.env`, built outputs, ready database schema |
@@ -97,8 +97,9 @@ test processes and supplies only the isolated `ETERVERSO_TEST_DATABASE_URL`.
 
 Every database preflight and migration command requires an explicit target;
 timeline seeding requires an explicit target or an explicit `DATABASE_URL`; the
-administrator bootstrap requires an explicit database name and environment
-file.
+administrator bootstrap requires an explicit database name and an explicitly
+selected environment file or explicit `DATABASE_URL`. The documented local
+procedure uses `--env-file .env` with inherited `DATABASE_URL` unset.
 
 ```sh
 npm run db:preflight -- --target=development
@@ -210,8 +211,9 @@ or public CI.
 Do not describe this as migration of real users' data, and do not infer that a
 private baseline validation proves public synthetic portability. The dated
 runbook `docs/planning/verification-and-recovery.md` retains that task's
-detailed requirements and recovery instructions; it is historical operational
-evidence, not a clean-checkout CI script.
+detailed requirements and recovery instructions and remains the current local
+migration/recovery guidance; it is not a clean-checkout CI script. Reserve
+"historical" for the private baseline procedure itself.
 
 ## Verification evidence
 

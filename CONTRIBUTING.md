@@ -34,8 +34,10 @@ git push -u origin HEAD
 ```
 
 Do not merge, deploy or publish lore unless the task explicitly authorizes it.
-The repository can contain local task records under `docs/planning/`; those are
-historical evidence, not current contribution requirements.
+Dated task records under `docs/planning/` are historical evidence, not current
+contribution requirements, except where a current document explicitly links
+one; the recovery runbook and Work authoring guidance remain current until
+moved.
 
 ## Scope and reviewability
 
@@ -120,7 +122,9 @@ required.
   content seeding at startup.
 - Database preflight, migration and seed commands require an explicit
   `--target` (or their documented explicit DSN). The administrator bootstrap
-  requires an explicit database name and environment file. Development is the
+  requires an explicit database name and an explicitly selected environment
+  file or explicit `DATABASE_URL`; the documented local procedure uses
+  `--env-file .env` with inherited `DATABASE_URL` unset. Development is the
   local Compose PostgreSQL 17 on `127.0.0.1:55432`; tests use the separate
   `compose.test.yaml` service. Never point tests at the development database.
 - Do not remove the development volume, reset a database, overwrite `.env` or

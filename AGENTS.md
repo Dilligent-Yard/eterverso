@@ -40,8 +40,10 @@ change them.
   `127.0.0.1:55432`; tests use the separate `compose.test.yaml` service and a
   generated loopback port from 55433. Preflight and migration commands require
   an explicit target; timeline seeding requires an explicit target or explicit
-  DSN; the administrator bootstrap requires an explicit database name and
-  environment file. Never point tests or ad hoc commands at the development
+  DSN; the administrator bootstrap requires an explicit database name and an
+  explicitly selected environment file or explicit `DATABASE_URL`; the
+  documented local procedure uses `--env-file .env` with inherited
+  `DATABASE_URL` unset. Never point tests or ad hoc commands at the development
   database.
 - Preserve data and recovery material. Do not remove the development volume,
   reset the development database, overwrite `.env`, or discard private
