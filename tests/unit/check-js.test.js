@@ -121,3 +121,55 @@ test('STATIC-06 accepts valid CommonJS and ES module syntax', (t) => {
   assert.equal(result.checked, 2);
   assert.deepEqual(result.failures, []);
 });
+
+test('STATIC-07 skips excluded directory names at every depth', (t) => {
+  const root = tempRoot(t);
+  writeFile(root, 'top.js', 'const ok = 1;\n');
+  writeFile(root, 'src/out/hidden.js', 'const hidden = ;\n');
+  writeFile(root, 'pkg/dist/hidden.mjs', 'export const = 1;\n');
+  writeFile(root, 'tools/generated/hidden.cjs', 'module.exports = ;\n');
+
+  assert.deepEqual(listJavaScriptFiles(root), ['top.js']);
+  const result = checkJavaScript({ root });
+  assert.equal(result.checked, 1);
+  assert.deepEqual(result.failures, []);
+});
+
+test('STATIC-08 aggregates multiple syntax failures', (t) => {
+  const root = tempRoot(t);
+  writeFile(root, 'a.js', 'const a = ;\n');
+  writeFile(root, 'nested/b.mjs', 'export const = 1;\n');
+
+  const result = checkJavaScript({ root });
+  assert.equal(result.checked, 2);
+  assert.deepEqual(result.failures.map((failure) => failure.file).sort(), ['a.js', 'nested/b.mjs']);
+
+  const cli = spawnSync(process.execPath, [SCRIPT, `--root=${root}`], { encoding: 'utf8' });
+  assert.equal(cli.status, 1);
+  assert.match(cli.stderr, /a\.js/);
+  assert.match(cli.stderr, /nested\/b\.mjs/);
+});
+
+test('STATIC-09 handles paths containing spaces and shell metacharacters', (t) => {
+  const root = tempRoot(t);
+  writeFile(root, 'nested dir/weird $name [1].js', 'const ok = 1;\n');
+
+  assert.deepEqual(listJavaScriptFiles(root), ['nested dir/weird $name [1].js']);
+  const result = checkJavaScript({ root });
+  assert.equal(result.checked, 1);
+  assert.deepEqual(result.failures, []);
+});
+
+test('STATIC-10 rejects a missing root or missing --root value', (t) => {
+  const root = tempRoot(t);
+  const missing = path.join(root, 'missing');
+  assert.throws(() => checkJavaScript({ root: missing }), /ENOENT/);
+
+  const missingRoot = spawnSync(process.execPath, [SCRIPT, `--root=${missing}`], { encoding: 'utf8' });
+  assert.equal(missingRoot.status, 1);
+  assert.match(missingRoot.stderr, /ENOENT/);
+
+  const missingValue = spawnSync(process.execPath, [SCRIPT, '--root'], { encoding: 'utf8' });
+  assert.equal(missingValue.status, 1);
+  assert.match(missingValue.stderr, /--root requires a directory/);
+});
