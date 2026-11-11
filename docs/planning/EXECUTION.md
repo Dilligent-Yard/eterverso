@@ -1,5 +1,14 @@
 # Execution brief: shared Eterverso and reference wiki
 
+> Historical task brief, prepared 19 October 2026 for the local shared-state
+> implementation on `arthur/local-setup`. It is preserved as evidence of that
+> task, not as current contributor guidance. Current setup, architecture and
+> verification live in [`README.md`](../../README.md),
+> [`docs/development/architecture.md`](../development/architecture.md) and
+> [`docs/development/verification.md`](../development/verification.md). Model,
+> worker and capacity choices below record that task's requested configuration;
+> they do not bind new contributors.
+
 Prepared 19 October 2026. This document authorizes no deployment by itself.
 Arthur's subsequent instruction to execute it authorizes the local branch
 implementation described here. Preparing this brief did not implement it.
