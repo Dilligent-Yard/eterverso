@@ -146,11 +146,14 @@ the app or a direct CLI that consumes an adapter. `node scripts/check-build.js`
 checks the complete set used by canonical startup and its adapters;
 `db-migrate` checks the sandbox target adapter it needs, and `bootstrap-admin`
 checks the startup outputs. Direct invocations fail early with build guidance
-when those generated modules are absent. Canonical startup and the migration
-wrapper read the repository-root `.env`, migration journal/SQL and static files
-in place; the build does not relocate them. The timeline seed remains at
-`server/timeline-seed.json` for explicit seeding. Hosting provider build/start
-settings are not verified by this repository.
+when those generated modules are absent. Canonical startup reads the
+repository-root `.env`; the development migration target reads that file too.
+The test target reads its private `.local/test/connection.env`, and the sandbox
+target resolves its own private configuration under `.local/public-sandbox/`.
+Nothing is relocated by the build: `.env`, the migration journal and SQL,
+static files and the timeline seed at `server/timeline-seed.json` stay in
+place. The seed remains available for explicit seeding. Hosting provider
+build/start settings are not verified by this repository.
 
 ## Deployment
 

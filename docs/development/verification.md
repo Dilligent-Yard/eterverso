@@ -210,10 +210,12 @@ or public CI.
 
 Do not describe this as migration of real users' data, and do not infer that a
 private baseline validation proves public synthetic portability. The dated
-runbook `docs/planning/verification-and-recovery.md` retains that task's
-detailed requirements and recovery instructions and remains the current local
-migration/recovery guidance; it is not a clean-checkout CI script. Reserve
-"historical" for the private baseline procedure itself.
+runbook `docs/planning/verification-and-recovery.md` is still the detailed
+reference for recovery. Its opening implementation requirements and early
+commands, however, describe that earlier task and are dated; the document as a
+whole is not current guidance. Check those early sections against the current
+README and this document. The runbook is not a clean-checkout CI script.
+Reserve "historical" for the private baseline procedure itself.
 
 ## Verification evidence
 
