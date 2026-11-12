@@ -492,6 +492,7 @@ function render() {
   restoreForumDraftForCurrentRoute();
   if (currentPage === 'wikiEditor' || currentPage === 'wikiCreate') restoreWikiEditorDraftContent();
   if (currentPage === 'wikiArticle') restoreWikiProposalDraftContent();
+  if (typeof applyCharacterMediaWikiStyles === 'function') applyCharacterMediaWikiStyles();
   if ((currentPage === 'wikiArticle' || currentPage === 'wikiStaffArticle') && window.location.hash) {
     setTimeout(function() {
       try { var target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
@@ -846,6 +847,17 @@ function applyResourceFormDraft(descriptor, values, safe) {
     }
     applySafeResourceBlocks(safe && safe.blocks);
     if (typeof values.descricao === 'string') setEditorContent('p-editor', safe ? safe.html : '');
+    if (typeof values.wikitext === 'string') {
+      var wtEl = document.getElementById('p-wikitext');
+      if (wtEl) wtEl.value = values.wikitext;
+    }
+    if (typeof values.customCss === 'string') {
+      var cssEl = document.getElementById('p-custom-css');
+      if (cssEl) cssEl.value = values.customCss;
+    }
+    if (values.contentMode === 'wikitext' || values.contentMode === 'html') {
+      setCharacterContentMode(values.contentMode, true);
+    }
   } else if (descriptor.kind === 'scene') {
     restoreResourceFields(values, {
       titulo: 'c-titulo', subtitulo: 'c-subtitulo', categoria: 'c-categoria', status: 'c-status',
@@ -3595,7 +3607,11 @@ function renderPersonagemView() {
   html += '</div>';
 
   html += '<div class="wiki-content-area">';
-  html += '<div class="char-sheet-body">' + p.descricao + '</div>';
+  if (p.contentMode === 'wikitext') {
+    html += '<div class="char-sheet-body char-mw-scope char-mw-scope-' + ha(p.id) + '" data-char-mw-id="' + ha(p.id) + '">' + p.descricao + '</div>';
+  } else {
+    html += '<div class="char-sheet-body">' + p.descricao + '</div>';
+  }
 
   if (Array.isArray(p.blocks) && p.blocks.length) {
     html += renderModularBlocks(p.blocks, 'char-' + p.id);
@@ -3711,13 +3727,454 @@ function buildRadarChart(stats, accentColor) {
 // Estado temporário do Construtor de Blocos durante criação/edição
 var activeBuilderBlocks = [];
 
+var charMwResourcesState = { loaded: false, loading: false, error: null, items: [] };
+var charMwStudioState = {
+  activeTab: 'wikitext',
+  libFilter: 'all',
+  editingId: null,
+  editingVersion: null,
+  editingKind: 'template',
+  editingName: '',
+  editingDesc: '',
+  editingContent: ''
+};
+
+function applyScopedStyleElement(elementId, cssText) {
+  if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
+  var existing = document.getElementById(elementId);
+  if (!cssText) {
+    if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+    return;
+  }
+  if (!existing) {
+    existing = document.createElement('style');
+    existing.id = elementId;
+    document.head.appendChild(existing);
+  }
+  existing.textContent = cssText;
+}
+
+function applyCharacterMediaWikiStyles() {
+  if (currentPage === 'personagemView') {
+    var p = listaPersonagens().find(function(x) { return String(x.id) === String(currentPersonagem); });
+    applyScopedStyleElement('char-mw-dynamic-style', p && p.contentMode === 'wikitext' ? (p.compiledCss || '') : '');
+  } else {
+    applyScopedStyleElement('char-mw-dynamic-style', '');
+    applyScopedStyleElement('char-mw-preview-style', '');
+  }
+}
+
+function loadCharMwResources(force) {
+  if (charMwResourcesState.loading || (charMwResourcesState.loaded && !force)) return;
+  charMwResourcesState.loading = true;
+  charMwResourcesState.error = null;
+  apiRequest('GET', '/api/personagens/mediawiki/resources').then(function(res) {
+    charMwResourcesState.items = Array.isArray(res && res.data) ? res.data : [];
+    charMwResourcesState.loaded = true;
+    refreshCharMwLibraryDOM();
+  }).catch(function(err) {
+    charMwResourcesState.error = (err && err.message) ? err.message : 'Não foi possível carregar os recursos MediaWiki.';
+    refreshCharMwLibraryDOM();
+  }).finally(function() {
+    charMwResourcesState.loading = false;
+  });
+}
+
+function setCharacterContentMode(mode, skipSave) {
+  var normalized = mode === 'wikitext' ? 'wikitext' : 'html';
+  var modeInput = document.getElementById('p-content-mode');
+  if (modeInput) modeInput.value = normalized;
+  var htmlPanel = document.getElementById('p-editor-panel');
+  var mwPanel = document.getElementById('p-mw-panel');
+  if (htmlPanel) htmlPanel.style.display = normalized === 'html' ? 'block' : 'none';
+  if (mwPanel) mwPanel.style.display = normalized === 'wikitext' ? 'block' : 'none';
+  var btnHtml = document.getElementById('p-mode-btn-html');
+  var btnMw = document.getElementById('p-mode-btn-wikitext');
+  if (btnHtml) btnHtml.classList.toggle('active', normalized === 'html');
+  if (btnMw) btnMw.classList.toggle('active', normalized === 'wikitext');
+  if (normalized === 'wikitext' && !charMwResourcesState.loaded && !charMwResourcesState.loading) {
+    loadCharMwResources(false);
+  }
+  if (!skipSave && typeof saveActiveResourceFormDraft === 'function') {
+    saveActiveResourceFormDraft();
+  }
+}
+
+function setCharacterMwTab(tab) {
+  charMwStudioState.activeTab = ['wikitext', 'css', 'library'].indexOf(tab) !== -1 ? tab : 'wikitext';
+  ['wikitext', 'css', 'library'].forEach(function(key) {
+    var pane = document.getElementById('p-mw-pane-' + key);
+    var btn = document.getElementById('p-mw-tab-' + key);
+    if (pane) pane.style.display = key === charMwStudioState.activeTab ? 'block' : 'none';
+    if (btn) btn.classList.toggle('active', key === charMwStudioState.activeTab);
+  });
+  if (charMwStudioState.activeTab === 'library' && !charMwResourcesState.loaded && !charMwResourcesState.loading) {
+    loadCharMwResources(false);
+  }
+}
+
+function insertIntoTextarea(textareaId, before, after, placeholder) {
+  var el = document.getElementById(textareaId);
+  if (!el) return;
+  var start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length;
+  var end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length;
+  var selected = el.value.slice(start, end) || (placeholder || '');
+  var snippet = before + selected + (after || '');
+  el.value = el.value.slice(0, start) + snippet + el.value.slice(end);
+  if (typeof el.focus === 'function') el.focus();
+  if (typeof el.setSelectionRange === 'function') {
+    el.setSelectionRange(start + before.length, start + before.length + selected.length);
+  }
+  if (typeof saveActiveResourceFormDraft === 'function') saveActiveResourceFormDraft();
+}
+
+function insertWikitextSnippet(before, after, placeholder) {
+  setCharacterMwTab('wikitext');
+  insertIntoTextarea('p-wikitext', before, after, placeholder);
+}
+
+function insertMediaWikiStarterExample() {
+  var wtEl = document.getElementById('p-wikitext');
+  var cssEl = document.getElementById('p-custom-css');
+  if (!wtEl) return;
+  if (wtEl.value.trim() && !confirm('Substituir o Wikitext atual pelo modelo de exemplo?')) return;
+  wtEl.value = [
+    '<div class="mw-ficha-banner">',
+    '  <div class="mw-ficha-tag">{{#if:{{FICHA_CATEGORIA}}|{{FICHA_CATEGORIA}}|Ficha MediaWiki}}</div>',
+    '  <div class="mw-ficha-titulo">{{#if:{{FICHA_NOME}}|{{FICHA_NOME}}|Nome do Personagem}}</div>',
+    '  {{#if:{{FICHA_TITULO}}|<div class="mw-ficha-sub">{{FICHA_TITULO}}</div>|}}',
+    '</div>',
+    '',
+    '== Visão Geral ==',
+    "'''{{PAGENAME}}''' é uma ficha construída com '''Wikitext''', ''Templates'', {{#if:1|funções parser}} e CSS com escopo isolado.",
+    '',
+    '== Registro Técnico ==',
+    '{| class="mw-ficha-tabela"',
+    '! Campo !! Informação',
+    '|-',
+    '| Raça || {{#if:{{FICHA_RACA}}|{{FICHA_RACA}}|Não informada}}',
+    '|-',
+    '| Facção || {{#if:{{FICHA_FACCAO}}|{{FICHA_FACCAO}}|Independente}}',
+    '|-',
+    '| Status || {{#if:{{FICHA_STATUS}}|{{FICHA_STATUS}}|Ativo}}',
+    '|-',
+    '| Índice de Poder || {{#expr: (70 + 85 + 90) / 3 }}',
+    '|}',
+    '',
+    '== Notas & Feitos ==',
+    '* Suporta listas ordenadas e não ordenadas',
+    '* Links internos da wiki como [[A Máscara]]',
+    '* Predefinições <code><nowiki>{{Nome|param=valor}}</nowiki></code> e módulos Lua <code><nowiki>{{#invoke:Modulo|funcao}}</nowiki></code>'
+  ].join('\n');
+  if (cssEl && !cssEl.value.trim()) {
+    cssEl.value = [
+      '.mw-ficha-banner {',
+      '  padding: 16px 20px;',
+      '  border: 1px solid #3f3f46;',
+      '  border-left: 4px solid #ffffff;',
+      '  border-radius: 6px;',
+      '  background: linear-gradient(135deg, #18181b, #09090b);',
+      '  margin-bottom: 16px;',
+      '}',
+      '.mw-ficha-tag { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #a1a1aa; }',
+      '.mw-ficha-titulo { font-size: 22px; font-weight: 700; color: #ffffff; margin-top: 4px; }',
+      '.mw-ficha-sub { font-size: 13px; color: #d4d4d8; font-style: italic; margin-top: 2px; }',
+      '.mw-ficha-tabela { width: 100%; border-collapse: collapse; margin: 10px 0; }',
+      '.mw-ficha-tabela th, .mw-ficha-tabela td { border: 1px solid #27272a; padding: 8px 10px; text-align: left; }',
+      '.mw-ficha-tabela th { background: #18181b; color: #ffffff; }'
+    ].join('\n');
+  }
+  setCharacterMwTab('wikitext');
+  if (typeof saveActiveResourceFormDraft === 'function') saveActiveResourceFormDraft();
+  previewCharMediaWiki(false);
+}
+
+function charMwKindLabel(kind) {
+  if (kind === 'lua') return 'Módulo Lua';
+  if (kind === 'css') return 'Estilo CSS';
+  return 'Template';
+}
+
+function charMwDefaultBoilerplate(kind) {
+  if (kind === 'lua') {
+    return [
+      'local p = {}',
+      '',
+      'function p.render(frame)',
+      '  local args = frame.args',
+      '  local titulo = mw.text.trim(args.titulo or args[1] or "Bloco Lua")',
+      '  local texto = mw.text.trim(args.texto or args[2] or "Saída gerada por Lua.")',
+      '  local box = mw.html.create("div")',
+      '    :addClass("mw-lua-box")',
+      '    :tag("strong"):wikitext(titulo):done()',
+      '    :tag("p"):wikitext(texto):done()',
+      '  return tostring(box)',
+      'end',
+      '',
+      'return p'
+    ].join('\n');
+  }
+  if (kind === 'css') {
+    return [
+      '.mw-card {',
+      '  padding: 14px;',
+      '  border: 1px solid #3f3f46;',
+      '  border-radius: 6px;',
+      '  background-color: #111113;',
+      '}'
+    ].join('\n');
+  }
+  return [
+    '<noinclude>Predefinição reutilizável para fichas de personagem.</noinclude>',
+    '<includeonly><div class="mw-card">',
+    "'''{{{titulo|Título}}}''' — {{{descricao|Sem descrição}}}",
+    '</div></includeonly>'
+  ].join('\n');
+}
+
+function refreshCharMwLibraryDOM() {
+  var root = document.getElementById('p-mw-library-root');
+  if (root) root.innerHTML = renderCharMwLibraryInner();
+}
+
+function setCharMwLibraryFilter(kind) {
+  charMwStudioState.libFilter = kind;
+  refreshCharMwLibraryDOM();
+}
+
+function startNewCharMwResource(kind) {
+  var k = ['template', 'lua', 'css'].indexOf(kind) !== -1 ? kind : 'template';
+  charMwStudioState.editingId = null;
+  charMwStudioState.editingVersion = null;
+  charMwStudioState.editingKind = k;
+  charMwStudioState.editingName = '';
+  charMwStudioState.editingDesc = '';
+  charMwStudioState.editingContent = charMwDefaultBoilerplate(k);
+  refreshCharMwLibraryDOM();
+}
+
+function editCharMwResource(id) {
+  var item = (charMwResourcesState.items || []).find(function(r) { return String(r.id) === String(id); });
+  if (!item) return;
+  charMwStudioState.editingId = item.id;
+  charMwStudioState.editingVersion = item.version;
+  charMwStudioState.editingKind = item.kind;
+  charMwStudioState.editingName = item.name;
+  charMwStudioState.editingDesc = item.description || '';
+  charMwStudioState.editingContent = item.content || '';
+  refreshCharMwLibraryDOM();
+}
+
+function onChangeCharMwResKind(kind) {
+  if (charMwStudioState.editingId) return;
+  charMwStudioState.editingKind = kind;
+  var contentEl = document.getElementById('mw-res-content');
+  if (contentEl && (!contentEl.value.trim() || contentEl.value.trim() === charMwDefaultBoilerplate('template').trim() || contentEl.value.trim() === charMwDefaultBoilerplate('lua').trim() || contentEl.value.trim() === charMwDefaultBoilerplate('css').trim())) {
+    contentEl.value = charMwDefaultBoilerplate(kind);
+  }
+}
+
+function saveCharMwResource() {
+  var kindEl = document.getElementById('mw-res-kind');
+  var nameEl = document.getElementById('mw-res-name');
+  var descEl = document.getElementById('mw-res-desc');
+  var contentEl = document.getElementById('mw-res-content');
+  var kind = kindEl ? kindEl.value : charMwStudioState.editingKind;
+  var name = nameEl ? nameEl.value.trim() : '';
+  var description = descEl ? descEl.value.trim() : '';
+  var content = contentEl ? contentEl.value : '';
+  if (!name) {
+    showAlert('Informe o nome do recurso MediaWiki.', 'error');
+    return;
+  }
+  charMwStudioState.editingKind = kind;
+  charMwStudioState.editingName = name;
+  charMwStudioState.editingDesc = description;
+  charMwStudioState.editingContent = content;
+
+  var isEdit = !!charMwStudioState.editingId;
+  var method = isEdit ? 'PUT' : 'POST';
+  var url = isEdit
+    ? '/api/personagens/mediawiki/resources/' + encodeURIComponent(charMwStudioState.editingId)
+    : '/api/personagens/mediawiki/resources';
+  var payload = isEdit
+    ? { name: name, description: description, content: content, expectedVersion: charMwStudioState.editingVersion }
+    : { kind: kind, name: name, description: description, content: content };
+
+  apiRequest(method, url, payload).then(function(res) {
+    var saved = res && res.data;
+    if (saved) {
+      charMwStudioState.editingId = saved.id;
+      charMwStudioState.editingVersion = saved.version;
+      charMwStudioState.editingKind = saved.kind;
+      charMwStudioState.editingName = saved.name;
+      charMwStudioState.editingDesc = saved.description || '';
+      charMwStudioState.editingContent = saved.content || '';
+    }
+    showAlert(isEdit ? 'Recurso MediaWiki atualizado.' : 'Recurso MediaWiki salvo na biblioteca.', 'success');
+    loadCharMwResources(true);
+  }).catch(function(err) {
+    showAlert((err && err.message) ? err.message : 'Não foi possível salvar o recurso MediaWiki.', 'error');
+  });
+}
+
+function archiveCharMwResource(id) {
+  var item = (charMwResourcesState.items || []).find(function(r) { return String(r.id) === String(id); });
+  if (!item) return;
+  if (!confirm('Arquivar "' + item.name + '"? Fichas que já o usam deixarão de renderizar este recurso.')) return;
+  apiRequest('POST', '/api/personagens/mediawiki/resources/' + encodeURIComponent(id) + '/archive', {
+    expectedVersion: item.version
+  }).then(function() {
+    if (String(charMwStudioState.editingId) === String(id)) {
+      startNewCharMwResource(item.kind);
+    }
+    showAlert('Recurso arquivado.', 'success');
+    loadCharMwResources(true);
+  }).catch(function(err) {
+    showAlert((err && err.message) ? err.message : 'Não foi possível arquivar o recurso.', 'error');
+  });
+}
+
+function insertCharMwResourceTag(id) {
+  var item = (charMwResourcesState.items || []).find(function(r) { return String(r.id) === String(id); });
+  if (!item) return;
+  if (item.kind === 'template') {
+    insertWikitextSnippet('{{' + item.name + '|', '}}', 'param=valor');
+  } else if (item.kind === 'lua') {
+    insertWikitextSnippet('{{#invoke:' + item.name + '|render|', '}}', 'titulo=Exemplo');
+  } else if (item.kind === 'css') {
+    insertWikitextSnippet('<templatestyles src="' + item.name + '" />\n', '', '');
+  }
+}
+
+function renderCharMwLibraryInner() {
+  var html = '<div class="mw-lib-header">';
+  html += '<div class="mw-lib-filters">';
+  [['all', 'Todos'], ['template', 'Templates'], ['lua', 'Módulos Lua'], ['css', 'Estilos CSS']].forEach(function(pair) {
+    var active = charMwStudioState.libFilter === pair[0] ? ' active' : '';
+    html += '<button type="button" class="btn btn-small' + active + '" onclick="setCharMwLibraryFilter(\'' + pair[0] + '\')">' + pair[1] + '</button>';
+  });
+  html += '</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+  html += '<button type="button" class="btn btn-small" onclick="startNewCharMwResource(\'template\')">+ Novo Template</button>';
+  html += '<button type="button" class="btn btn-small" onclick="startNewCharMwResource(\'lua\')">+ Novo Lua</button>';
+  html += '<button type="button" class="btn btn-small" onclick="startNewCharMwResource(\'css\')">+ Novo CSS</button>';
+  html += '<button type="button" class="btn btn-small" onclick="loadCharMwResources(true)">Atualizar</button>';
+  html += '</div></div>';
+
+  if (charMwResourcesState.loading && !charMwResourcesState.loaded) {
+    html += '<div class="alert alert-info">Carregando biblioteca compartilhada…</div>';
+  } else if (charMwResourcesState.error) {
+    html += '<div class="alert alert-error">' + h(charMwResourcesState.error) + '</div>';
+  }
+
+  var items = (charMwResourcesState.items || []).filter(function(r) {
+    return charMwStudioState.libFilter === 'all' || r.kind === charMwStudioState.libFilter;
+  });
+
+  html += '<div class="mw-library-layout">';
+  html += '<div class="mw-library-list">';
+  if (!items.length) {
+    html += '<div class="mw-empty-lib">Nenhum recurso encontrado. Crie um Template, Módulo Lua ou Estilo CSS ao lado.</div>';
+  } else {
+    items.forEach(function(item) {
+      var sel = String(charMwStudioState.editingId) === String(item.id) ? ' selected' : '';
+      html += '<div class="mw-lib-item' + sel + '">';
+      html += '<div class="mw-lib-item-top"><span class="tag mw-kind-tag mw-kind-' + ha(item.kind) + '">' + h(charMwKindLabel(item.kind)) + '</span><strong>' + h(item.name) + '</strong> <span class="mw-ver">v' + h(item.version) + '</span></div>';
+      if (item.description) html += '<div class="mw-lib-item-desc">' + h(item.description) + '</div>';
+      html += '<div class="mw-lib-item-actions">';
+      html += '<button type="button" class="btn btn-small btn-primary" onclick="insertCharMwResourceTag(' + idJs(item.id) + ')">Inserir</button>';
+      html += '<button type="button" class="btn btn-small" onclick="editCharMwResource(' + idJs(item.id) + ')">Editar</button>';
+      html += '<button type="button" class="btn btn-small btn-danger" onclick="archiveCharMwResource(' + idJs(item.id) + ')">Arquivar</button>';
+      html += '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  var isEdit = !!charMwStudioState.editingId;
+  html += '<div class="mw-library-editor">';
+  html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);">' + (isEdit ? 'Editar Recurso Compartilhado' : 'Criar Recurso Compartilhado') + '</div>';
+  html += '<div style="display:grid;grid-template-columns:150px 1fr;gap:8px;margin-bottom:8px;">';
+  html += '<div class="form-row" style="margin-bottom:0"><label>Tipo</label><select id="mw-res-kind" ' + (isEdit ? 'disabled ' : '') + 'onchange="onChangeCharMwResKind(this.value)">';
+  html += '<option value="template"' + (charMwStudioState.editingKind === 'template' ? ' selected' : '') + '>Template</option>';
+  html += '<option value="lua"' + (charMwStudioState.editingKind === 'lua' ? ' selected' : '') + '>Módulo Lua</option>';
+  html += '<option value="css"' + (charMwStudioState.editingKind === 'css' ? ' selected' : '') + '>Estilo CSS</option>';
+  html += '</select></div>';
+  html += '<div class="form-row" style="margin-bottom:0"><label>Nome</label><input type="text" id="mw-res-name" value="' + ha(charMwStudioState.editingName) + '" placeholder="Ex: InfoboxFicha"></div>';
+  html += '</div>';
+  html += '<div class="form-row" style="margin-bottom:8px;"><label>Descrição (opcional)</label><input type="text" id="mw-res-desc" value="' + ha(charMwStudioState.editingDesc) + '" placeholder="Para que serve este template/módulo/estilo"></div>';
+  html += '<div class="form-row" style="margin-bottom:10px;"><label>Código</label><textarea id="mw-res-content" class="mw-code-editor" rows="10" spellcheck="false">' + h(charMwStudioState.editingContent || charMwDefaultBoilerplate(charMwStudioState.editingKind)) + '</textarea></div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+  html += '<button type="button" class="btn btn-small btn-primary" onclick="saveCharMwResource()">' + (isEdit ? 'Atualizar Recurso' : 'Salvar Novo Recurso') + '</button>';
+  if (isEdit) html += '<button type="button" class="btn btn-small" onclick="startNewCharMwResource(\'' + ha(charMwStudioState.editingKind) + '\')">Limpar / Novo</button>';
+  html += '</div></div>';
+
+  html += '</div>';
+  return html;
+}
+
+function previewCharMediaWiki(inModal) {
+  var d = lerFormPersonagem();
+  var scopeSelector = inModal ? '.char-mw-modal-scope' : '.char-mw-preview-scope';
+  return apiRequest('POST', '/api/personagens/mediawiki/preview', {
+    wikitext: d.wikitext || '',
+    customCss: d.customCss || '',
+    scopeSelector: scopeSelector,
+    character: {
+      nome: d.nome || '',
+      categoria: d.categoria || '',
+      titulo: d.titulo || '',
+      raca: d.raca || '',
+      faccao: d.faccao || '',
+      status: d.status || '',
+      mascaraTier: d.mascaraTier || ''
+    }
+  }).then(function(res) {
+    var htmlOut = (res && typeof res.html === 'string') ? res.html : '';
+    var cssOut = (res && typeof res.css === 'string') ? res.css : '';
+    var diagnostics = (res && Array.isArray(res.diagnostics)) ? res.diagnostics : [];
+    var diagHtml = '';
+    if (diagnostics.length) {
+      diagHtml += '<div class="mw-diagnostics">';
+      diagnostics.forEach(function(item) {
+        var cls = item.level === 'error' ? 'mw-diag-error' : 'mw-diag-warn';
+        diagHtml += '<div class="' + cls + '"><b>[' + h(item.source || 'MediaWiki') + ']</b> ' + h(item.message || '') + '</div>';
+      });
+      diagHtml += '</div>';
+    }
+    if (inModal) {
+      var modalHtml = '<div style="max-height:72vh;overflow-y:auto;padding-right:4px;">';
+      modalHtml += diagHtml;
+      modalHtml += '<div class="char-sheet-body char-mw-scope char-mw-modal-scope" style="padding:18px;">' + htmlOut + '</div>';
+      modalHtml += '</div>';
+      showModal('Pré-visualização MediaWiki: ' + (d.nome || 'Personagem'), modalHtml);
+      applyScopedStyleElement('char-mw-modal-style', cssOut);
+    } else {
+      var box = document.getElementById('p-mw-preview-box');
+      var outEl = document.getElementById('p-mw-preview-output');
+      if (box) box.style.display = 'block';
+      if (outEl) {
+        outEl.innerHTML = diagHtml + '<div class="char-sheet-body char-mw-scope char-mw-preview-scope">' + htmlOut + '</div>';
+      }
+      applyScopedStyleElement('char-mw-preview-style', cssOut);
+    }
+  }).catch(function(err) {
+    showAlert((err && err.message) ? err.message : 'Não foi possível compilar a prévia MediaWiki.', 'error');
+  });
+}
+
 function renderNovoPersonagem() {
   if (!isModOrAdmin()) return '<div class="alert alert-error">Acesso restrito a Moderadores e Administradores.</div>';
 
   var editId = sessionStorage.getItem('editPersonagemId');
   var existing = editId ? listaPersonagens().find(function(p) { return String(p.id) === editId; }) : null;
   var theme = (existing && existing.theme) ? existing.theme : {};
+  var initialMode = (existing && existing.contentMode === 'wikitext') ? 'wikitext' : 'html';
   activeBuilderBlocks = (existing && Array.isArray(existing.blocks)) ? JSON.parse(JSON.stringify(existing.blocks)) : [];
+
+  if (!charMwResourcesState.loaded && !charMwResourcesState.loading) {
+    loadCharMwResources(false);
+  }
 
   var html = '<div class="breadcrumb"><a onclick="navigate(\'personagens\')">Personagens</a> / ' + (existing ? 'Editar Personagem' : 'Novo Personagem') + '</div>';
   html += '<div class="cat-header"><span>' + (existing ? 'Editar Ficha de Personagem' : 'Cadastrar Novo Personagem') + '</span>';
@@ -3740,9 +4197,58 @@ function renderNovoPersonagem() {
   html += '<div class="form-row" style="margin-bottom:0"><label>Cor de Destaque da Página</label><input type="color" id="p-accent-color" value="' + ha(theme.accentColor || '#ffffff') + '" style="height:38px;width:100%;cursor:pointer;"></div>';
   html += '</div>';
 
+  html += '<input type="hidden" id="p-content-mode" value="' + ha(initialMode) + '">';
+  html += '<div class="mw-mode-switcher">';
+  html += '<span style="font-size:12px;font-weight:600;color:var(--text-secondary);">Modo de Criação da Ficha:</span>';
+  html += '<button type="button" id="p-mode-btn-html" class="btn btn-small' + (initialMode === 'html' ? ' active' : '') + '" onclick="setCharacterContentMode(\'html\')">Editor Visual / HTML</button>';
+  html += '<button type="button" id="p-mode-btn-wikitext" class="btn btn-small' + (initialMode === 'wikitext' ? ' active' : '') + '" onclick="setCharacterContentMode(\'wikitext\')">MediaWiki (Wikitext · Templates · Lua · CSS)</button>';
+  html += '</div>';
+
+  html += '<div id="p-editor-panel" style="display:' + (initialMode === 'html' ? 'block' : 'none') + ';">';
   html += '<div class="form-row"><label>Descrição / Lore Principal (Editor Completo)</label>';
   html += buildEditor('p-editor', existing ? existing.descricao : '');
   html += '</div></div>';
+
+  html += '<div id="p-mw-panel" class="mw-studio" style="display:' + (initialMode === 'wikitext' ? 'block' : 'none') + ';">';
+  html += '<div class="mw-tabs">';
+  html += '<button type="button" id="p-mw-tab-wikitext" class="mw-tab-btn' + (charMwStudioState.activeTab === 'wikitext' ? ' active' : '') + '" onclick="setCharacterMwTab(\'wikitext\')">Wikitext</button>';
+  html += '<button type="button" id="p-mw-tab-css" class="mw-tab-btn' + (charMwStudioState.activeTab === 'css' ? ' active' : '') + '" onclick="setCharacterMwTab(\'css\')">CSS da Ficha</button>';
+  html += '<button type="button" id="p-mw-tab-library" class="mw-tab-btn' + (charMwStudioState.activeTab === 'library' ? ' active' : '') + '" onclick="setCharacterMwTab(\'library\')">Biblioteca (Templates · Lua · CSS)</button>';
+  html += '<button type="button" class="btn btn-small btn-primary" style="margin-left:auto;" onclick="previewCharMediaWiki(false)">Compilar &amp; Pré-visualizar</button>';
+  html += '</div>';
+
+  html += '<div id="p-mw-pane-wikitext" style="display:' + (charMwStudioState.activeTab === 'wikitext' ? 'block' : 'none') + ';">';
+  html += '<div class="mw-toolbar">';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'== \', \' ==\\n\', \'Título\')">== Título ==</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'\'\'\'\'\', \'\'\'\'\'\', \'Negrito\')">\'\'\'Negrito\'\'\'</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'\'\'\', \'\'\'\', \'Itálico\')">\'\'Itálico\'\'</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'[[\', \']]\', \'Página|Texto\')">[[Link]]</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'{{\', \'}}\', \'NomeTemplate|param=valor\')">{{Template}}</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'{{#invoke:\', \'}}\', \'Modulo|render|arg=valor\')">{{#invoke:Lua}}</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'<templatestyles src=&quot;\', \'&quot; />\\n\', \'NomeEstilo\')">TemplateStyles</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'{| class=&quot;mw-ficha-tabela&quot;\\n! Campo !! Valor\\n|-\\n| Dado || \', \'\\n|}\', \'Informação\')">Tabela</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertWikitextSnippet(\'<nowiki>\', \'</nowiki>\', \'texto literal\')">&lt;nowiki&gt;</button>';
+  html += '<button type="button" class="btn btn-small" onclick="insertMediaWikiStarterExample()">Inserir Exemplo</button>';
+  html += '</div>';
+  html += '<textarea id="p-wikitext" class="mw-code-editor" rows="14" spellcheck="false" placeholder="Escreva em Wikitext MediaWiki usando == Seções ==, {{Templates}}, {{#invoke:Modulo|funcao}}, {{#if:...}}, {{#expr:...}} e <templatestyles src=&quot;...&quot; />...">' + (existing ? h(existing.wikitext || '') : '') + '</textarea>';
+  html += '<div class="field-desc">Variáveis da ficha disponíveis: <code>{{PAGENAME}}</code>, <code>{{FICHA_NOME}}</code>, <code>{{FICHA_TITULO}}</code>, <code>{{FICHA_RACA}}</code>, <code>{{FICHA_FACCAO}}</code>, <code>{{FICHA_STATUS}}</code>, <code>{{FICHA_CATEGORIA}}</code>, <code>{{FICHA_MASCARA}}</code>.</div>';
+  html += '</div>';
+
+  html += '<div id="p-mw-pane-css" style="display:' + (charMwStudioState.activeTab === 'css' ? 'block' : 'none') + ';">';
+  html += '<div class="field-desc" style="margin-bottom:8px;">O CSS escrito aqui é sanitizado no servidor e aplicado exclusivamente dentro desta ficha (<code>.char-mw-scope</code>).</div>';
+  html += '<textarea id="p-custom-css" class="mw-code-editor" rows="12" spellcheck="false" placeholder=".minha-caixa { padding: 12px; border: 1px solid #3f3f46; border-radius: 6px; }">' + (existing ? h(existing.customCss || '') : '') + '</textarea>';
+  html += '</div>';
+
+  html += '<div id="p-mw-pane-library" style="display:' + (charMwStudioState.activeTab === 'library' ? 'block' : 'none') + ';">';
+  html += '<div id="p-mw-library-root">' + renderCharMwLibraryInner() + '</div>';
+  html += '</div>';
+
+  html += '<div id="p-mw-preview-box" class="mw-preview-box" style="display:none;">';
+  html += '<div class="mw-preview-title"><span>Pré-visualização Compilada (Servidor)</span><button type="button" class="btn btn-small" onclick="document.getElementById(\'p-mw-preview-box\').style.display=\'none\'">Fechar</button></div>';
+  html += '<div id="p-mw-preview-output"></div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
 
   html += renderBlockBuilderSection();
 
@@ -4943,8 +5449,16 @@ function renderNovaCena() {
   return html;
 }
 
+function lerFormularioPersonagem() {
+  return lerFormPersonagem();
+}
+
 function previewPersonagemModal() {
   var d = lerFormularioPersonagem();
+  if (d.contentMode === 'wikitext') {
+    previewCharMediaWiki(true);
+    return;
+  }
   requestSafeContentPreview({ html: d.descricao || '' }).then(function(safe) {
     var html = '<div style="max-height:70vh;overflow-y:auto;padding-right:4px;">';
     html += '<div style="display:flex;gap:16px;align-items:center;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border-subtle);">';
@@ -5958,6 +6472,9 @@ function showModal(title, bodyHtml) {
 
 function closeModal() {
   document.getElementById('modal-container').innerHTML = '';
+  if (typeof applyScopedStyleElement === 'function') {
+    applyScopedStyleElement('char-mw-modal-style', '');
+  }
   editingTurnId = null;
   editingForumPostId = null;
 }
@@ -6339,6 +6856,8 @@ function lerSkillsDoFormulario() {
 
 function lerFormPersonagem() {
   syncBuilderBlocksFromDOM();
+  var contentModeEl = document.getElementById('p-content-mode');
+  var contentMode = contentModeEl && contentModeEl.value === 'wikitext' ? 'wikitext' : 'html';
   return {
     nome: document.getElementById('p-nome').value.trim(),
     categoria: document.getElementById('p-categoria').value,
@@ -6347,6 +6866,9 @@ function lerFormPersonagem() {
     faccao: document.getElementById('p-faccao').value.trim(),
     status: document.getElementById('p-status').value.trim(),
     imagem: document.getElementById('p-imagem').value.trim(),
+    contentMode: contentMode,
+    wikitext: (document.getElementById('p-wikitext') || {}).value || '',
+    customCss: (document.getElementById('p-custom-css') || {}).value || '',
     descricao: getEditorContent('p-editor'),
     stats: lerStatsDoFormulario(),
     skills: lerSkillsDoFormulario(),
@@ -6358,10 +6880,29 @@ function lerFormPersonagem() {
   };
 }
 
+function prepareCharacterSubmissionPayload() {
+  var dados = lerFormPersonagem();
+  if (!dados.nome) {
+    showAlert('Preencha ao menos o nome e o conteúdo da ficha.', 'error');
+    return null;
+  }
+  if (dados.contentMode === 'wikitext') {
+    if (!dados.wikitext || !dados.wikitext.trim()) {
+      showAlert('Preencha o código Wikitext da ficha.', 'error');
+      return null;
+    }
+    delete dados.descricao;
+  } else if (!dados.descricao || dados.descricao === '<br>') {
+    showAlert('Preencha ao menos o nome e a descrição.', 'error');
+    return null;
+  }
+  return dados;
+}
+
 function submitPersonagem() {
   if (!isModOrAdmin()) { showAlert('Apenas administradores e moderadores podem cadastrar personagens.', 'error'); return; }
-  var dados = lerFormPersonagem();
-  if (!dados.nome || !dados.descricao || dados.descricao === '<br>') { showAlert('Preencha ao menos o nome e a descrição.', 'error'); return; }
+  var dados = prepareCharacterSubmissionPayload();
+  if (!dados) return;
   var descriptor = resourceFormDraftDescriptor();
   saveActiveResourceFormDraft();
   var finish = beginResourceFormSubmission('character-create');
@@ -6380,8 +6921,8 @@ function submitPersonagem() {
 
 function salvarEdicaoPersonagem(id) {
   if (!isModOrAdmin()) { showAlert('Apenas administradores e moderadores podem editar personagens.', 'error'); return; }
-  var dados = lerFormPersonagem();
-  if (!dados.nome || !dados.descricao || dados.descricao === '<br>') { showAlert('Preencha ao menos o nome e a descrição.', 'error'); return; }
+  var dados = prepareCharacterSubmissionPayload();
+  if (!dados) return;
 
   var existing = listaPersonagens().find(function(item) { return String(item.id) === String(id); });
   if (!existing) { showAlert('Atualize a ficha antes de salvar.', 'error'); return; }

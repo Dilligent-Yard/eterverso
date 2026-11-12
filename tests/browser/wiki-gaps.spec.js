@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0016_character_mediawiki';
 const PASSWORD = 'Synthetic-wiki-gaps-browser-password-42';
 let sql;
 let server;

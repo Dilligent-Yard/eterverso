@@ -24,6 +24,8 @@ const {
   SECTION_COLUMNS,
   SECTION_TYPES,
   SECTION_CONSTRAINTS,
+  CHARACTER_MW_COLUMNS,
+  CHARACTER_MW_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,
@@ -31,7 +33,7 @@ const {
 } = require('../../scripts/db-migrate');
 
 function fixture() {
-  const history = Array.from({ length: 16 }, (_entry, index) => ({ id: index + 1, hash: `hash-${index + 1}` }));
+  const history = Array.from({ length: 17 }, (_entry, index) => ({ id: index + 1, hash: `hash-${index + 1}` }));
   return {
     history,
     report: {
@@ -139,7 +141,7 @@ test('MIG-03 recognizes only empty and exact supported migration/schema states',
   sections.columns = Object.fromEntries(Object.entries(SECTION_COLUMNS).map(([name, columns]) => [name, [...columns]]));
   sections.columnTypes.wiki_sections = { ...SECTION_TYPES };
   sections.constraints = [...SECTION_CONSTRAINTS];
-  sections.ledger = history.map((entry) => ({ ...entry }));
+  sections.ledger = history.slice(0, 16).map((entry) => ({ ...entry }));
   sections.indexes = [...scene.indexes, ...wiki.indexes.slice(scene.indexes.length), {
     table: 'wiki_sections', name: 'wiki_sections_parent_order_idx',
     definition: 'CREATE INDEX wiki_sections_parent_order_idx ON public.wiki_sections USING btree (parent_key, sort_order, key)',
@@ -153,6 +155,20 @@ test('MIG-03 recognizes only empty and exact supported migration/schema states',
   });
   sections.columnTypes.wiki_sections.sort_order = 'smallint';
   assert.equal(classifySchema(sections, history).supported, false, 'section schema requires its exact column types');
+  sections.columnTypes.wiki_sections.sort_order = 'integer';
+
+  const characterMw = structuredClone(sections);
+  characterMw.publicTables = Object.keys(CHARACTER_MW_COLUMNS).sort();
+  characterMw.columns = Object.fromEntries(Object.entries(CHARACTER_MW_COLUMNS).map(([name, columns]) => [name, [...columns]]));
+  characterMw.constraints = [...CHARACTER_MW_CONSTRAINTS];
+  characterMw.ledger = history.map((entry) => ({ ...entry }));
+  characterMw.indexes.push({
+    table: 'character_mw_resources', name: 'idx_character_mw_resources_kind_key',
+    definition: 'CREATE INDEX idx_character_mw_resources_kind_key ON public.character_mw_resources USING btree (kind, name_key)',
+  });
+  assert.deepEqual(classifySchema(characterMw, history), { state: 'verified-0016-character-mediawiki', supported: true });
+  characterMw.indexes = characterMw.indexes.filter((index) => index.name !== 'idx_character_mw_resources_kind_key');
+  assert.equal(classifySchema(characterMw, history).supported, false, 'character mediawiki schema requires its kind/name index');
 
   const inconsistentLedger = structuredClone(report);
   inconsistentLedger.ledger = history.slice(0, 8).map((entry) => ({ ...entry }));

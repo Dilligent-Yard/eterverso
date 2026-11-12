@@ -326,9 +326,9 @@ async function run() {
     }
     const finalSchema = await inspectDatabase(targetDescription, history);
     const finalClass = classifySchema(finalSchema, history);
-    if (finalClass.state !== 'verified-0015-wiki-sections' || !finalClass.supported
+    if (finalClass.state !== 'verified-0016-character-mediawiki' || !finalClass.supported
         || finalSchema.pendingMigrations.length !== 0) {
-      throw new Error('The populated-baseline upgrade did not reach the exact reviewed 0015 schema.');
+      throw new Error('The populated-baseline upgrade did not reach the exact reviewed 0016 schema.');
     }
 
     finalReport = {

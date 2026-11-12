@@ -7,7 +7,7 @@ const postgres = require('postgres');
 const { createApp } = require('./server/app');
 
 const ROOT = __dirname;
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0016_character_mediawiki';
 const REQUIRED_FORUM_TIMESTAMP_COLUMNS = [
   'categories.created_at', 'categories.updated_at',
   'posts.created_at', 'posts.updated_at',
@@ -16,7 +16,8 @@ const REQUIRED_FORUM_TIMESTAMP_COLUMNS = [
 ];
 const REQUIRED_COLUMNS = {
   users: ['id', 'username', 'email', 'password_hash', 'avatar', 'title', 'bio', 'role', 'posts_count', 'adm_tentativa_usada', 'join_date', 'disabled_at', 'auth_version', 'version'],
-  personagens: ['id', 'author_id', 'nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'descricao', 'stats', 'skills', 'mascara_tier', 'blocks', 'theme', 'created_at', 'updated_at'],
+  personagens: ['id', 'author_id', 'nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'descricao', 'stats', 'skills', 'mascara_tier', 'blocks', 'theme', 'content_mode', 'wikitext', 'custom_css', 'created_at', 'updated_at'],
+  character_mw_resources: ['id', 'kind', 'name', 'name_key', 'description', 'content', 'created_by', 'updated_by', 'archived_at', 'version', 'created_at', 'updated_at'],
   categories: ['id', 'name', 'description', 'archived_at', 'version', 'created_at', 'updated_at'],
   threads: ['id', 'category_id', 'author_id', 'author_label', 'legacy_reference', 'title', 'tag', 'pinned', 'views', 'locked', 'archived_at', 'quarantined_at', 'quarantine_reason', 'version', 'last_activity_at', 'next_post_no', 'created_at', 'updated_at'],
   posts: ['id', 'thread_id', 'author_id', 'author_label', 'legacy_reference', 'content', 'edited', 'post_no', 'deleted_at', 'version', 'created_at', 'updated_at'],

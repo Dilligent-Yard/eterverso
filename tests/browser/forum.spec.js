@@ -13,7 +13,7 @@ const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
 const LEGACY_KEY = 'forum-antigo-db-v22';
-const REQUIRED_MIGRATION = '0015_wiki_sections';
+const REQUIRED_MIGRATION = '0016_character_mediawiki';
 const PASSWORD = 'Synthetic-browser-password-42';
 let sql;
 let server;

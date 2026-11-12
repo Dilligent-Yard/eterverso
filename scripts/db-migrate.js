@@ -266,6 +266,22 @@ const SECTION_CONSTRAINTS = [
   'wiki_sections.wiki_sections_pkey:p',
   'wiki_sections.wiki_sections_sort_order_check:c',
 ].sort();
+const CHARACTER_MW_COLUMNS = {
+  ...SECTION_COLUMNS,
+  personagens: [...SECTION_COLUMNS.personagens, 'content_mode', 'wikitext', 'custom_css'],
+  character_mw_resources: ['id', 'kind', 'name', 'name_key', 'description', 'content', 'created_by', 'updated_by', 'archived_at', 'version', 'created_at', 'updated_at'],
+};
+const CHARACTER_MW_CONSTRAINTS = [
+  ...SECTION_CONSTRAINTS,
+  'personagens.personagens_content_mode_check:c',
+  'character_mw_resources.character_mw_resources_created_by_fkey:f',
+  'character_mw_resources.character_mw_resources_kind_check:c',
+  'character_mw_resources.character_mw_resources_kind_name_key:u',
+  'character_mw_resources.character_mw_resources_name_check:c',
+  'character_mw_resources.character_mw_resources_pkey:p',
+  'character_mw_resources.character_mw_resources_updated_by_fkey:f',
+  'character_mw_resources.character_mw_resources_version_check:c',
+].sort();
 
 function readDotEnv(file) {
   if (!fs.existsSync(file)) return {};
@@ -418,6 +434,19 @@ function classifySchema(report, history) {
     return { state: 'verified-0015-wiki-sections', supported: true };
   }
 
+  const exactCharacterMwColumns = sameList(appTables, Object.keys(CHARACTER_MW_COLUMNS).sort())
+    && Object.keys(CHARACTER_MW_COLUMNS).every((table) => sameList(report.columns[table] || [], CHARACTER_MW_COLUMNS[table]));
+  const exactCharacterMwConstraints = sameList(report.constraints, CHARACTER_MW_CONSTRAINTS);
+  const hasCharacterMwIndex = (report.indexes || []).some((index) => (
+    index.table === 'character_mw_resources' && index.name === 'idx_character_mw_resources_kind_key'
+      && /CREATE INDEX/i.test(index.definition)
+  ));
+  if (knownLedger && ledger.length === 17 && exactCharacterMwColumns && exactSectionTypes && exactCharacterMwConstraints
+      && hasCaseInsensitiveUsernameIndex && forumTimestampsUseTimezone && hasSceneIndexes
+      && hasWikiNameIndex && hasWikiRevisionImmutability && hasSectionIndex && hasCharacterMwIndex) {
+    return { state: 'verified-0016-character-mediawiki', supported: true };
+  }
+
   return {
     state: 'unsupported-or-divergent',
     supported: false,
@@ -449,6 +478,9 @@ function classifySchema(report, history) {
       hasWikiNameIndex,
       hasWikiRevisionImmutability,
       hasSectionIndex,
+      exactCharacterMwColumns,
+      exactCharacterMwConstraints,
+      hasCharacterMwIndex,
     },
   };
 }
@@ -598,7 +630,7 @@ async function preflight(targetName) {
 
 async function migrate(targetName) {
   const { report, target } = await preflight(targetName);
-  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections'].includes(report.classification.state)) {
+  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections', 'verified-0016-character-mediawiki'].includes(report.classification.state)) {
     throw new Error('Automatic migration is supported only from an empty database or an exact reviewed schema state.');
   }
   if (report.pendingMigrations.length === 0) {
@@ -730,6 +762,8 @@ module.exports = {
   SECTION_COLUMNS,
   SECTION_TYPES,
   SECTION_CONSTRAINTS,
+  CHARACTER_MW_COLUMNS,
+  CHARACTER_MW_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,

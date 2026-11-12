@@ -202,6 +202,9 @@ export const personagens = pgTable("personagens", {
 	mascaraTier: varchar("mascara_tier", { length: 60 }).default(''),
 	blocks: jsonb().default([]),
 	theme: jsonb().default({}),
+	contentMode: varchar("content_mode", { length: 20 }).default('html').notNull(),
+	wikitext: text().default('').notNull(),
+	customCss: text("custom_css").default('').notNull(),
 
 	createdAt: timestamp("created_at", { mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { mode: 'string' }).defaultNow()
@@ -215,6 +218,32 @@ export const personagens = pgTable("personagens", {
 		name: "personagens_author_id_fkey"
 	}),
 	check("personagens_version_check", sql`version > 0`),
+	check("personagens_content_mode_check", sql`content_mode IN ('html', 'wikitext')`),
+]);
+
+export const characterMwResources = pgTable("character_mw_resources", {
+	id: uuid().primaryKey().notNull().defaultRandom(),
+	kind: varchar({ length: 20 }).notNull(),
+	name: varchar({ length: 120 }).notNull(),
+	nameKey: varchar("name_key", { length: 120 }).notNull(),
+	description: text().default('').notNull(),
+	content: text().default('').notNull(),
+	createdBy: uuid("created_by"),
+	updatedBy: uuid("updated_by"),
+	archivedAt: timestamp("archived_at", { mode: 'string', withTimezone: true }),
+	version: integer().default(1).notNull(),
+	createdAt: timestamp("created_at", { mode: 'string', withTimezone: true }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { mode: 'string', withTimezone: true }).defaultNow()
+		.notNull()
+		.$onUpdate(() => sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+	unique("character_mw_resources_kind_name_key").on(table.kind, table.nameKey),
+	index("idx_character_mw_resources_kind_key").using("btree", table.kind.asc().nullsLast().op("text_ops"), table.nameKey.asc().nullsLast().op("text_ops")),
+	foreignKey({ columns: [table.createdBy], foreignColumns: [users.id], name: "character_mw_resources_created_by_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.updatedBy], foreignColumns: [users.id], name: "character_mw_resources_updated_by_fkey" }).onDelete("set null"),
+	check("character_mw_resources_kind_check", sql`kind IN ('template', 'lua', 'css')`),
+	check("character_mw_resources_name_check", sql`length(trim(name)) > 0`),
+	check("character_mw_resources_version_check", sql`version > 0`),
 ]);
 
 export const comments = pgTable("comments", {
