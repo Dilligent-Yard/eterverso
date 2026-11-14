@@ -326,9 +326,9 @@ async function run() {
     }
     const finalSchema = await inspectDatabase(targetDescription, history);
     const finalClass = classifySchema(finalSchema, history);
-    if (finalClass.state !== 'verified-0017-timeline-events' || !finalClass.supported
+    if (finalClass.state !== 'verified-0018-character-mediawiki' || !finalClass.supported
         || finalSchema.pendingMigrations.length !== 0) {
-      throw new Error('The populated-baseline upgrade did not reach the exact reviewed 0017 schema.');
+      throw new Error('The populated-baseline upgrade did not reach the exact reviewed 0018 schema.');
     }
 
     finalReport = {
@@ -353,7 +353,7 @@ async function run() {
       generatedAt: new Date().toISOString(),
     };
     const reportPath = savePrivateReport(finalReport);
-    process.stdout.write(`MIG-02 passed: populated verified 0006 baseline upgraded to 0017; selected content, credentials, raw turns and relationships matched. Restricted report: ${path.relative(ROOT, reportPath)}\n`);
+    process.stdout.write(`MIG-02 passed: populated verified 0006 baseline upgraded to 0018; selected content, credentials, raw turns and relationships matched. Restricted report: ${path.relative(ROOT, reportPath)}\n`);
   } finally {
     if (source) await source.end({ timeout: 5 }).catch(() => {});
     if (control) {

@@ -56,6 +56,7 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
+    "fengari": "^0.1.5",
     "postgres": "^3.4.9",
     "sanitize-html": "2.18.1"
   },

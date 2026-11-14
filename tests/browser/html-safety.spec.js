@@ -12,7 +12,7 @@ const postgres = require('postgres');
 const { createApp } = require('../../server/app');
 
 const ROOT = path.resolve(__dirname, '../..');
-const REQUIRED_MIGRATION = '0017_timeline_events';
+const REQUIRED_MIGRATION = '0018_character_mediawiki';
 const PASSWORD = 'Synthetic-html-safety-browser-password-42';
 const TURN_PRESENTATION_PAYLOAD = `');window.__htmlSafetyRuns.push("turn-presentation");//`;
 let sql;
