@@ -20,6 +20,8 @@ const { createLegacyImportRouter } = require('./legacy-import');
 const { createWikiTransfersRouter } = require('./wiki-transfers');
 const { createInteractionsRouter, createNotification } = require('./interactions');
 const { createTimelineRouter } = require('./timeline');
+const { createCharacterMediaWikiRouter, loadActiveCharacterMwResources } = require('./character-mediawiki');
+const { MAX_CSS_BYTES, MAX_WIKITEXT_BYTES, renderCharacterWikitext, sanitizeScopedCss, sanitizeWikitextHtml } = require('./mediawiki');
 
 function createApp(options) {
   if (!options || typeof options.sql !== 'function' || typeof options.sql.json !== 'function') {
@@ -402,7 +404,45 @@ function createApp(options) {
     try { return sanitizeTheme(value); } catch (_error) { return sanitizeTheme({}); }
   }
 
-  function publicPersonagem(p) {
+  function charMwScopeSelector(id) {
+    return `.char-mw-scope-${String(id || 'preview').replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  }
+
+  function publicPersonagem(p, mwResources = []) {
+    const contentMode = p.content_mode === 'wikitext' ? 'wikitext' : 'html';
+    const wikitext = typeof p.wikitext === 'string' ? p.wikitext : '';
+    const customCss = typeof p.custom_css === 'string' ? p.custom_css : '';
+    let descricao = safeStoredHtml(p.descricao);
+    let compiledCss = '';
+    let mediawikiDiagnostics = [];
+
+    if (contentMode === 'wikitext') {
+      const scopeSelector = charMwScopeSelector(p.id);
+      if (Array.isArray(mwResources) && mwResources.length >= 0) {
+        const rendered = renderCharacterWikitext({
+          wikitext,
+          customCss,
+          scopeSelector,
+          resources: mwResources,
+          character: {
+            nome: p.nome || '',
+            categoria: p.categoria || '',
+            titulo: p.titulo || '',
+            raca: p.raca || '',
+            faccao: p.faccao || '',
+            status: p.status || '',
+            mascaraTier: p.mascara_tier || '',
+          },
+        });
+        descricao = rendered.html || sanitizeWikitextHtml(p.descricao || '');
+        compiledCss = rendered.css;
+        mediawikiDiagnostics = rendered.diagnostics;
+      } else {
+        descricao = sanitizeWikitextHtml(p.descricao || '');
+        compiledCss = sanitizeScopedCss(customCss, scopeSelector);
+      }
+    }
+
     return {
       id: p.id,
       version: Number(p.version) || 1,
@@ -423,7 +463,12 @@ function createApp(options) {
       faccao: p.faccao,
       status: p.status,
       imagem: safeStoredImage(p.imagem),
-      descricao: safeStoredHtml(p.descricao),
+      descricao,
+      contentMode,
+      wikitext,
+      customCss,
+      compiledCss,
+      mediawikiDiagnostics,
       stats: p.stats || {},
       skills: p.skills || [],
       mascaraTier: p.mascara_tier,
@@ -548,8 +593,8 @@ function createApp(options) {
 
   function lerPersonagemBody(body) {
     assertObjectShape(body, {
-      allowedKeys: ['nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'mascaraTier', 'descricao', 'stats', 'skills', 'blocks', 'theme'],
-      requiredKeys: ['nome', 'descricao'],
+      allowedKeys: ['nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'mascaraTier', 'descricao', 'contentMode', 'wikitext', 'customCss', 'stats', 'skills', 'blocks', 'theme'],
+      requiredKeys: ['nome'],
     });
     const v = {};
     for (const [campo, max] of PERSONAGEM_CAMPOS) {
@@ -560,14 +605,51 @@ function createApp(options) {
       v[campo] = valor;
     }
     if (!v.nome) throw new ApiError(400, 'NAME_REQUIRED', 'O nome é obrigatório.');
-    const rawDescription = normalizeString(body.descricao, { field: 'descricao', min: 1, max: 250_000, trim: false });
-    v.descricao = sanitizeHtml(rawDescription, { maxBytes: 500_000 });
-    if (!hasMeaningfulContent(v.descricao)) throw new ApiError(400, 'CONTENT_REQUIRED', 'A descrição é obrigatória.');
+
+    const contentMode = body.contentMode === undefined ? 'html' : body.contentMode;
+    if (contentMode !== 'html' && contentMode !== 'wikitext') {
+      throw new ApiError(400, 'INVALID_CONTENT_MODE', 'O modo de conteúdo da ficha deve ser html ou wikitext.');
+    }
+    v.contentMode = contentMode;
+
+    if (contentMode === 'wikitext') {
+      v.wikitext = normalizeString(body.wikitext, { field: 'wikitext', min: 1, max: MAX_WIKITEXT_BYTES, trim: false });
+      if (Buffer.byteLength(v.wikitext, 'utf8') > MAX_WIKITEXT_BYTES || !v.wikitext.trim()) {
+        throw new ApiError(400, 'CONTENT_REQUIRED', 'O Wikitext da ficha é obrigatório.');
+      }
+      v.customCss = body.customCss === undefined
+        ? ''
+        : normalizeString(body.customCss, { field: 'customCss', min: 0, max: MAX_CSS_BYTES, trim: false });
+      if (Buffer.byteLength(v.customCss, 'utf8') > MAX_CSS_BYTES) {
+        throw new ApiError(400, 'CONTENT_TOO_LARGE', 'O CSS customizado excede o tamanho permitido.');
+      }
+      v.descricao = '';
+    } else {
+      if (body.descricao === undefined) {
+        throw new ApiError(400, 'INVALID_SHAPE', 'A descrição é obrigatória.');
+      }
+      const rawDescription = normalizeString(body.descricao, { field: 'descricao', min: 1, max: 250_000, trim: false });
+      v.descricao = sanitizeHtml(rawDescription, { maxBytes: 500_000 });
+      if (!hasMeaningfulContent(v.descricao)) throw new ApiError(400, 'CONTENT_REQUIRED', 'A descrição é obrigatória.');
+      v.wikitext = typeof body.wikitext === 'string'
+        ? normalizeString(body.wikitext, { field: 'wikitext', min: 0, max: MAX_WIKITEXT_BYTES, trim: false })
+        : '';
+      v.customCss = typeof body.customCss === 'string'
+        ? normalizeString(body.customCss, { field: 'customCss', min: 0, max: MAX_CSS_BYTES, trim: false })
+        : '';
+    }
+
     v.stats = sanitizeStats(body.stats);
     v.skills = sanitizeSkills(body.skills);
     v.blocks = sanitizeSafeBlocks(body.blocks === undefined ? [] : body.blocks);
     v.theme = sanitizeTheme(body.theme);
     return v;
+  }
+
+  async function mapPersonagensWithMw(executor, rows) {
+    const hasWikitext = rows.some((row) => row.content_mode === 'wikitext');
+    const resources = hasWikitext ? await loadActiveCharacterMwResources(executor) : [];
+    return rows.map((row) => publicPersonagem(row, resources));
   }
 
   async function withStaffTransaction(req, callback) {
@@ -597,7 +679,7 @@ function createApp(options) {
         LEFT JOIN users u ON u.id = p.author_id
         WHERE p.hidden_at IS NULL
         ORDER BY p.created_at ASC`;
-      res.json({ personagens: rows.map(publicPersonagem) });
+      res.json({ personagens: await mapPersonagensWithMw(sql, rows) });
     } catch (err) {
       return sendError(res, err);
     }
@@ -614,7 +696,7 @@ function createApp(options) {
         WHERE p.hidden_at IS NOT NULL
         ORDER BY p.hidden_at DESC
         LIMIT 100`;
-      res.json({ data: rows.map(publicPersonagem) });
+      res.json({ data: await mapPersonagensWithMw(sql, rows) });
     } catch (err) {
       return sendError(res, err);
     }
@@ -623,14 +705,30 @@ function createApp(options) {
   app.post('/api/personagens', async function (req, res) {
     try {
       const v = lerPersonagemBody(req.body);
-      const row = await withStaffTransaction(req, async (tx, user) => {
+      const result = await withStaffTransaction(req, async (tx, user) => {
+        const mwResources = v.contentMode === 'wikitext' ? await loadActiveCharacterMwResources(tx) : [];
+        let descricaoToStore = v.descricao;
+        if (v.contentMode === 'wikitext') {
+          const compiled = renderCharacterWikitext({
+            wikitext: v.wikitext,
+            customCss: v.customCss,
+            scopeSelector: '.char-mw-scope',
+            resources: mwResources,
+            character: v,
+          });
+          if (!compiled.html || !compiled.html.trim()) {
+            throw new ApiError(400, 'CONTENT_REQUIRED', 'O Wikitext compilado não produziu conteúdo visível.');
+          }
+          descricaoToStore = compiled.html;
+        }
         const inserted = await tx`
-          INSERT INTO personagens (author_id, nome, categoria, titulo, raca, faccao, status, imagem, descricao, stats, skills, mascara_tier, blocks, theme)
-          VALUES (${user.id}, ${v.nome}, ${v.categoria}, ${v.titulo}, ${v.raca}, ${v.faccao}, ${v.status}, ${v.imagem}, ${v.descricao}, ${tx.json(v.stats)}, ${tx.json(v.skills)}, ${v.mascaraTier}, ${tx.json(v.blocks)}, ${tx.json(v.theme)})
+          INSERT INTO personagens (author_id, nome, categoria, titulo, raca, faccao, status, imagem, descricao, content_mode, wikitext, custom_css, stats, skills, mascara_tier, blocks, theme)
+          VALUES (${user.id}, ${v.nome}, ${v.categoria}, ${v.titulo}, ${v.raca}, ${v.faccao}, ${v.status}, ${v.imagem}, ${descricaoToStore}, ${v.contentMode}, ${v.wikitext}, ${v.customCss}, ${tx.json(v.stats)}, ${tx.json(v.skills)}, ${v.mascaraTier}, ${tx.json(v.blocks)}, ${tx.json(v.theme)})
           RETURNING id`;
-        return loadPersonagemWithAuthor(tx, inserted[0].id);
+        const row = await loadPersonagemWithAuthor(tx, inserted[0].id);
+        return publicPersonagem(row, mwResources);
       });
-      res.status(201).json({ personagem: publicPersonagem(row) });
+      res.status(201).json({ personagem: result });
     } catch (err) {
       return sendError(res, err);
     }
@@ -640,30 +738,47 @@ function createApp(options) {
     try {
       const id = validateUuid(req.params.id);
       assertObjectShape(req.body, {
-        allowedKeys: ['nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'descricao', 'stats', 'skills', 'mascaraTier', 'blocks', 'theme', 'expectedVersion'],
+        allowedKeys: ['nome', 'categoria', 'titulo', 'raca', 'faccao', 'status', 'imagem', 'descricao', 'contentMode', 'wikitext', 'customCss', 'stats', 'skills', 'mascaraTier', 'blocks', 'theme', 'expectedVersion'],
       });
       const version = expectedVersion(req.body.expectedVersion);
       const body = { ...req.body };
       delete body.expectedVersion;
       const v = lerPersonagemBody(body);
-      const row = await withStaffTransaction(req, async (tx) => {
+      const result = await withStaffTransaction(req, async (tx) => {
         const current = await tx`SELECT id, version, hidden_at FROM personagens WHERE id = ${id} FOR UPDATE`;
         if (!current.length || current[0].hidden_at) throw new ApiError(404, 'NOT_FOUND', 'Personagem não encontrado.');
         if (Number(current[0].version) !== version) throw new ApiError(409, 'STALE_VERSION', 'A ficha mudou. Atualize e tente novamente.');
         if (version >= 2147483647) throw new ApiError(409, 'VERSION_EXHAUSTED', 'A ficha atingiu o limite de versões.');
+        const mwResources = v.contentMode === 'wikitext' ? await loadActiveCharacterMwResources(tx) : [];
+        let descricaoToStore = v.descricao;
+        if (v.contentMode === 'wikitext') {
+          const compiled = renderCharacterWikitext({
+            wikitext: v.wikitext,
+            customCss: v.customCss,
+            scopeSelector: charMwScopeSelector(id),
+            resources: mwResources,
+            character: v,
+          });
+          if (!compiled.html || !compiled.html.trim()) {
+            throw new ApiError(400, 'CONTENT_REQUIRED', 'O Wikitext compilado não produziu conteúdo visível.');
+          }
+          descricaoToStore = compiled.html;
+        }
         const updated = await tx`
         UPDATE personagens SET
           nome = ${v.nome}, categoria = ${v.categoria}, titulo = ${v.titulo}, raca = ${v.raca},
-          faccao = ${v.faccao}, status = ${v.status}, imagem = ${v.imagem}, descricao = ${v.descricao},
+          faccao = ${v.faccao}, status = ${v.status}, imagem = ${v.imagem}, descricao = ${descricaoToStore},
+          content_mode = ${v.contentMode}, wikitext = ${v.wikitext}, custom_css = ${v.customCss},
           stats = ${tx.json(v.stats)}, skills = ${tx.json(v.skills)}, mascara_tier = ${v.mascaraTier},
           blocks = ${tx.json(v.blocks)}, theme = ${tx.json(v.theme)}, version = version + 1, updated_at = now()
         WHERE id = ${id} AND version = ${version} AND hidden_at IS NULL
         RETURNING id`;
         if (!updated.length) return null;
-        return loadPersonagemWithAuthor(tx, updated[0].id);
+        const row = await loadPersonagemWithAuthor(tx, updated[0].id);
+        return row ? publicPersonagem(row, mwResources) : null;
       });
-      if (!row) return res.status(404).json({ error: 'Personagem não encontrado.' });
-      res.json({ personagem: publicPersonagem(row) });
+      if (!result) return res.status(404).json({ error: 'Personagem não encontrado.' });
+      res.json({ personagem: result });
     } catch (err) {
       return sendError(res, err);
     }
@@ -694,7 +809,7 @@ function createApp(options) {
       const id = validateUuid(req.params.id);
       assertObjectShape(req.body, { allowedKeys: ['expectedVersion'] });
       const version = expectedVersion(req.body.expectedVersion);
-      const row = await withStaffTransaction(req, async (tx) => {
+      const result = await withStaffTransaction(req, async (tx) => {
         const current = await tx`SELECT version, hidden_at FROM personagens WHERE id = ${id} FOR UPDATE`;
         if (!current.length || !current[0].hidden_at) return null;
         if (Number(current[0].version) !== version) throw new ApiError(409, 'STALE_VERSION', 'A ficha mudou. Atualize e tente novamente.');
@@ -702,10 +817,13 @@ function createApp(options) {
         const updated = await tx`UPDATE personagens SET hidden_at = NULL, version = version + 1, updated_at = now()
           WHERE id = ${id} AND version = ${version} RETURNING id`;
         if (!updated.length) return null;
-        return loadPersonagemWithAuthor(tx, updated[0].id);
+        const row = await loadPersonagemWithAuthor(tx, updated[0].id);
+        if (!row) return null;
+        const mapped = await mapPersonagensWithMw(tx, [row]);
+        return mapped[0];
       });
-      if (!row) return res.status(404).json({ error: 'Personagem oculto não encontrado.' });
-      res.json({ data: publicPersonagem(row) });
+      if (!result) return res.status(404).json({ error: 'Personagem oculto não encontrado.' });
+      res.json({ data: result });
     } catch (err) {
       return sendError(res, err);
     }
@@ -1242,6 +1360,7 @@ function createApp(options) {
   app.use('/api', createWikiRouter({ sql, auth }));
   app.use('/api', createProposalRouter({ sql, auth }));
   app.use('/api', createSourceRouter({ sql, auth }));
+  app.use('/api', createCharacterMediaWikiRouter({ sql, auth }));
   app.use('/api/timeline', createTimelineRouter({ sql, auth }));
   app.use(createInteractionsRouter({ sql, auth }));
   app.use('/api', function (_req, res) {

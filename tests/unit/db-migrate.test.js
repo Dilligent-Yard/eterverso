@@ -30,6 +30,9 @@ const {
   TIMELINE_COLUMNS,
   TIMELINE_TYPES,
   TIMELINE_CONSTRAINTS,
+  CHARACTER_MW_COLUMNS,
+  CHARACTER_MW_TYPES,
+  CHARACTER_MW_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,
@@ -37,7 +40,7 @@ const {
 } = require('../../scripts/db-migrate');
 
 function fixture() {
-  const history = Array.from({ length: 18 }, (_entry, index) => ({ id: index + 1, hash: `hash-${index + 1}` }));
+  const history = Array.from({ length: 19 }, (_entry, index) => ({ id: index + 1, hash: `hash-${index + 1}` }));
   return {
     history,
     report: {
@@ -280,7 +283,7 @@ test('MIG-03 recognizes exact 0016 and 0017 states and rejects divergent interac
   timeline.columnTypes = { ...timeline.columnTypes, ...structuredClone(TIMELINE_TYPES) };
   timeline.constraints = [...TIMELINE_CONSTRAINTS];
   timeline.indexes = [...timeline.indexes, ...timelineIndexes];
-  timeline.ledger = history.map((entry) => ({ ...entry }));
+  timeline.ledger = history.slice(0, 18).map((entry) => ({ ...entry }));
   assert.deepEqual(classifySchema(timeline, history), { state: 'verified-0017-timeline-events', supported: true });
 
   const missingTimelineColumn = structuredClone(timeline);
@@ -317,26 +320,52 @@ test('MIG-03 recognizes exact 0016 and 0017 states and rejects divergent interac
   reject(prematureTimeline, 'a 17-entry ledger cannot claim the 0017 schema');
 
   const ledgerWithoutTimeline = structuredClone(interactions);
-  ledgerWithoutTimeline.ledger = history.map((entry) => ({ ...entry }));
+  ledgerWithoutTimeline.ledger = history.slice(0, 18).map((entry) => ({ ...entry }));
   reject(ledgerWithoutTimeline, 'an 18-entry ledger still requires the timeline table');
+
+  const characterMwIndexes = [
+    { table: 'character_mw_resources', name: 'character_mw_resources_pkey', definition: 'CREATE UNIQUE INDEX character_mw_resources_pkey ON public.character_mw_resources USING btree (id)' },
+    { table: 'character_mw_resources', name: 'character_mw_resources_kind_name_key', definition: 'CREATE UNIQUE INDEX character_mw_resources_kind_name_key ON public.character_mw_resources USING btree (kind, name_key)' },
+    { table: 'character_mw_resources', name: 'idx_character_mw_resources_kind_key', definition: 'CREATE INDEX idx_character_mw_resources_kind_key ON public.character_mw_resources USING btree (kind, name_key)' },
+  ];
+  const characterMw = structuredClone(timeline);
+  characterMw.publicTables = Object.keys(CHARACTER_MW_COLUMNS).sort();
+  characterMw.columns = Object.fromEntries(Object.entries(CHARACTER_MW_COLUMNS).map(([name, columns]) => [name, [...columns]]));
+  characterMw.columnTypes = { ...characterMw.columnTypes, ...structuredClone(CHARACTER_MW_TYPES) };
+  characterMw.constraints = [...CHARACTER_MW_CONSTRAINTS];
+  characterMw.indexes = [...characterMw.indexes, ...characterMwIndexes];
+  characterMw.ledger = history.map((entry) => ({ ...entry }));
+  assert.deepEqual(classifySchema(characterMw, history), { state: 'verified-0018-character-mediawiki', supported: true });
+
+  const missingMwIndex = structuredClone(characterMw);
+  missingMwIndex.indexes = missingMwIndex.indexes.filter((index) => index.name !== 'idx_character_mw_resources_kind_key');
+  reject(missingMwIndex, '0018 requires the character_mw_resources kind/name_key index');
+
+  const wrongMwType = structuredClone(characterMw);
+  wrongMwType.columnTypes.character_mw_resources.version = 'bigint';
+  reject(wrongMwType, '0018 requires exact character_mw_resources column types');
+
+  const missingMwConstraint = structuredClone(characterMw);
+  missingMwConstraint.constraints = missingMwConstraint.constraints.filter((entry) => entry !== 'personagens.personagens_content_mode_check:c');
+  reject(missingMwConstraint, '0018 requires personagens content_mode check constraint');
 });
 
-test('MIG-04 the canonical startup contract requires the 0017 ledger and its tables', async () => {
+test('MIG-04 the canonical startup contract requires the 0018 ledger and its tables', async () => {
   const { expectedMigrationPrefix, verifySchemaReadiness } = require('../../server');
   const rootDirectory = path.resolve(__dirname, '../..');
   const required = expectedMigrationPrefix(rootDirectory);
-  assert.equal(required.length, 18);
-  assert.equal(required.at(-1).tag, '0017_timeline_events');
+  assert.equal(required.length, 19);
+  assert.equal(required.at(-1).tag, '0018_character_mediawiki');
 
   let calls = 0;
   const incompleteSql = async (strings) => {
     calls += 1;
     const query = strings.join(' ');
     if (query.includes('to_regclass')) return [{ present: true }];
-    if (query.includes('SELECT id, hash')) return required.slice(0, 17).map(({ id, hash }) => ({ id, hash }));
-    throw new Error('readiness must stop at the missing 0017 ledger entry');
+    if (query.includes('SELECT id, hash')) return required.slice(0, 18).map(({ id, hash }) => ({ id, hash }));
+    throw new Error('readiness must stop at the missing 0018 ledger entry');
   };
-  await assert.rejects(verifySchemaReadiness(incompleteSql), /0017_timeline_events/);
+  await assert.rejects(verifySchemaReadiness(incompleteSql), /0018_character_mediawiki/);
   assert.equal(calls, 2);
 
   const noTablesSql = async (strings) => {
@@ -346,7 +375,7 @@ test('MIG-04 the canonical startup contract requires the 0017 ledger and its tab
     if (query.includes('information_schema.columns')) return [];
     throw new Error('unexpected readiness query');
   };
-  await assert.rejects(verifySchemaReadiness(noTablesSql), /notifications\.id/);
+  await assert.rejects(verifySchemaReadiness(noTablesSql), /character_mw_resources\.id/);
 });
 
 test('MIG-02 requires a private readable custom-format backup for development migrations', async (t) => {

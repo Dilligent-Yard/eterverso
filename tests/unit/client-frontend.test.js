@@ -1439,3 +1439,43 @@ test('a successful logout still clears the UI after an earlier profile response 
 
   assert.equal(context.DB.session, null, 'logout must clear the current same-account session');
 });
+
+test('lerFormPersonagem and applyResourceFormDraft preserve wikitext and customCss mode', () => {
+  const context = makeFrontend();
+  context.__elements['p-nome'] = field('Nyra');
+  context.__elements['p-categoria'] = field('NPCs');
+  context.__elements['p-titulo'] = field('Cronista');
+  context.__elements['p-raca'] = field('Humana');
+  context.__elements['p-faccao'] = field('Arquivo');
+  context.__elements['p-status'] = field('Ativo');
+  context.__elements['p-imagem'] = field('');
+  context.__elements['p-mascara-tier'] = field('2');
+  context.__elements['p-accent-color'] = field('#aabbcc');
+  context.__elements['p-editor'] = field('<p>HTML</p>');
+  context.__elements['p-editor'].innerHTML = '<p>HTML</p>';
+  context.__elements['p-content-mode'] = field('wikitext');
+  context.__elements['p-wikitext'] = field('== Ficha ==\n{{Cartao}}');
+  context.__elements['p-custom-css'] = field('.mw-card { color: #eef; }');
+  context.syncBuilderBlocksFromDOM = () => {};
+  context.lerStatsDoFormulario = () => ({});
+  context.lerSkillsDoFormulario = () => [];
+  context.activeBuilderBlocks = [];
+
+  const form = context.lerFormularioPersonagem();
+  assert.equal(form.contentMode, 'wikitext');
+  assert.equal(form.wikitext, '== Ficha ==\n{{Cartao}}');
+  assert.equal(form.customCss, '.mw-card { color: #eef; }');
+
+  let switchedMode = null;
+  context.setCharacterContentMode = (mode) => { switchedMode = mode; context.__elements['p-content-mode'].value = mode; };
+  context.applyResourceFormDraft({ kind: 'character', key: 'new' }, {
+    nome: 'Nyra',
+    contentMode: 'wikitext',
+    wikitext: '== Rascunho ==',
+    customCss: '.mw-card { padding: 8px; }',
+  });
+  assert.equal(switchedMode, 'wikitext');
+  assert.equal(context.__elements['p-wikitext'].value, '== Rascunho ==');
+  assert.equal(context.__elements['p-custom-css'].value, '.mw-card { padding: 8px; }');
+});
+

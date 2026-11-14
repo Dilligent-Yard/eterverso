@@ -338,6 +338,46 @@ const TIMELINE_CONSTRAINTS = [
   ...INTERACTIONS_CONSTRAINTS,
   'timeline_events.timeline_events_pkey:p',
 ].sort();
+const CHARACTER_MW_COLUMNS = {
+  ...TIMELINE_COLUMNS,
+  personagens: [...TIMELINE_COLUMNS.personagens, 'content_mode', 'wikitext', 'custom_css'],
+  character_mw_resources: ['id', 'kind', 'name', 'name_key', 'description', 'content', 'created_by', 'updated_by', 'archived_at', 'version', 'created_at', 'updated_at'],
+};
+const CHARACTER_MW_TYPES = {
+  personagens: {
+    content_mode: 'character varying',
+    wikitext: 'text',
+    custom_css: 'text',
+  },
+  character_mw_resources: {
+    id: 'uuid',
+    kind: 'character varying',
+    name: 'character varying',
+    name_key: 'character varying',
+    description: 'text',
+    content: 'text',
+    created_by: 'uuid',
+    updated_by: 'uuid',
+    archived_at: 'timestamp with time zone',
+    version: 'integer',
+    created_at: 'timestamp with time zone',
+    updated_at: 'timestamp with time zone',
+  },
+};
+const CHARACTER_MW_INDEXES = {
+  character_mw_resources: ['character_mw_resources_kind_name_key', 'character_mw_resources_pkey', 'idx_character_mw_resources_kind_key'],
+};
+const CHARACTER_MW_CONSTRAINTS = [
+  ...TIMELINE_CONSTRAINTS,
+  'personagens.personagens_content_mode_check:c',
+  'character_mw_resources.character_mw_resources_created_by_fkey:f',
+  'character_mw_resources.character_mw_resources_kind_check:c',
+  'character_mw_resources.character_mw_resources_kind_name_key:u',
+  'character_mw_resources.character_mw_resources_name_check:c',
+  'character_mw_resources.character_mw_resources_pkey:p',
+  'character_mw_resources.character_mw_resources_updated_by_fkey:f',
+  'character_mw_resources.character_mw_resources_version_check:c',
+].sort();
 
 function readDotEnv(file) {
   if (!fs.existsSync(file)) return {};
@@ -556,6 +596,25 @@ function classifySchema(report, history) {
     return { state: 'verified-0017-timeline-events', supported: true };
   }
 
+  const exactCharacterMwColumns = sameList(appTables, Object.keys(CHARACTER_MW_COLUMNS).sort())
+    && Object.keys(CHARACTER_MW_COLUMNS).every((table) => (
+      sameList(report.columns[table] || [], CHARACTER_MW_COLUMNS[table])
+    ));
+  const exactCharacterMwTypes = exactColumnTypes(report, CHARACTER_MW_TYPES);
+  const exactCharacterMwConstraints = sameList(report.constraints, CHARACTER_MW_CONSTRAINTS);
+  const exactCharacterMwIndexes = exactTableIndexes(report, 'character_mw_resources', CHARACTER_MW_INDEXES.character_mw_resources)
+    && hasIndexDefinition(report, 'character_mw_resources', 'character_mw_resources_pkey',
+      /^CREATE UNIQUE INDEX character_mw_resources_pkey ON public\.character_mw_resources USING btree \(id\)$/)
+    && hasIndexDefinition(report, 'character_mw_resources', 'character_mw_resources_kind_name_key',
+      /^CREATE UNIQUE INDEX character_mw_resources_kind_name_key ON public\.character_mw_resources USING btree \(kind, name_key\)$/)
+    && hasIndexDefinition(report, 'character_mw_resources', 'idx_character_mw_resources_kind_key',
+      /^CREATE INDEX idx_character_mw_resources_kind_key ON public\.character_mw_resources USING btree \(kind, name_key\)$/);
+  if (knownLedger && ledger.length === 19 && exactCharacterMwColumns && exactCharacterMwTypes
+      && exactInteractionTypes && exactInteractionIndexes && exactTimelineTypes && exactTimelineIndexes
+      && exactCharacterMwConstraints && exactCharacterMwIndexes && hasPriorReviewedIndexes) {
+    return { state: 'verified-0018-character-mediawiki', supported: true };
+  }
+
   return {
     state: 'unsupported-or-divergent',
     supported: false,
@@ -595,6 +654,10 @@ function classifySchema(report, history) {
       exactTimelineTypes,
       exactTimelineConstraints,
       exactTimelineIndexes,
+      exactCharacterMwColumns,
+      exactCharacterMwTypes,
+      exactCharacterMwConstraints,
+      exactCharacterMwIndexes,
     },
   };
 }
@@ -773,7 +836,7 @@ async function preflight(targetName) {
 
 async function migrate(targetName) {
   const { report, target } = await preflight(targetName);
-  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections', 'verified-0016-notifications-and-likes', 'verified-0017-timeline-events'].includes(report.classification.state)) {
+  if (!['empty', 'verified-0006-baseline', 'verified-0007-account-security', 'verified-0008-forum', 'verified-0009-forum-integrity', 'verified-0010-forum-timestamps', 'verified-0011-scene-turns', 'verified-0012-wiki-core', 'verified-0013-legacy-import', 'verified-0014-wiki-portable-transfers', 'verified-0015-wiki-sections', 'verified-0016-notifications-and-likes', 'verified-0017-timeline-events', 'verified-0018-character-mediawiki'].includes(report.classification.state)) {
     throw new Error('Automatic migration is supported only from an empty database or an exact reviewed schema state.');
   }
   if (report.pendingMigrations.length === 0) {
@@ -916,6 +979,10 @@ module.exports = {
   TIMELINE_TYPES,
   TIMELINE_INDEXES,
   TIMELINE_CONSTRAINTS,
+  CHARACTER_MW_COLUMNS,
+  CHARACTER_MW_TYPES,
+  CHARACTER_MW_INDEXES,
+  CHARACTER_MW_CONSTRAINTS,
   classifySchema,
   assertPrivateBackupFile,
   archiveListBelongsToDevelopment,
