@@ -22,6 +22,7 @@
     "db:seed:timeline": "node scripts/seed-timeline.js",
     "db:studio": "drizzle-kit studio",
     "test:migration:populated": "node scripts/test-populated-migration.js --target=test",
+    "test:isolation:selftest": "node scripts/test-isolation-selftest.js",
     "wiki:authoring:compile": "node scripts/wiki-authoring-compile.js",
     "wiki:authoring:revision-plan": "node scripts/wiki-authoring-revision-plan.js",
     "wiki:sources:stage": "node scripts/wiki-source-stage.js stage",

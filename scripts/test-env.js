@@ -16,6 +16,13 @@ const RECORD_FILE = path.join(LOCAL, 'service.json');
 const COMPOSE_FILE = path.join(ROOT, 'compose.test.yaml');
 const CONTAINER_NAME = `/${PROJECT}-db-1`;
 const DEFAULT_PORT = 55433;
+// The fixed legacy profile owns exactly these Compose interpolation values.
+// Keeping them explicit prevents an ambient isolated-profile environment from
+// retargeting the fixed `eterverso-test` project at a run-owned volume/labels.
+const DEFAULT_VOLUME = 'eterverso-test-data';
+const DEFAULT_PROFILE = 'development';
+const DEFAULT_RUN_ID = 'legacy';
+const DATA_MOUNT_DESTINATION = '/var/lib/postgresql/data';
 
 function readEnvFile(file) {
   return fs.existsSync(file) ? dotenv.parse(fs.readFileSync(file)) : null;
@@ -69,6 +76,18 @@ function inspectContainer() {
   }
 }
 
+function assertDefaultDataVolume(container) {
+  const mounts = Array.isArray(container.Mounts) ? container.Mounts : [];
+  const dataMounts = mounts.filter((mount) => mount && mount.Destination === DATA_MOUNT_DESTINATION);
+  if (dataMounts.length !== 1) {
+    throw new Error(`Container ${CONTAINER_NAME} must have exactly one data mount at ${DATA_MOUNT_DESTINATION}; refusing to use an unverified data volume.`);
+  }
+  const [mount] = dataMounts;
+  if (mount.Type !== 'volume' || mount.Name !== DEFAULT_VOLUME) {
+    throw new Error(`Container ${CONTAINER_NAME} data mount is not the owned ${DEFAULT_VOLUME} volume; refusing a foreign or bind mount.`);
+  }
+}
+
 function assertContainerOwnership(container) {
   if (!container) return;
   const labels = container.Config?.Labels || {};
@@ -78,6 +97,17 @@ function assertContainerOwnership(container) {
       || labels['io.eterverso.purpose'] !== 'isolated-test') {
     throw new Error(`Container name ${CONTAINER_NAME} is occupied by a service this project does not own; refusing to alter it.`);
   }
+  const profile = labels['io.eterverso.profile'];
+  const run = labels['io.eterverso.run'];
+  const preLabelLegacy = profile === undefined && run === undefined;
+  const labelledLegacy = profile === DEFAULT_PROFILE && run === DEFAULT_RUN_ID;
+  if (!preLabelLegacy && !labelledLegacy) {
+    throw new Error(`Container ${CONTAINER_NAME} has partial or foreign profile/run labels; refusing to adopt it.`);
+  }
+  // A name/label match is not enough: the data path must be the exact fixed
+  // named volume. This also rejects a legacy-labelled container that mounts a
+  // run-owned volume or a bind mount.
+  assertDefaultDataVolume(container);
 }
 
 function writeInitialCredentials() {
@@ -116,12 +146,35 @@ async function ensurePortAndConfig(existingContainer) {
   }
 }
 
+function defaultComposeEnvironment(base, secrets) {
+  if (!secrets
+      || typeof secrets.ETERVERSO_TEST_DB_PASSWORD !== 'string'
+      || !secrets.ETERVERSO_TEST_DB_PASSWORD
+      || typeof secrets.ETERVERSO_TEST_DB_PORT !== 'string'
+      || !secrets.ETERVERSO_TEST_DB_PORT) {
+    throw new Error('Private test configuration is missing; run npm run test:env:up first.');
+  }
+  // Shell environment takes precedence over the Compose --env-file. Pin every
+  // interpolated value so a stale isolated-profile export cannot make the
+  // fixed project mount a run volume or claim another run's labels.
+  return {
+    ...base,
+    COMPOSE_PROJECT_NAME: PROJECT,
+    ETERVERSO_TEST_DB_PASSWORD: secrets.ETERVERSO_TEST_DB_PASSWORD,
+    ETERVERSO_TEST_DB_PORT: secrets.ETERVERSO_TEST_DB_PORT,
+    ETERVERSO_TEST_VOLUME: DEFAULT_VOLUME,
+    ETERVERSO_TEST_PROFILE: DEFAULT_PROFILE,
+    ETERVERSO_TEST_RUN_ID: DEFAULT_RUN_ID,
+  };
+}
+
 function compose(args) {
   const env = path.relative(ROOT, SECRETS_FILE);
+  const environment = defaultComposeEnvironment(process.env, readEnvFile(SECRETS_FILE));
   return execFileSync('docker', [
     'compose', '--project-name', PROJECT, '-f', COMPOSE_FILE,
     '--env-file', env, ...args,
-  ], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit' });
+  ], { cwd: ROOT, encoding: 'utf8', stdio: 'inherit', env: environment });
 }
 
 function validateCurrentTarget({ requireRunning = true } = {}) {
@@ -184,15 +237,53 @@ function assertTarget() {
   process.stdout.write(JSON.stringify(target));
 }
 
+function isolatedArguments(args) {
+  const command = args[0];
+  const sentinelArgument = args.find((argument) => argument.startsWith('--sentinel='));
+  if (sentinelArgument) {
+    const value = sentinelArgument.slice('--sentinel='.length);
+    if (value === 'development') return null;
+    if (value !== 'isolated') {
+      throw new Error('Choose --sentinel=development or --sentinel=isolated explicitly.');
+    }
+    const remaining = args.slice(1).filter((argument) => !argument.startsWith('--sentinel='));
+    return [command, ...remaining];
+  }
+  if (process.env.ETERVERSO_VERIFY_PROFILE === 'isolated') {
+    const runId = process.env.ETERVERSO_VERIFY_RUN_ID;
+    if (!runId) {
+      throw new Error('The isolated profile requires the explicit run identity passed by its verification runner.');
+    }
+    return [command, `--run=${runId}`];
+  }
+  return null;
+}
+
 async function main() {
-  const command = process.argv[2];
+  const args = process.argv.slice(2);
+  const command = args[0];
+  const isolated = isolatedArguments(args);
+  if (isolated) {
+    const verification = require('./test-isolation');
+    return verification.main(isolated);
+  }
   if (command === 'up') return up();
   if (command === 'down') return down();
   if (command === 'assert') return assertTarget();
   throw new Error('Usage: node scripts/test-env.js <up|down|assert>');
 }
 
-main().catch((err) => {
-  console.error(err.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  DEFAULT_PROFILE,
+  DEFAULT_RUN_ID,
+  DEFAULT_VOLUME,
+  assertContainerOwnership,
+  defaultComposeEnvironment,
+};
