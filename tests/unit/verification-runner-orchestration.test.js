@@ -228,6 +228,7 @@ test('isolated arguments, guard refusal and incomplete private state stop before
     assert.deepEqual(guardCommands(unitRoot), [], 'isolated unit asked the guard for a run it does not need');
     assert.deepEqual(lines(unitRoot, 'suite-order.log'), ['unit']);
     const unitEnvironment = observed(unitRoot, 'unit');
+    assert.equal(unitEnvironment.databaseUrl, undefined, 'a stale test DSN leaked into the unit child');
     assert.equal(unitEnvironment.profile, undefined, 'a stale isolated profile leaked into the unit child');
     assert.equal(unitEnvironment.runId, undefined, 'a stale isolated run leaked into the unit child');
     assert.equal(unitEnvironment.port, undefined, 'a stale isolated port leaked into the unit child');
@@ -303,6 +304,7 @@ test('default and all preserve suite order inside one sentinel window', () => {
       assert.deepEqual(guardCommands(root), ['assert', 'fingerprint', 'fingerprint']);
 
       const unitEnvironment = observed(root, 'unit');
+      assert.equal(unitEnvironment.databaseUrl, undefined, 'a stale test DSN leaked into the unit child');
       assert.equal(unitEnvironment.profile, undefined, 'an isolated profile leaked into the unit child');
       assert.equal(unitEnvironment.runId, undefined, 'an isolated run leaked into the unit child');
       assert.equal(unitEnvironment.port, undefined, 'an isolated port leaked into the unit child');

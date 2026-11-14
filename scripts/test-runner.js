@@ -126,6 +126,7 @@ function testChildEnvironment(testUrl, isolated) {
   delete env.DATABASE_URL;
   delete env.DEV_DATABASE_URL;
   if (testUrl) env.ETERVERSO_TEST_DATABASE_URL = testUrl;
+  else delete env.ETERVERSO_TEST_DATABASE_URL;
   if (isolated) {
     env.ETERVERSO_VERIFY_PROFILE = 'isolated';
     env.ETERVERSO_VERIFY_RUN_ID = isolated.runId;

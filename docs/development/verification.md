@@ -201,9 +201,9 @@ test needs separate cookies, localStorage and sessionStorage.
 
 The explicit `--sentinel=isolated --run=<id>` profile is separate from the
 fixed `eterverso-test` project. It refuses a root `.env` and inherited database
-DSNs before creating anything, derives a Compose project, container, volume,
-network and loopback port from the run ID, and records private state under
-`.local/test/runs/<id>/` with owner-only permissions. Its application database
+DSNs before creating anything, derives a Compose project, container, volume and
+network from the run ID, selects a free loopback port, and records private state
+under `.local/test/runs/<id>/` with owner-only permissions. Its application database
 is `eterverso_test`; its sentinel is the distinct `eterverso_test_sentinel`.
 Ownership is proved by purpose/profile/run labels plus the recorded manifest,
 not by the database name alone.
