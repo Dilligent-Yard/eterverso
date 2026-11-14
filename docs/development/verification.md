@@ -197,6 +197,33 @@ The browser runner uses Chromium headless with one worker; two tabs in one
 profile do not establish session independence. Use fresh contexts where the
 test needs separate cookies, localStorage and sessionStorage.
 
+### Isolated test profile
+
+The explicit `--sentinel=isolated --run=<id>` profile is separate from the
+fixed `eterverso-test` project. It refuses a root `.env` and inherited database
+DSNs before creating anything, derives a Compose project, container, volume,
+network and loopback port from the run ID, and records private state under
+`.local/test/runs/<id>/` with owner-only permissions. Its application database
+is `eterverso_test`; its sentinel is the distinct `eterverso_test_sentinel`.
+Ownership is proved by purpose/profile/run labels plus the recorded manifest,
+not by the database name alone.
+
+Use `npm run test:env:up -- --sentinel=isolated --run=<id>` to create the run,
+`node scripts/test-env.js assert --sentinel=isolated --run=<id>` to print its
+target, and `npm run test:env:down -- --sentinel=isolated --run=<id>` to remove
+only that run. `npm run test:isolation:selftest` exercises the run-owned
+lifecycle, cross-run refusal and protected-resource snapshot without touching
+the fixed test, development or sandbox projects.
+
+After a hard interruption such as `SIGKILL`, OOM or host loss, no automatic
+cleanup is promised. `node scripts/test-isolation.js down --run=<id>` works
+only when the run directory still contains a complete valid `manifest.json` and
+`compose.env`; a manifest-only partial state is refused. Stop the affected
+work, inspect the derived container/volume/network, preserve partial state and
+perform verified manual recovery. Do not delete unverified partial state. Only
+one runtime owner may create, assert or remove an isolated run or run the
+self-test at a time; unrelated Docker workloads are outside that rule.
+
 ## Populated migration caveat
 
 At this revision, `npm run test:migration:populated` restores

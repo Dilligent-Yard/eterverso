@@ -17,7 +17,13 @@ services:
       retries: 30
     labels:
       io.eterverso.purpose: isolated-test
+      io.eterverso.profile: ${ETERVERSO_TEST_PROFILE:-development}
+      io.eterverso.run: ${ETERVERSO_TEST_RUN_ID:-legacy}
 
 volumes:
   test-data:
-    name: eterverso-test-data
+    name: ${ETERVERSO_TEST_VOLUME:-eterverso-test-data}
+    labels:
+      io.eterverso.purpose: isolated-test
+      io.eterverso.profile: ${ETERVERSO_TEST_PROFILE:-development}
+      io.eterverso.run: ${ETERVERSO_TEST_RUN_ID:-legacy}

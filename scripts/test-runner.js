@@ -68,12 +68,88 @@ function loadTestConnection() {
   return config.ETERVERSO_TEST_DATABASE_URL;
 }
 
-function testChildEnvironment(testUrl) {
+function parseRunnerArguments(argv) {
+  const command = argv[0];
+  if (!['unit', 'integration', 'browser', 'default', 'all'].includes(command)) {
+    throw new Error('Usage: node scripts/test-runner.js <unit|integration|browser|default|all> [--sentinel=development|isolated --run=<id>]');
+  }
+  let sentinel = 'development';
+  let runId;
+  for (const argument of argv.slice(1)) {
+    if (argument.startsWith('--sentinel=')) {
+      sentinel = argument.slice('--sentinel='.length);
+      if (!['development', 'isolated'].includes(sentinel)) {
+        throw new Error('Choose --sentinel=development or --sentinel=isolated explicitly.');
+      }
+    } else if (argument.startsWith('--run=')) {
+      runId = argument.slice('--run='.length);
+    } else {
+      throw new Error(`Unknown test-runner argument: ${argument}`);
+    }
+  }
+  if (sentinel === 'isolated' && !runId) {
+    throw new Error('The isolated sentinel profile requires an explicit --run=<id>.');
+  }
+  if (sentinel === 'development' && runId !== undefined) {
+    throw new Error('A run identity is only accepted with --sentinel=isolated.');
+  }
+  return { command, sentinel, runId };
+}
+
+function runIsolatedGuard(runId, args) {
+  return JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'test-isolation.js'), ...args, `--run=${runId}`], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: process.env,
+  }));
+}
+
+function loadIsolatedConnection(runId) {
+  const target = runIsolatedGuard(runId, ['assert']);
+  let config;
+  try {
+    config = dotenv.parse(fs.readFileSync(path.join(ROOT, '.local', 'test', 'runs', runId, 'connection.env')));
+  } catch {
+    throw new Error('The isolated run connection record is missing after its guard passed.');
+  }
+  if (!config.ETERVERSO_TEST_DATABASE_URL) throw new Error('The isolated run connection record is incomplete.');
+  return { target, databaseUrl: config.ETERVERSO_TEST_DATABASE_URL, port: target.port };
+}
+
+function readIsolatedSentinel(runId) {
+  return runIsolatedGuard(runId, ['fingerprint']);
+}
+
+function testChildEnvironment(testUrl, isolated) {
   const env = { ...process.env };
   delete env.DATABASE_URL;
   delete env.DEV_DATABASE_URL;
   if (testUrl) env.ETERVERSO_TEST_DATABASE_URL = testUrl;
+  if (isolated) {
+    env.ETERVERSO_VERIFY_PROFILE = 'isolated';
+    env.ETERVERSO_VERIFY_RUN_ID = isolated.runId;
+    env.ETERVERSO_TEST_DB_PORT = String(isolated.port);
+  } else {
+    delete env.ETERVERSO_VERIFY_PROFILE;
+    delete env.ETERVERSO_VERIFY_RUN_ID;
+    delete env.ETERVERSO_TEST_DB_PORT;
+  }
   return env;
+}
+
+function withIsolatedSentinel(runId, runSuites) {
+  return Promise.resolve().then(async () => {
+    const before = readIsolatedSentinel(runId);
+    let failure;
+    try { await runSuites(); } catch (err) { failure = err; }
+    const after = readIsolatedSentinel(runId);
+    if (before.digest !== after.digest) {
+      throw new Error('Isolated sentinel changed while tests ran; investigate before continuing.');
+    }
+    if (failure) throw failure;
+    console.log('Isolated sentinel unchanged.');
+  });
 }
 
 async function readDevSentinel() {
@@ -137,7 +213,32 @@ function withDevSentinel(runSuites) {
 
 function main() {
   requireNode24();
-  const command = process.argv[2];
+  const { command, sentinel, runId } = parseRunnerArguments(process.argv.slice(2));
+  if (sentinel === 'isolated') {
+    if (command === 'unit') return runNodeTests('unit', testChildEnvironment());
+    const connection = loadIsolatedConnection(runId);
+    const isolated = { runId, port: connection.port };
+    if (command === 'integration') {
+      return withIsolatedSentinel(runId, () => runNodeTests('integration', testChildEnvironment(connection.databaseUrl, isolated)));
+    }
+    if (command === 'browser') {
+      return withIsolatedSentinel(runId, () => runNodeTests('browser', testChildEnvironment(connection.databaseUrl, isolated)));
+    }
+    if (command === 'default') {
+      return withIsolatedSentinel(runId, () => {
+        runNodeTests('unit', testChildEnvironment());
+        runNodeTests('integration', testChildEnvironment(connection.databaseUrl, isolated));
+      });
+    }
+    if (command === 'all') {
+      return withIsolatedSentinel(runId, () => {
+        runNodeTests('unit', testChildEnvironment());
+        runNodeTests('integration', testChildEnvironment(connection.databaseUrl, isolated));
+        runNodeTests('browser', testChildEnvironment(connection.databaseUrl, isolated));
+      });
+    }
+    throw new Error('Usage: node scripts/test-runner.js <unit|integration|browser|default|all>');
+  }
   if (command === 'unit') return runNodeTests('unit', testChildEnvironment());
   if (command === 'integration') {
     const testUrl = loadTestConnection();
@@ -165,7 +266,14 @@ function main() {
   throw new Error('Usage: node scripts/test-runner.js <unit|integration|browser|default|all>');
 }
 
-Promise.resolve().then(main).catch((err) => {
-  console.error(err.message);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  Promise.resolve().then(main).catch((err) => {
+    console.error(err.message);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  parseRunnerArguments,
+  testChildEnvironment,
+};
