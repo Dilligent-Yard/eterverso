@@ -1,6 +1,15 @@
 # Execution checkpoint
 
-Update this file in place; do not create competing state/checkpoint documents.
+> Historical checkpoint for the local `arthur/local-setup` task. The last dated
+> entry is 2 November 2026. It is preserved as task evidence, not as current
+> project state or contributor guidance; the "Current phase" and "Next action"
+> sections below describe that task at those dates. Current setup, architecture
+> and verification live in [`README.md`](../../README.md),
+> [`docs/development/architecture.md`](../development/architecture.md) and
+> [`docs/development/verification.md`](../development/verification.md). Do not
+> keep updating this file for new work.
+
+Preserve this file as dated history; do not append new checkpoints here.
 
 ## Current phase
 

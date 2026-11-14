@@ -5,22 +5,30 @@ wiki, and collaborative text RPG. The browser app uses plain JavaScript, HTML,
 and CSS. Express serves the app and API, and PostgreSQL stores shared accounts,
 forum content, characters, scenes, scene turns, and reference wiki data.
 
+Current architecture and verification guidance are in
+[`docs/development/architecture.md`](docs/development/architecture.md) and
+[`docs/development/verification.md`](docs/development/verification.md).
+Contribution and review expectations are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Local development
 
-Use Node.js 24 from `.nvmrc`, npm, and Docker Compose. Select Node 24, install
-the locked dependencies, and compile the typed islands and browser bundle:
+Use Node.js 24 from `.nvmrc`, npm, and Docker Compose. Select Node 24 and install
+the locked dependencies:
 
 ```sh
 nvm use
 npm ci
-npm run build
 ```
 
-`npm run build` runs the typechecks, emits the Node entry points under
-`.generated/node/`, and bundles `generated/client/vault.js`. `npm start` and
-`npm run dev` do not compile; their `prestart`/`predev` hooks run
-`node scripts/check-build.js`, which lists every missing generated file and the
-`npm run build` command. Rebuild after changing TypeScript sources.
+`npm ci` runs the `postinstall` hook, which runs `npm run build`. The build
+typechecks the project, emits the Node entry points under `.generated/node/`,
+and bundles `generated/client/vault.js`. To rebuild after changing TypeScript
+sources, run `npm run build` directly. `npm start` and `npm run dev` do not
+compile; their `prestart`/`predev` hooks run `node scripts/check-build.js`,
+which lists every missing generated file and the `npm run build` command. The
+build needs the development dependencies (TypeScript and esbuild); a
+production-only install cannot run the hook.
 
 Check for an existing `.env` before creating one. If none exists, copy the
 template; otherwise preserve the existing file and edit it deliberately:
@@ -118,9 +126,11 @@ later account roles through the authenticated admin interface.
 
 ### TypeScript islands and build
 
-The contribution adds typed implementation islands under `src/browser/` and
-`src/node/`. Legacy entry points and global browser handlers remain small
-adapters so existing URLs, scripts and callers keep working.
+Typed implementation islands live under `src/browser/` and `src/node/`. The
+browser bundle exposes the `VaultModules` facade; the root browser entry points
+remain the composition, rendering, and navigation layer and call those helpers.
+Node islands are emitted as CommonJS under `.generated/node/` and loaded by
+small adapters and scripts so existing URLs, scripts, and callers keep working.
 
 ```sh
 npm run typecheck     # legacy schema/server entry + Node and browser islands
@@ -133,22 +143,28 @@ npm start             # node server.js; prestart validates generated files
 `generated/client/vault.js`; `npm run build:node` writes the Node islands under
 `.generated/node/`. Both are ignored by Git and must be built before running
 the app or a direct CLI that consumes an adapter. `node scripts/check-build.js`
-checks the complete set used by canonical startup and its adapters; direct
-`db-migrate` and `bootstrap-admin` invocations also fail early with the same
-build guidance when their generated modules are absent. The default
-`npm start` serves repository-root assets and Drizzle migrations; the build
-does not relocate `.env`, SQL, static files or the timeline seed. Hosting
-provider build/start settings are not verified by this repository.
+checks the complete set used by canonical startup and its adapters;
+`db-migrate` checks the sandbox target adapter it needs, and `bootstrap-admin`
+checks the startup outputs. Direct invocations fail early with build guidance
+when those generated modules are absent. Canonical startup reads the
+repository-root `.env`; the development migration target reads that file too.
+The test target reads its private `.local/test/connection.env`, and the sandbox
+target resolves its own private configuration under `.local/public-sandbox/`.
+Nothing is relocated by the build: `.env`, the migration journal and SQL,
+static files and the timeline seed at `server/timeline-seed.json` stay in
+place. The seed remains available for explicit seeding. Hosting provider
+build/start settings are not verified by this repository.
 
 ## Deployment
 
-The service runs with Node.js 24 and a production dependency set. Build and
-apply schema changes while development dependencies are available, then prune
-them for the runtime artifact:
+The service runs with Node.js 24 and a production dependency set. Install with
+development tools so the `postinstall` build can run, apply schema changes
+while those tools are available, then prune them for the runtime artifact:
 
 ```sh
-npm ci
-npm run build
+npm ci --include=dev
+# The postinstall hook runs npm run build. Run npm run build only if the
+# install step skipped it.
 # Apply the reviewed migrations through 0017_timeline_events.
 # Optionally seed an empty timeline as described below.
 npm prune --omit=dev
@@ -158,9 +174,10 @@ npm start
 `npm start` runs `node server.js`; it does not compile TypeScript or install
 tooling. `prestart` runs `node scripts/check-build.js` and refuses to start if
 any required generated file is missing. Do not run `npm run build` after
-pruning: the TypeScript compiler and esbuild are development dependencies.
-If the platform installs production dependencies only, perform the build in a
-separate build step before that install.
+pruning: the TypeScript compiler and esbuild are development dependencies. A
+production-only `npm ci --omit=dev` cannot run the hook because TypeScript and
+esbuild are development dependencies; build in an earlier stage with
+development tools, then prune or copy the artifact for runtime.
 
 Startup verifies the applied migration history and required columns through
 `0017_timeline_events` and refuses an older, partial or divergent schema; it
@@ -187,7 +204,17 @@ settings, including a Render service, remain unverified here; configure the
 platform to use Node 24, run this build and migration procedure, and start with
 `npm start`.
 
-## Tests
+## Tests and verification
+
+The default static gate needs no database, browser or private inputs:
+
+```sh
+npm ci
+npm run verify:static
+```
+
+`verify:static` runs typecheck, the Node/browser build, typed lint, JavaScript
+syntax and unit tests. `check:js` can also be run separately.
 
 Tests use a separate PostgreSQL 17 service and database. The test setup reads
 the existing `.env` but does not create or replace it. It stores generated
@@ -214,7 +241,8 @@ The supported entry points are:
 | `npm run test:unit` | Unit tests; no database or browser required |
 | `npm run test:integration` | PostgreSQL and HTTP integration tests on the isolated test database |
 | `npm run test:browser` | Playwright browser tests on the isolated test database |
-| `npm run test:migration:populated` | Synthetic populated-baseline migration check in a disposable test-only database |
+| `npm run verify:static` | Typecheck, build, typed lint, JS syntax and unit tests |
+| `npm run test:migration:populated` | Synthetic populated-baseline migration check in a disposable test-only database (requires the private `.local/development-baseline.dump`) |
 | `npm test` | Unit and integration suites |
 | `npm run test:all` | Unit, integration, and browser suites |
 | `npm run test:env:down` | Stops the test service and keeps its test-only named volume |
@@ -224,12 +252,18 @@ If Playwright reports that Chromium is missing, install it with
 database or remove its volume.
 
 To check a populated schema upgrade, `npm run test:migration:populated`
-restores the private verified 0006 baseline into a uniquely named disposable
-test database, adds synthetic records, applies migrations, and compares the
+restores the private verified 0006 baseline from
+`.local/development-baseline.dump` into a uniquely named disposable test
+database, adds synthetic records, applies migrations, and compares the
 preserved content before dropping the temporary database. It never targets
-the development database. The execution checkpoint records the latest test
-counts and acceptance-gate status; do not infer a gate passed from a command
-that was not run.
+the development database. The baseline is a private local prerequisite, so
+this command is not reproducible from a clean checkout. Do not infer a gate
+passed from a command that was not run.
+
+`.github/workflows/verify.yml` runs the static gate with Node 24, locked
+dependencies and read-only contents permission. This revision commits only that
+static job; the first hosted run and branch protection remain maintainer
+operations, and a local workflow file does not prove them.
 
 ### Private wiki sources
 
@@ -370,6 +404,8 @@ the local rendered articles. The eventual PR/changelog process is recorded in
 | --- | --- |
 | `index.html`, `app.js`, `editor.js`, `style.css` | Page shell, screens, browser behavior, rich-text editor, and styling |
 | `client/api.js` | Browser API requests, session, and CSRF handling |
+| `src/browser/`, `generated/client/vault.js` | Typed browser helpers and their generated `VaultModules` bundle |
+| `src/node/`, `.generated/node/` | Typed Node islands for interactions, timeline, runtime configuration, and public tooling; loaded through CommonJS adapters |
 | `server.js` | Loads configuration, checks database readiness, and starts Express |
 | `server/app.js` | Express app factory and shared auth, profile, character, and scene routes |
 | `server/forum.js`, `server/admin.js` | Shared forum and administrator routes |
@@ -403,8 +439,12 @@ wiki keeps its separate revision, proposal, source and citation model; timeline
 events are not reference articles. See the timeline section above for its
 current history limitations.
 
-Current test results, completed acceptance gates, and remaining limitations
-are recorded in [`docs/planning/EXECUTION_STATE.md`](docs/planning/EXECUTION_STATE.md).
+The historical local milestone checkpoint is
+[`docs/planning/EXECUTION_STATE.md`](docs/planning/EXECUTION_STATE.md); it
+records that task's dated evidence and is not a current test report. Current
+architecture and verification guidance live in
+[`docs/development/architecture.md`](docs/development/architecture.md) and
+[`docs/development/verification.md`](docs/development/verification.md).
 Legacy import uses controlled, reviewed procedures and synthetic tests; no real
 browser export has been imported. Real-data attribution, source reconciliation,
 production migration, upstream merging, deployment, and public lore publication
@@ -413,9 +453,10 @@ that implementation gates have passed.
 
 ## Contributing
 
-Work on a feature branch. `origin` should point to your fork of
-`ArthurAleksandravicius/eterverso`; `upstream` is the original
-`Dilligent-Yard/eterverso` repository. Publish branches to your fork and open
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution and review
+workflow. Work on a feature branch. The original project is
+`Dilligent-Yard/eterverso`; in a typical fork, `origin` is your fork and
+`upstream` is the original repository. Publish branches to your fork and open
 pull requests against `Dilligent-Yard/eterverso:main`.
 
 ```sh
